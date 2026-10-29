@@ -83,6 +83,7 @@ public:
 
     // Shows the Keyframes panel (command line --keyframes).
     void showKeyframes() { _focusKeyframes = true; }
+    void testEditShader(const std::string& name) { _testEditShader = name; }
     bool _focusKeyframes = false;
 
     void testQuitAfter(double seconds) { _testQuitTicks = SDL_GetTicks() + (uint64_t)(seconds * 1000.0); }
@@ -148,8 +149,8 @@ private:
 
     // Removes a media and its clips, confirmed first when it has clips.
     std::vector<core::Id> clipsOfMedia(core::Id mediaId) const;
-    void removeMediaAndClips(core::Id mediaId);
-    core::Id _confirmRemoveMedia = core::InvalidId;
+    void removeMediaAndClips(const std::vector<core::Id>& mediaIds);
+    std::vector<core::Id> _confirmRemoveMedia;
 
     // Popups
     void exportPopup();
@@ -254,6 +255,7 @@ private:
     // downloaded) for the computer, the language, GPU or not.
     void subtitleGeneratorWindow();
     std::vector<float> speechSamples(std::string& error);
+    core::Id _subtitleSourceTrack = core::InvalidId;     // None: the whole sequence
     bool _showSubtitleGenerator = false;
     ModelDownload _modelDownload;
     SubtitleGenerator _subtitleGenerator;
@@ -292,6 +294,23 @@ private:
     void reloadShaders(bool commitChanges);
     void openShaderFolder();
     void addGenerator(const core::ShaderDef& shader);
+
+    // Shader editor: a .glsl file of the shaders folder, saved (Ctrl + S)
+    // and used at once, with the messages of the compiler as it is typed.
+    bool _showShaderEditor = false;
+    bool _shaderEditorFocused = false;
+    std::filesystem::path _shaderEditorPath;
+    std::string _shaderEditorText;
+    std::string _shaderEditorSaved;
+    std::string _shaderEditorError;
+    double _shaderEditorChecked = 0.;       // Last typed, or compiled
+    bool _shaderEditorDirty = false;        // Typed since
+    const core::ShaderDef* newShader(core::ShaderKind kind);
+    void editShader(const std::string& shaderId);
+    void saveShader();
+    void checkEditedShader();
+    void shaderEditorWindow();
+    std::string _testEditShader;
 
     // Closes the gap selected in the timeline.
     void closeGap();
@@ -522,6 +541,14 @@ private:
 
     std::vector<core::Id> _selection;
     core::Id _selectedMedia = core::InvalidId;
+
+    // Media selected together (Ctrl + click, or a rectangle dragged from the
+    // empty part of the list): _selectedMedia is the last one clicked.
+    std::vector<core::Id> _mediaSelection;
+    bool _mediaMarquee = false;
+    ImVec2 _mediaMarqueeStart;
+    std::vector<core::Id> _mediaMarqueeBase;
+    bool mediaSelected(core::Id id) const { return std::find(_mediaSelection.begin(), _mediaSelection.end(), id) != _mediaSelection.end(); }
 
     // Folders of the media panel: the selected one (imports go there), the
     // one renamed in place.

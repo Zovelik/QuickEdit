@@ -144,6 +144,8 @@ GUI::GUI(const std::filesystem::path& projectPath, double startSeconds, Id selec
     _inspector.userShaders = &_userShaders;
     _inspector.shaderError = [this](const std::string& id) { return _compositor ? _compositor->shaderError(id) : std::string(); };
     _inspector.openShaderFolder = [this]() { openShaderFolder(); };
+    _inspector.editShader = [this](const std::string& id) { editShader(id); };
+    _inspector.newShader = [this](ShaderKind kind) { return newShader(kind); };
     reloadShaders(false);
 
     createVideo();
@@ -471,6 +473,7 @@ void GUI::render(
     recorderWindow();
     screenRecorderWindow();
     subtitleGeneratorWindow();
+    shaderEditorWindow();
 
     fileDropped();
 
@@ -683,6 +686,23 @@ void GUI::menuBar()
                 }
 
                 ImGui::Separator();
+
+                if (ImGui::MenuItem(ICON_MD_ADD " New Generator Shader...")) {
+                    if (const ShaderDef* shader = newShader(ShaderKind::Generator)) addGenerator(*shader);
+                }
+
+                if (ImGui::MenuItem(ICON_MD_ADD " New Transition Shader...")) { newShader(ShaderKind::Transition); }
+
+                if (ImGui::BeginMenu(ICON_MD_EDIT " Edit Shader", !_userShaders.empty())) {
+                    for (const ShaderDef& shader : _userShaders) {
+                        if (ImGui::MenuItem(shader.name.c_str(), shader.kind == ShaderKind::Generator ? "Generator" : "Transition")) {
+                            editShader(shader.id);
+                        }
+                    }
+
+                    ImGui::EndMenu();
+                }
+
                 if (ImGui::MenuItem(ICON_MD_FOLDER_OPEN " Open Shaders Folder")) { openShaderFolder(); }
                 if (ImGui::MenuItem(ICON_MD_REFRESH " Reload Shaders")) { reloadShaders(true); }
                 ImGui::EndMenu();
@@ -1018,7 +1038,27 @@ void GUI::mediaPanel()
         ImGuiTableFlags_Resizable |
         ImGuiTableFlags_ScrollY;
 
-    Id removeMedia = InvalidId;
+    std::vector<Id> removeMedia;
+
+    // Where each media was drawn, for the rectangle selection.
+    struct ItemRow
+    {
+        Id id;
+        float top;
+        float bottom;
+    };
+
+    std::vector<ItemRow> itemRows;
+
+    // Dropped or moved: the selection with the media, when it is part of it.
+    auto moveSelection = [&](Id mediaId, const std::string& folder) {
+        if (mediaSelected(mediaId)) {
+            for (Id id : _mediaSelection) moves.emplace_back(id, folder);
+        }
+        else {
+            moves.emplace_back(mediaId, folder);
+        }
+    };
 
     if (ImGui::BeginTable("##media", 2, flags)) {
         ImGui::TableSetupScrollFreeze(0, 1);
@@ -1054,11 +1094,27 @@ void GUI::mediaPanel()
                 ImGui::SameLine();
             }
 
-            if (ImGui::Selectable(label.c_str(), _selectedMedia == item.id, ImGuiSelectableFlags_SpanAllColumns,
+            if (ImGui::Selectable(label.c_str(), mediaSelected(item.id), ImGuiSelectableFlags_SpanAllColumns,
                     ImVec2(0.f, thumbnails.ready > 0 ? pictureHeight : 0.f))) {
+                // Ctrl: added to the selection, or taken out of it.
+                if (ImGui::GetIO().KeyCtrl) {
+                    if (mediaSelected(item.id)) {
+                        std::erase(_mediaSelection, item.id);
+                    }
+                    else {
+                        _mediaSelection.push_back(item.id);
+                    }
+                }
+                else {
+                    _mediaSelection = { item.id };
+                }
+
                 _selectedMedia = item.id;
                 _selectedFolder = item.folder;
             }
+
+            // Where it is, for the rectangle selection.
+            itemRows.push_back({ item.id, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().y });
 
             if (missing) {
                 ImGui::PopStyleColor();
@@ -1105,7 +1161,7 @@ void GUI::mediaPanel()
             // Another media dropped on it: into its folder.
             if (ImGui::BeginDragDropTarget()) {
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(TimelineView::MediaPayload)) {
-                    moves.emplace_back(*(const Id*)payload->Data, item.folder);
+                    moveSelection(*(const Id*)payload->Data, item.folder);
                 }
 
                 ImGui::EndDragDropTarget();
@@ -1114,12 +1170,12 @@ void GUI::mediaPanel()
             if (ImGui::BeginPopupContextItem()) {
                 if (ImGui::BeginMenu(ICON_MD_DRIVE_FILE_MOVE " Move to")) {
                     if (ImGui::MenuItem("(No folder)", nullptr, item.folder.empty())) {
-                        moves.emplace_back(item.id, std::string());
+                        moveSelection(item.id, std::string());
                     }
 
                     for (const std::string& folder : _project.mediaFolders()) {
                         if (ImGui::MenuItem(folder.c_str(), nullptr, item.folder == folder)) {
-                            moves.emplace_back(item.id, folder);
+                            moveSelection(item.id, folder);
                         }
                     }
 
@@ -1127,7 +1183,7 @@ void GUI::mediaPanel()
                 }
 
                 if (ImGui::MenuItem(ICON_MD_DELETE " Remove from Project")) {
-                    removeMedia = item.id;
+                    removeMedia = mediaSelected(item.id) ? _mediaSelection : std::vector<Id>{ item.id };
                 }
 
                 ImGui::EndPopup();
@@ -1185,7 +1241,7 @@ void GUI::mediaPanel()
                 // Media dropped on it.
                 if (ImGui::BeginDragDropTarget()) {
                     if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(TimelineView::MediaPayload)) {
-                        moves.emplace_back(*(const Id*)payload->Data, child);
+                        moveSelection(*(const Id*)payload->Data, child);
                     }
 
                     ImGui::EndDragDropTarget();
@@ -1299,15 +1355,49 @@ void GUI::mediaPanel()
 
         if (ImGui::BeginDragDropTarget()) {
             if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(TimelineView::MediaPayload)) {
-                moves.emplace_back(*(const Id*)payload->Data, std::string());
+                moveSelection(*(const Id*)payload->Data, std::string());
             }
 
             ImGui::EndDragDropTarget();
         }
 
+        // A click in the empty part: nothing selected, or the start of a
+        // rectangle selecting the media it crosses.
         if (ImGui::IsItemClicked()) {
             _selectedFolder.clear();
             _selectedMedia = InvalidId;
+            _mediaMarquee = true;
+            _mediaMarqueeStart = ImGui::GetIO().MousePos;
+            _mediaMarqueeBase = ImGui::GetIO().KeyCtrl ? _mediaSelection : std::vector<Id>();
+            _mediaSelection = _mediaMarqueeBase;
+        }
+
+        if (_mediaMarquee) {
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            const float y0 = std::min(mouse.y, _mediaMarqueeStart.y);
+            const float y1 = std::max(mouse.y, _mediaMarqueeStart.y);
+
+            _mediaSelection = _mediaMarqueeBase;
+
+            for (const auto& [id, top, bottom] : itemRows) {
+                if (bottom >= y0 && top <= y1 && !mediaSelected(id)) {
+                    _mediaSelection.push_back(id);
+                }
+            }
+
+            ImDrawList* drawList = ImGui::GetForegroundDrawList(ImGui::GetWindowViewport());
+            const ImVec2 a(std::min(mouse.x, _mediaMarqueeStart.x), y0);
+            const ImVec2 b(std::max(mouse.x, _mediaMarqueeStart.x), y1);
+            drawList->AddRectFilled(a, b, IM_COL32(255, 122, 0, 40));
+            drawList->AddRect(a, b, IM_COL32(255, 122, 0, 200));
+
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                _mediaMarquee = false;
+
+                if (!_mediaSelection.empty()) {
+                    _selectedMedia = _mediaSelection.back();
+                }
+            }
         }
 
         ImGui::EndTable();
@@ -1349,16 +1439,21 @@ void GUI::mediaPanel()
         commit("Delete folder");
     }
 
-    // Delete: the selected media, with its clips.
-
-    if (_mediaPanelFocused && _selectedMedia != InvalidId && !ImGui::GetIO().WantTextInput &&
+    // Delete: the selected media, with their clips.
+    if (_mediaPanelFocused && !_mediaSelection.empty() && !ImGui::GetIO().WantTextInput &&
         (ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false))) {
-        removeMedia = _selectedMedia;
+        removeMedia = _mediaSelection;
     }
 
     // Used in the timeline: confirmed first.
-    if (removeMedia != InvalidId) {
-        if (clipsOfMedia(removeMedia).empty()) {
+    if (!removeMedia.empty()) {
+        size_t used = 0;
+
+        for (Id id : removeMedia) {
+            used += clipsOfMedia(id).size();
+        }
+
+        if (used == 0) {
             removeMediaAndClips(removeMedia);
         }
         else {
@@ -1370,26 +1465,40 @@ void GUI::mediaPanel()
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
     if (ImGui::BeginPopupModal("Remove Media", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        const MediaItem* item = _project.findMedia(_confirmRemoveMedia);
-        const size_t count = clipsOfMedia(_confirmRemoveMedia).size();
+        size_t count = 0;
 
-        if (!item) {
+        for (Id id : _confirmRemoveMedia) {
+            count += clipsOfMedia(id).size();
+        }
+
+        const MediaItem* item = _confirmRemoveMedia.size() == 1 ? _project.findMedia(_confirmRemoveMedia.front()) : nullptr;
+
+        if (_confirmRemoveMedia.empty()) {
             ImGui::CloseCurrentPopup();
         }
         else {
-            ImGui::Text("\"%s\" is used by %zu clip%s of the timeline.", item->name().c_str(), count, count > 1 ? "s" : "");
-            ImGui::TextUnformatted("Remove it from the project, with its clips?");
+            if (item) {
+                ImGui::Text("\"%s\" is used by %zu clip%s of the timeline.", item->name().c_str(), count, count > 1 ? "s" : "");
+                ImGui::TextUnformatted("Remove it from the project, with its clips?");
+            }
+            else {
+                ImGui::Text("These %zu media are used by %zu clip%s of the timeline.", _confirmRemoveMedia.size(), count, count > 1 ? "s" : "");
+                ImGui::TextUnformatted("Remove them from the project, with their clips?");
+            }
+
             ImGui::Spacing();
 
             if (ImGui::Button(ICON_MD_DELETE " Remove") || ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
                 ImGui::CloseCurrentPopup();
                 removeMediaAndClips(_confirmRemoveMedia);
+                _confirmRemoveMedia.clear();
             }
 
             ImGui::SameLine();
 
             if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
                 ImGui::CloseCurrentPopup();
+                _confirmRemoveMedia.clear();
             }
         }
 
@@ -1417,14 +1526,24 @@ std::vector<Id> GUI::clipsOfMedia(Id mediaId) const
 }
 
 
-void GUI::removeMediaAndClips(Id mediaId)
+void GUI::removeMediaAndClips(const std::vector<Id>& mediaIds)
 {
-    const std::vector<Id> clips = clipsOfMedia(mediaId);
+    std::vector<Id> clips;
+
+    for (Id mediaId : mediaIds) {
+        const std::vector<Id> ofMedia = clipsOfMedia(mediaId);
+        clips.insert(clips.end(), ofMedia.begin(), ofMedia.end());
+    }
 
     _project.removeClips(clips);
-    std::erase_if(_project.media(), [&](const MediaItem& item) { return item.id == mediaId; });
 
-    if (_selectedMedia == mediaId) {
+    std::erase_if(_project.media(), [&](const MediaItem& item) {
+        return std::find(mediaIds.begin(), mediaIds.end(), item.id) != mediaIds.end();
+    });
+
+    std::erase_if(_mediaSelection, [&](Id id) { return std::find(mediaIds.begin(), mediaIds.end(), id) != mediaIds.end(); });
+
+    if (std::find(mediaIds.begin(), mediaIds.end(), _selectedMedia) != mediaIds.end()) {
         _selectedMedia = InvalidId;
     }
 
@@ -2117,7 +2236,7 @@ void GUI::openShaderFolder()
             "// A generator: the picture of a clip, computed for each of its pixels.\n"
             "// uv: position in the picture (0 to 1), time: seconds since the start of the clip.\n"
             "// iResolution: size in pixels, iDuration: length of the clip, param(i): the parameters below.\n"
-            "// Edit, save, then Edit > Add Generator > Reload Shaders.\n"
+            "// Edit > Add Generator > Edit Shader: saved with Ctrl + S, and used at once.\n"
             "// @param Speed 0 5 1\n"
             "// @param Rings 1 40 12\n"
             "vec4 generate(vec2 uv, float time)\n"
@@ -2141,6 +2260,263 @@ void GUI::openShaderFolder()
 
     const std::u8string path = folder.generic_u8string();
     SDL_OpenURL(("file:///" + std::string(path.begin(), path.end())).c_str());
+}
+
+
+namespace {
+
+const char* const GeneratorExample =
+    "// A generator: the picture of a clip, computed for each of its pixels.\n"
+    "//   uv: position in the picture (0 to 1, from the top left)\n"
+    "//   time: seconds since the start of the clip, iDuration: its length\n"
+    "//   iResolution: size of the picture in pixels\n"
+    "//   param(i): the parameters declared below (up to 8), animated in the Inspector\n"
+    "// Saved with Ctrl + S, and used at once.\n"
+    "//\n"
+    "// @param Speed 0 5 1\n"
+    "// @param Scale 1 20 6\n"
+    "// @param Hue 0 1 0.6\n"
+    "\n"
+    "vec3 palette(float t)\n"
+    "{\n"
+    "    return 0.5 + 0.5 * cos(6.2832 * (t + vec3(0.0, 0.33, 0.67)));\n"
+    "}\n"
+    "\n"
+    "vec4 generate(vec2 uv, float time)\n"
+    "{\n"
+    "    vec2 p = (uv - 0.5) * vec2(iResolution.x / iResolution.y, 1.0) * param(1);\n"
+    "    float t = time * param(0);\n"
+    "    float v = sin(p.x + t) + sin(p.y * 1.3 - t) + sin(length(p) * 1.5 - t * 1.7);\n"
+    "    return vec4(palette(v * 0.15 + param(2)), 1.0);\n"
+    "}\n";
+
+const char* const TransitionExample =
+    "// A transition: mixes the outgoing and the incoming pictures.\n"
+    "//   uv: position in the picture (0 to 1, from the top left)\n"
+    "//   getFromColor(uv): the outgoing picture, getToColor(uv): the incoming one\n"
+    "//   progress: 0 to 1 during the transition, ratio: width / height\n"
+    "// Saved with Ctrl + S, and used at once.\n"
+    "\n"
+    "vec4 transition(vec2 uv)\n"
+    "{\n"
+    "    // A diagonal wipe with a soft edge.\n"
+    "    float edge = (uv.x + uv.y) * 0.5;\n"
+    "    float shown = smoothstep(edge - 0.1, edge + 0.1, progress * 1.2 - 0.1);\n"
+    "    return mix(getFromColor(uv), getToColor(uv), shown);\n"
+    "}\n";
+
+std::string readText(const std::filesystem::path& path)
+{
+    std::ifstream file(path, std::ios::binary);
+    std::stringstream text;
+    text << file.rdbuf();
+    return text.str();
+}
+
+} // namespace
+
+
+const ShaderDef* GUI::newShader(ShaderKind kind)
+{
+    const std::filesystem::path folder = shaderFolder();
+    std::error_code ec;
+    std::filesystem::create_directories(folder, ec);
+
+    // A free name: "My Generator", "My Generator 2"...
+    const std::string base = (kind == ShaderKind::Generator) ? "My Generator" : "My Transition";
+    std::string name = base;
+
+    for (int i = 2; std::filesystem::exists(folder / std::filesystem::u8path(name + ".glsl"), ec); i++) {
+        name = base + " " + std::to_string(i);
+    }
+
+    const std::filesystem::path path = folder / std::filesystem::u8path(name + ".glsl");
+
+    if (!(std::ofstream(path, std::ios::binary) << (kind == ShaderKind::Generator ? GeneratorExample : TransitionExample))) {
+        SDL_Log("Could not write %s", path.string().c_str());
+        return nullptr;
+    }
+
+    reloadShaders(false);
+    editShader("file:" + name);
+
+    for (const ShaderDef& shader : _userShaders) {
+        if (shader.id == "file:" + name) return &shader;
+    }
+
+    return nullptr;
+}
+
+
+void GUI::editShader(const std::string& shaderId)
+{
+    if (shaderId.rfind("file:", 0) != 0) {
+        return;
+    }
+
+    // Unsaved changes of another shader are kept in its file first.
+    const std::filesystem::path path = shaderFolder() / std::filesystem::u8path(shaderId.substr(5) + ".glsl");
+
+    if (_showShaderEditor && path != _shaderEditorPath && _shaderEditorText != _shaderEditorSaved) {
+        saveShader();
+    }
+
+    // Not in the folder (a project from another computer): its copy in the
+    // project is written there.
+    std::error_code ec;
+
+    if (!std::filesystem::exists(path, ec)) {
+        const ShaderDef* stored = _project.findShader(shaderId);
+
+        if (!stored) {
+            return;
+        }
+
+        std::filesystem::create_directories(path.parent_path(), ec);
+        std::ofstream(path, std::ios::binary) << stored->source;
+        reloadShaders(false);
+    }
+
+    _shaderEditorPath = path;
+    _shaderEditorText = readText(path);
+    _shaderEditorSaved = _shaderEditorText;
+    _showShaderEditor = true;
+    checkEditedShader();
+    ImGui::SetWindowFocus("###shaderEditor");
+}
+
+
+void GUI::checkEditedShader()
+{
+    ShaderDef shader;
+    const std::u8string stem = _shaderEditorPath.stem().u8string();
+    shader.name = std::string(stem.begin(), stem.end());
+
+    if (!parseShader(_shaderEditorText, shader)) {
+        _shaderEditorError = "Define vec4 generate(vec2 uv, float time) for a generator, or vec4 transition(vec2 uv) for a transition.";
+    }
+    else {
+        _shaderEditorError = Compositor::checkShader(shader);
+    }
+
+    _shaderEditorDirty = false;
+    _shaderEditorChecked = ImGui::GetTime();
+}
+
+
+void GUI::saveShader()
+{
+    if (_shaderEditorPath.empty()) {
+        return;
+    }
+
+    if (!(std::ofstream(_shaderEditorPath, std::ios::binary) << _shaderEditorText)) {
+        _shaderEditorError = "Could not write " + _shaderEditorPath.string();
+        return;
+    }
+
+    _shaderEditorSaved = _shaderEditorText;
+    checkEditedShader();
+
+    // The clips using it follow.
+    reloadShaders(true);
+}
+
+
+void GUI::shaderEditorWindow()
+{
+    _shaderEditorFocused = false;
+
+    if (!_testEditShader.empty()) {
+        editShader("file:" + std::exchange(_testEditShader, std::string()));
+    }
+
+    if (!_showShaderEditor) {
+        return;
+    }
+
+    const std::u8string stem = _shaderEditorPath.stem().u8string();
+    const std::string name(stem.begin(), stem.end());
+    const bool modified = _shaderEditorText != _shaderEditorSaved;
+    const std::string title = std::string(ICON_MD_CODE " ") + name + (modified ? " *" : "") + "###shaderEditor";
+
+    ImGui::SetNextWindowSize(ImVec2(44.f * ImGui::GetFontSize(), 32.f * ImGui::GetFontSize()), ImGuiCond_FirstUseEver);
+
+    bool open = true;
+
+    if (!ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoCollapse)) {
+        ImGui::End();
+        return;
+    }
+
+    _shaderEditorFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+
+    // Closed: what was typed is kept.
+    if (!open) {
+        if (modified) saveShader();
+        _showShaderEditor = false;
+    }
+
+    // Toolbar
+    ImGui::BeginDisabled(!modified);
+
+    if (ImGui::Button(ICON_MD_SAVE " Save")) {
+        saveShader();
+    }
+
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Ctrl + S: saved, and used by the clips at once.");
+    ImGui::SameLine();
+
+    if (ImGui::Button(ICON_MD_OPEN_IN_NEW " Open in External Editor")) {
+        if (modified) saveShader();
+        const std::u8string path = _shaderEditorPath.generic_u8string();
+        SDL_OpenURL(("file:///" + std::string(path.begin(), path.end())).c_str());
+    }
+
+    ImGui::SameLine();
+
+    if (ImGui::Button(ICON_MD_REFRESH " Reload")) {
+        _shaderEditorText = readText(_shaderEditorPath);
+        _shaderEditorSaved = _shaderEditorText;
+        checkEditedShader();
+        reloadShaders(true);
+    }
+
+    ImGui::SetItemTooltip("Read the file again (after a change in another editor).");
+    ImGui::SameLine();
+
+    if (ImGui::Button(ICON_MD_FOLDER_OPEN " Folder")) {
+        openShaderFolder();
+    }
+
+    // The code, with the messages of the compiler below.
+    const float errorHeight = _shaderEditorError.empty() ? ImGui::GetFrameHeightWithSpacing()
+                                                         : 5.f * ImGui::GetTextLineHeightWithSpacing();
+
+    if (ImGui::InputTextMultiline("##code", &_shaderEditorText, ImVec2(-FLT_MIN, -errorHeight),
+            ImGuiInputTextFlags_AllowTabInput)) {
+        _shaderEditorDirty = true;
+        _shaderEditorChecked = ImGui::GetTime();
+    }
+
+    // Compiled once typing pauses.
+    if (_shaderEditorDirty && ImGui::GetTime() - _shaderEditorChecked > 0.4) {
+        checkEditedShader();
+    }
+
+    if (_shaderEditorError.empty()) {
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.f), ICON_MD_CHECK " Compiles.%s", modified ? " Ctrl + S to use it." : "");
+    }
+    else {
+        ImGui::BeginChild("##errors", ImVec2(-FLT_MIN, -FLT_MIN));
+        ImGui::PushTextWrapPos(0.f);
+        ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " %s", _shaderEditorError.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::EndChild();
+    }
+
+    ImGui::End();
 }
 
 
@@ -2211,8 +2587,20 @@ std::vector<float> GUI::speechSamples(std::string& error)
         }
     }
 
-    // The mix, without effects (clearer speech), in mono at 16 kHz.
-    const auto graph = audio::buildMixGraph(_project, [this](Id mediaId) { return _media.audio(mediaId); });
+    // The mix, without effects (clearer speech), in mono at 16 kHz: of a
+    // track alone when one is chosen (the others muted in a copy).
+    Project source = _project;
+
+    if (_subtitleSourceTrack != InvalidId && source.findTrack(_subtitleSourceTrack)) {
+        for (auto* tracks : { &source.sequence().soundTracks, &source.sequence().audioTracks }) {
+            for (Track& track : *tracks) {
+                track.muted = track.id != _subtitleSourceTrack;
+                track.solo = false;
+            }
+        }
+    }
+
+    const auto graph = audio::buildMixGraph(source, [this](Id mediaId) { return _media.audio(mediaId); });
     const int64_t frames = mulDivFloor(sequence.duration(), rate, TicksPerSecond);
 
     if (frames <= 0) {
@@ -2312,6 +2700,17 @@ void GUI::subtitleGeneratorWindow()
     ImGui::TextDisabled("The larger, the more accurate; the large ones want a GPU.");
     ImGui::BeginDisabled(busy);
 
+    // Columns: after the longest name, after the largest size.
+    const ImGuiStyle& style = ImGui::GetStyle();
+    float nameWidth = 0.f;
+
+    for (const WhisperModel& model : whisperModels()) {
+        nameWidth = std::max(nameWidth, ImGui::CalcTextSize(model.name).x);
+    }
+
+    const float sizeColumn = style.WindowPadding.x + ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + nameWidth + 2.f * style.ItemSpacing.x;
+    const float stateColumn = sizeColumn + ImGui::CalcTextSize("0000 MB").x + 2.f * style.ItemSpacing.x;
+
     for (const WhisperModel& model : whisperModels()) {
         ImGui::PushID(model.id);
 
@@ -2325,9 +2724,9 @@ void GUI::subtitleGeneratorWindow()
         }
 
         ImGui::EndDisabled();
-        ImGui::SameLine(9.f * ImGui::GetFontSize());
+        ImGui::SameLine(sizeColumn);
         ImGui::TextDisabled("%d MB", model.sizeMegabytes);
-        ImGui::SameLine(12.f * ImGui::GetFontSize());
+        ImGui::SameLine(stateColumn);
 
         if (downloaded) {
             ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.5f, 1.f), ICON_MD_CHECK " Ready");
@@ -2358,8 +2757,32 @@ void GUI::subtitleGeneratorWindow()
         ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " %s", _modelDownload.error().c_str());
     }
 
-    // Language and processor
+    // Source, language and processor
     ImGui::SeparatorText("Speech");
+
+    const Track* sourceTrack = _project.findTrack(_subtitleSourceTrack);
+
+    if (!sourceTrack) {
+        _subtitleSourceTrack = InvalidId;
+    }
+
+    ImGui::SetNextItemWidth(12.f * ImGui::GetFontSize());
+
+    if (ImGui::BeginCombo("Sound", sourceTrack ? sourceTrack->name.c_str() : "Whole sequence")) {
+        if (ImGui::Selectable("Whole sequence", !sourceTrack)) {
+            _subtitleSourceTrack = InvalidId;
+        }
+
+        for (const auto* tracks : { &_project.sequence().soundTracks, &_project.sequence().audioTracks }) {
+            for (const Track& track : *tracks) {
+                if (ImGui::Selectable(track.name.c_str(), sourceTrack && sourceTrack->id == track.id)) {
+                    _subtitleSourceTrack = track.id;
+                }
+            }
+        }
+
+        ImGui::EndCombo();
+    }
 
     const char* languages[][2] = {
         { "auto", "Detected" }, { "fr", "Fran\xc3\xa7" "ais" }, { "en", "English" }, { "es", "Espa\xc3\xb1ol" },
@@ -2416,7 +2839,7 @@ void GUI::subtitleGeneratorWindow()
         ImGui::EndDisabled();
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled(chosen ? "From the sound of the sequence, onto a new track." : "Download a model first.");
+        ImGui::TextDisabled(chosen ? "Onto a new subtitle track." : "Download a model first.");
     }
     else {
         ImGui::ProgressBar(_subtitleGenerator.progress(), ImVec2(-6.f * ImGui::GetFontSize(), 0.f), "Listening...");
@@ -3831,6 +4254,12 @@ void GUI::timelinePanel()
             showSequence(result.openSequence);
         }
 
+        if (result.generateSubtitles != InvalidId) {
+            _subtitleSourceTrack = result.generateSubtitles;
+            _showSubtitleGenerator = true;
+            ImGui::SetWindowFocus("###subtitleGenerator");
+        }
+
         if (result.effectsOfTrack != InvalidId) {
             _effectsTrack = result.effectsOfTrack;
             _showEffectsTab = true;
@@ -5141,7 +5570,11 @@ void GUI::eventOpenFile(SDL_Window* parent)
 
 void GUI::eventSaveFile(SDL_Window* parent)
 {
-    if (_projectPath.empty()) {
+    // Ctrl + S in the shader editor: the shader.
+    if (_shaderEditorFocused && !_actionAfterSave) {
+        saveShader();
+    }
+    else if (_projectPath.empty()) {
         eventSaveAsFile(parent);
     }
     else if (saveProject(_projectPath) && std::exchange(_actionAfterSave, false)) {

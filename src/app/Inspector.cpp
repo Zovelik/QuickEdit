@@ -718,8 +718,8 @@ void Inspector::generatorSection(Project& project, Clip& clip, Time localTime, s
         ImGui::PopTextWrapPos();
     }
 
-    if (shader->id.rfind("file:", 0) == 0 && openShaderFolder && ImGui::Button(ICON_MD_FOLDER_OPEN " Shaders Folder")) {
-        openShaderFolder();
+    if (shader->id.rfind("file:", 0) == 0 && editShader && ImGui::Button(ICON_MD_EDIT " Edit Shader")) {
+        editShader(shader->id);
     }
 }
 
@@ -779,7 +779,31 @@ void Inspector::transitionSection(Project& project, Clip& clip, std::string& edi
             for (const ShaderDef& shader : *userShaders) shaderItem(shader);
         }
 
+        // A new one, from an example, opened in the editor.
+        if (newShader) {
+            ImGui::Separator();
+
+            if (ImGui::Selectable(ICON_MD_ADD " New Transition Shader...")) {
+                if (const ShaderDef* shader = newShader(ShaderKind::Transition)) {
+                    clip.transitionIn.type = TransitionType::Shader;
+                    clip.transitionIn.shader = shader->id;
+                    project.storeShader(*shader);
+                    edit = "Change transition";
+                }
+            }
+        }
+
         ImGui::EndCombo();
+    }
+
+    if (current && current->id.rfind("file:", 0) == 0 && editShader) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TableNextColumn();
+
+        if (ImGui::Button(ICON_MD_EDIT " Edit Shader")) {
+            editShader(current->id);
+        }
     }
 
     if (current && shaderError) {

@@ -33,6 +33,11 @@ public:
     std::function<std::string(const std::string& shaderId)> shaderError;
     std::function<void()> openShaderFolder;
 
+    // A shader of the user opened in the shader editor, and a new one made
+    // from an example (nullptr when it could not be written).
+    std::function<void(const std::string& shaderId)> editShader;
+    std::function<const core::ShaderDef*(core::ShaderKind kind)> newShader;
+
     // Name, resolution, frame rate and sample rate of the sequence (also
     // in the Project Properties window).
     void sequenceSection(core::Project& project, std::string& edit);

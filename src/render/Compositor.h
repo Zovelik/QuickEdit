@@ -116,6 +116,10 @@ public:
     // empty when it works.
     std::string shaderError(const std::string& shaderId) const;
 
+    // The compiler messages of a shader being written, empty when it
+    // compiles (nothing is kept).
+    static std::string checkShader(const core::ShaderDef& shader);
+
 private:
     struct GlyphInstance;
 

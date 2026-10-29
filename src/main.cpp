@@ -99,6 +99,7 @@ int main(int argc, char* argv[])
     bool effectsTab = false;
     bool keyframes = false;
     std::string transcribe;
+    std::string editShader;
     int screenSource = 0;
     float dropX = 0.f, dropY = 0.f;
 
@@ -142,6 +143,9 @@ int main(int argc, char* argv[])
             }
             else if (std::wstring(argv[i]) == L"--transcribe" && i + 1 < argc) {
                 for (const wchar_t* c = argv[++i]; *c; c++) transcribe += (char)(*c & 0x7F);
+            }
+            else if (std::wstring(argv[i]) == L"--edit-shader" && i + 1 < argc) {
+                for (const wchar_t* c = argv[++i]; *c; c++) editShader += (char)(*c & 0x7F);
             }
             else if (std::wstring(argv[i]) == L"--keyframes") {
                 keyframes = true;
@@ -213,6 +217,9 @@ int main(int argc, char* argv[])
         else if (std::string(argv[i]) == "--transcribe" && i + 1 < argc) {
             transcribe = argv[++i];
         }
+        else if (std::string(argv[i]) == "--edit-shader" && i + 1 < argc) {
+            editShader = argv[++i];
+        }
         else if (std::string(argv[i]) == "--keyframes") {
             keyframes = true;
         }
@@ -261,6 +268,11 @@ int main(int argc, char* argv[])
 
         if (keyframes) {
             gui.showKeyframes();
+        }
+
+        // A shader of the shaders folder in the shader editor (its name).
+        if (!editShader.empty()) {
+            gui.testEditShader(editShader);
         }
 
         if (effectsTab) {

@@ -51,6 +51,9 @@ public:
         // A nested sequence double clicked: to show.
         core::Id openSequence = core::InvalidId;
 
+        // Subtitles asked from the speech of a sound track.
+        core::Id generateSubtitles = core::InvalidId;
+
         // Files of the file manager dropped on a track (see setFileDrop()),
         // to place one after the other from dropStart.
         core::Id dropTrack = core::InvalidId;
@@ -146,8 +149,19 @@ private:
         TrimStart,
         TrimEnd,
         FadeIn,         // Audio fade handles
-        FadeOut
+        FadeOut,
+        Marquee         // A rectangle selecting the clips it touches
     };
+
+    // Marquee: where it started (time, and y in the scrolled rows), the
+    // selection before it (Ctrl adds to it).
+    core::Time _marqueeTime = 0;
+    float _marqueeY = 0.f;
+    float _marqueeX = 0.f;
+    std::vector<core::Id> _marqueeBase;
+
+    // Track of the context menu of the track headers.
+    core::Id _contextTrack = core::InvalidId;
 
     // A clip taken by a move or trim, as it was when the drag started.
     struct DragItem

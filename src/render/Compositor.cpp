@@ -1163,6 +1163,15 @@ VkPipeline Compositor::userPipeline(const ShaderDef& shader)
 }
 
 
+std::string Compositor::checkShader(const ShaderDef& shader)
+{
+    std::vector<uint32_t> spirv;
+    std::string error;
+
+    return compileFragmentShader(wrapShader(shader), shader.name, spirv, error) ? std::string() : error;
+}
+
+
 std::string Compositor::shaderError(const std::string& shaderId) const
 {
     const auto it = _shaderErrors.find(shaderId);

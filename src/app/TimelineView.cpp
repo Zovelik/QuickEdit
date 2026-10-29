@@ -455,7 +455,16 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
                 beginDrag(project, hoveredMode, grabbed, selection);
             }
         }
-        else if (mouse.x >= _timelineLeft && !io.KeyCtrl) {
+        else if (mouse.x >= _timelineLeft) {
+            // A rectangle may follow: the clips it touches selected.
+            _dragMode = DragMode::Marquee;
+            _marqueeTime = xToTime(mouse.x);
+            _marqueeX = mouse.x;
+            _marqueeY = mouse.y + _scrollY;
+            _marqueeBase = io.KeyCtrl ? selection : std::vector<Id>();
+        }
+
+        if (!hoveredClip && mouse.x >= _timelineLeft && mouse.y >= _tracksTop && !io.KeyCtrl) {
             selection.clear();
             _gap = Gap();
 
@@ -506,7 +515,29 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
             addWithLinks(project, hoveredClip->id, selection);
         }
 
+        // The track of the clip: its sound may become subtitles.
+        const Track* track = project.findTrackOfClip(hoveredClip->id);
+        _contextTrack = (track && (track->type == TrackType::Sound || track->type == TrackType::Audio)) ? track->id : InvalidId;
+
         ImGui::OpenPopup("##clipContext");
+    }
+
+    // Right click on the header of a sound track.
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mouse.x < _timelineLeft && hoveredRow &&
+        (hoveredRow->type == TrackType::Sound || hoveredRow->type == TrackType::Audio)) {
+        _contextTrack = tracksOfType(sequence, hoveredRow->type)[hoveredRow->trackIndex].id;
+        ImGui::OpenPopup("##trackContext");
+    }
+
+    if (ImGui::BeginPopup("##trackContext")) {
+        const Track* track = project.findTrack(_contextTrack);
+        ImGui::TextDisabled("%s", track ? track->name.c_str() : "");
+
+        if (ImGui::MenuItem(ICON_MD_RECORD_VOICE_OVER " Generate Subtitles from this Track...")) {
+            result.generateSubtitles = _contextTrack;
+        }
+
+        ImGui::EndPopup();
     }
 
     if (_dragMode == DragMode::FadeIn || _dragMode == DragMode::FadeOut) {
@@ -534,11 +565,48 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
         _playhead = playhead;
         result.seeked = true;
     }
+    else if (_dragMode == DragMode::Marquee) {
+        // Started as a click: a rectangle once the mouse moved a little.
+        const float startY = _marqueeY - _scrollY;
+        const bool moved = std::abs(mouse.x - _marqueeX) > 4.f || std::abs(mouse.y - startY) > 4.f;
+
+        if (moved) {
+            _gap = Gap();
+
+            const Time t0 = std::min(_marqueeTime, xToTime(mouse.x));
+            const Time t1 = std::max(_marqueeTime, xToTime(mouse.x));
+            const float y0 = std::min(startY, mouse.y);
+            const float y1 = std::max(startY, mouse.y);
+
+            selection = _marqueeBase;
+
+            for (const Row& row : _rows) {
+                if (row.top + row.height < y0 || row.top > y1) {
+                    continue;
+                }
+
+                for (const Clip& clip : tracksOfType(sequence, row.type)[row.trackIndex].clips) {
+                    if (clip.start < t1 && clip.end() > t0 && !isSelected(selection, clip.id)) {
+                        selection.push_back(clip.id);
+                    }
+                }
+            }
+
+            const ImVec2 a(std::max(std::min(_marqueeX, mouse.x), _timelineLeft), std::max(y0, _tracksTop));
+            const ImVec2 b(std::min(std::max(_marqueeX, mouse.x), _timelineRight), std::min(y1, _tracksBottom));
+            drawList->AddRectFilled(a, b, IM_COL32(255, 122, 0, 40));
+            drawList->AddRect(a, b, IM_COL32(255, 122, 0, 200));
+        }
+
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            _dragMode = DragMode::None;
+        }
+    }
     else if (_dragMode != DragMode::None) {
         updateDrag(project, mouse.x, mouse.y);
     }
 
-    if (_dragMode != DragMode::None && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    if (_dragMode != DragMode::None && _dragMode != DragMode::Marquee && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         const DragMode mode = _dragMode;
 
         if (endDrag(project)) {
@@ -706,6 +774,10 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
             }
 
             ImGui::EndMenu();
+        }
+
+        if (_contextTrack != InvalidId && ImGui::MenuItem(ICON_MD_RECORD_VOICE_OVER " Generate Subtitles from this Track...")) {
+            result.generateSubtitles = _contextTrack;
         }
 
         if (ImGui::MenuItem(ICON_MD_VOLUME_OFF " Remove the Sound of the Video")) {
