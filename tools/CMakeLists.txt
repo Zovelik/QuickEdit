@@ -1,0 +1,1 @@
+add_executable(spirv-to-header spirv_to_header.cpp)

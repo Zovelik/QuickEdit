@@ -1,0 +1,56 @@
+#version 460
+
+// Converts a decoded video frame, two planes (luma, interleaved chroma: NV12,
+// P010...), to RGBA 8 bits for display.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D lumaPlane;
+layout(set = 0, binding = 1) uniform sampler2D chromaPlane;
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D outputImage;
+
+layout(push_constant) uniform Parameters
+{
+    // Rows of the YCbCr to RGB matrix, applied to (Y, Cb, Cr) once
+    // normalized to [0, 1] and [-0.5, 0.5].
+    vec4 row0;
+    vec4 row1;
+    vec4 row2;
+
+    // Plane sample to code value (255 for 8 bits, 65535 / 64 for 10 bits
+    // stored in the high bits of 16), then offset and range of the codes:
+    // x: luma offset, y: luma range, z: chroma offset, w: chroma range.
+    vec4 range;
+    float codeScale;
+} parameters;
+
+
+void main()
+{
+    const ivec2 size = imageSize(outputImage);
+    const ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+
+    if (pixel.x >= size.x || pixel.y >= size.y) {
+        return;
+    }
+
+    // Luma at full resolution, chroma interpolated by the sampler. The planes
+    // may be larger than the picture (coded size aligned on macroblocks):
+    // the chroma coordinates come from the ratio of the plane sizes.
+    const vec2 lumaSize = vec2(textureSize(lumaPlane, 0));
+    const vec2 uv = (vec2(pixel) + 0.5) / lumaSize;
+
+    const float lumaCode = texelFetch(lumaPlane, pixel, 0).r * parameters.codeScale;
+    const vec2 chromaCode = texture(chromaPlane, uv).rg * parameters.codeScale;
+
+    const vec3 ycbcr = vec3(
+        (lumaCode - parameters.range.x) / parameters.range.y,
+        (chromaCode - parameters.range.z) / parameters.range.w);
+
+    const vec3 rgb = vec3(
+        dot(parameters.row0.xyz, ycbcr),
+        dot(parameters.row1.xyz, ycbcr),
+        dot(parameters.row2.xyz, ycbcr));
+
+    imageStore(outputImage, pixel, vec4(clamp(rgb, 0.0, 1.0), 1.0));
+}

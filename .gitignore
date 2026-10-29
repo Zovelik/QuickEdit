@@ -1,0 +1,11 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/out/build
+/CMakeSettings.json
+/.vs
+# FFmpeg prebuilt binaries, downloaded (see cmake/FindFFmpeg.cmake)
+/3rdparty/ffmpeg
+# VST3 SDK, cloned (see cmake/ and docs/ARCHITECTURE.md)
+/3rdparty/vst3sdk

@@ -1,0 +1,57 @@
+#version 460
+
+// Converts the composited frame (RGBA 8 bits, non-linear) to the two planes
+// of an NV12 picture for the encoder: Y' at full resolution, Cb Cr at half
+// resolution. One invocation per 2 x 2 block of pixels.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D sourceImage;
+layout(set = 0, binding = 1, r8) uniform writeonly image2D lumaPlane;
+layout(set = 0, binding = 2, rg8) uniform writeonly image2D chromaPlane;
+
+layout(push_constant) uniform Parameters
+{
+    // Rows of the R'G'B' to Y'Cb Cr matrix (Cb Cr in [-0.5, 0.5]).
+    vec4 row0;
+    vec4 row1;
+    vec4 row2;
+
+    // Code ranges, normalized: x: luma offset, y: luma range, z: chroma
+    // offset, w: chroma range.
+    vec4 range;
+} parameters;
+
+
+vec3 toYCbCr(vec3 rgb)
+{
+    return vec3(dot(parameters.row0.xyz, rgb), dot(parameters.row1.xyz, rgb), dot(parameters.row2.xyz, rgb));
+}
+
+
+void main()
+{
+    const ivec2 block = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 size = textureSize(sourceImage, 0);
+    const ivec2 origin = block * 2;
+
+    if (origin.x >= size.x || origin.y >= size.y) {
+        return;
+    }
+
+    vec3 sum = vec3(0.0);
+
+    for (int y = 0; y < 2; y++) {
+        for (int x = 0; x < 2; x++) {
+            const ivec2 pixel = min(origin + ivec2(x, y), size - 1);
+            const vec3 rgb = texelFetch(sourceImage, pixel, 0).rgb;
+            const vec3 ycbcr = toYCbCr(rgb);
+
+            imageStore(lumaPlane, origin + ivec2(x, y), vec4(parameters.range.x + parameters.range.y * ycbcr.x));
+            sum += rgb;
+        }
+    }
+
+    const vec3 ycbcr = toYCbCr(sum * 0.25);
+    imageStore(chromaPlane, block, vec4(parameters.range.z + parameters.range.w * ycbcr.yz, 0.0, 0.0));
+}
