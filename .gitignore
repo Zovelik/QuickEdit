@@ -9,3 +9,5 @@
 /3rdparty/ffmpeg
 # VST3 SDK, cloned (see cmake/ and docs/ARCHITECTURE.md)
 /3rdparty/vst3sdk
+# whisper.cpp (MIT), cloned (see docs/ARCHITECTURE.md)
+/3rdparty/whisper.cpp

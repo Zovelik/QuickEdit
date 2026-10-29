@@ -76,7 +76,8 @@ class Exporter
 public:
     // project: a copy, the exporter works on it while the edits go on. audio:
     // the decoded audio of the media, at the sample rate of the sequence.
-    // effects: instances of the effects of the audio tracks (by track id),
+    // effects: instances of the effects of the audio tracks and clips (by
+    // track or clip id),
     // for the export alone.
     Exporter(ExportContext context, core::Project project,
         std::map<core::Id, std::shared_ptr<const media::AudioBuffer>> audio,

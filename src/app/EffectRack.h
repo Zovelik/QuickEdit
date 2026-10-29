@@ -15,7 +15,8 @@
 namespace audio { class Vst3Plugin; }
 
 
-// The live instances of the effects (VST3 plugins) of the audio tracks.
+// The live instances of the effects (VST3 plugins) of the audio tracks and
+// of their clips.
 //
 // sync() follows the effect slots of the project: it loads the plugins of
 // new slots with their saved state, and drops the instances of removed ones.
@@ -34,8 +35,9 @@ public:
     // rebuilt).
     bool sync(const core::Project& project);
 
-    // Effects of a track for the mix graph: its instances not bypassed.
-    std::vector<std::shared_ptr<audio::AudioEffect>> effectsOf(const core::Track& track) const;
+    // Effects of a track or a clip for the mix graph: the instances of its
+    // slots not bypassed.
+    std::vector<std::shared_ptr<audio::AudioEffect>> effectsOf(const std::vector<core::EffectSlot>& slots) const;
 
     audio::Vst3Plugin* plugin(core::Id slotId) const;
     std::string error(core::Id slotId) const;
@@ -52,7 +54,7 @@ public:
     bool handleEvent(const SDL_Event& event);
 
     // New instances of the effects of a project, with their states, for an
-    // export: per track id.
+    // export: per owner (track or clip) id.
     static std::map<core::Id, std::vector<std::shared_ptr<audio::AudioEffect>>> createForExport(const core::Project& project);
 
 private:

@@ -251,11 +251,106 @@ TextContent textFromJson(const Json& json)
 }
 
 
+Json slotsToJson(const std::vector<EffectSlot>& slots)
+{
+    Json effects = Json::array();
+
+    for (const EffectSlot& slot : slots) {
+        Json entry = Json::object();
+        entry["id"] = slot.id;
+        entry["path"] = slot.path;
+        entry["classId"] = slot.classId;
+        entry["name"] = slot.name;
+        entry["bypass"] = slot.bypass;
+        entry["state"] = slot.state;
+        effects.push_back(entry);
+    }
+
+    return effects;
+}
+
+
+std::vector<EffectSlot> slotsFromJson(const Json& json)
+{
+    std::vector<EffectSlot> slots;
+
+    for (const Json& entry : json.items()) {
+        EffectSlot slot;
+        slot.id = (Id)entry["id"].toInt();
+        slot.path = entry["path"].toString();
+        slot.classId = entry["classId"].toString();
+        slot.name = entry["name"].toString();
+        slot.bypass = entry["bypass"].toBool();
+        slot.state = entry["state"].toString();
+        slots.push_back(slot);
+    }
+
+    return slots;
+}
+
+
+Json videoEffectsToJson(const std::vector<VideoEffect>& effects)
+{
+    Json array = Json::array();
+
+    for (const VideoEffect& effect : effects) {
+        Json entry = Json::object();
+        entry["id"] = effect.id;
+        entry["type"] = effect.type;
+        entry["enabled"] = effect.enabled;
+
+        Json parameters = Json::array();
+
+        for (const AnimatedValue& value : effect.parameters) {
+            parameters.push_back(animatedToJson(value));
+        }
+
+        entry["parameters"] = parameters;
+        array.push_back(entry);
+    }
+
+    return array;
+}
+
+
+std::vector<VideoEffect> videoEffectsFromJson(const Json& json)
+{
+    std::vector<VideoEffect> effects;
+
+    for (const Json& entry : json.items()) {
+        // An unknown type (a newer version): dropped.
+        VideoEffect effect = makeVideoEffect((Id)entry["id"].toInt(), entry["type"].toString());
+
+        if (!effect.info()) {
+            continue;
+        }
+
+        effect.enabled = entry["enabled"].toBool(true);
+
+        const std::vector<Json> parameters = entry["parameters"].items();
+
+        for (size_t i = 0; i < effect.parameters.size() && i < parameters.size(); i++) {
+            effect.parameters[i] = animatedFromJson(parameters[i], effect.info()->parameters[i].defaultValue);
+        }
+
+        effects.push_back(std::move(effect));
+    }
+
+    return effects;
+}
+
+
 Json clipToJson(const Clip& clip)
 {
     Json json = Json::object();
     json["id"] = clip.id;
-    json["kind"] = (clip.kind == ClipKind::Text) ? "text" : "media";
+    json["kind"] = (clip.kind == ClipKind::Text) ? "text"
+        : (clip.kind == ClipKind::Generator) ? "generator"
+        : (clip.kind == ClipKind::Sequence) ? "sequence" : "media";
+
+    if (clip.kind == ClipKind::Sequence) {
+        json["sequence"] = clip.sequence;
+    }
     json["media"] = clip.mediaId;
     json["start"] = clip.start;
     json["duration"] = clip.duration;
@@ -279,6 +374,18 @@ Json clipToJson(const Clip& clip)
         json["text"] = textToJson(clip.text);
     }
 
+    if (clip.kind == ClipKind::Generator) {
+        json["shader"] = clip.shader;
+
+        Json parameters = Json::array();
+
+        for (const AnimatedValue& value : clip.shaderParameters) {
+            parameters.push_back(animatedToJson(value));
+        }
+
+        json["shaderParameters"] = parameters;
+    }
+
     if (clip.frame != Frame()) {
         const Frame& f = clip.frame;
         Json frame = Json::object();
@@ -296,10 +403,22 @@ Json clipToJson(const Clip& clip)
         json["frame"] = frame;
     }
 
+    if (!clip.videoEffects.empty()) {
+        json["videoEffects"] = videoEffectsToJson(clip.videoEffects);
+    }
+
+    if (!clip.effects.empty()) {
+        json["effects"] = slotsToJson(clip.effects);
+    }
+
     if (clip.transitionIn.type != TransitionType::None) {
         Json transition = Json::object();
         transition["type"] = (int)clip.transitionIn.type;
         transition["duration"] = clip.transitionIn.duration;
+
+        if (!clip.transitionIn.shader.empty()) {
+            transition["shader"] = clip.transitionIn.shader;
+        }
         json["transitionIn"] = transition;
     }
 
@@ -311,7 +430,11 @@ Clip clipFromJson(const Json& json)
 {
     Clip clip;
     clip.id = (Id)json["id"].toInt();
-    clip.kind = (json["kind"].toString() == "text") ? ClipKind::Text : ClipKind::Media;
+    const std::string kind = json["kind"].toString();
+    clip.kind = (kind == "text") ? ClipKind::Text
+        : (kind == "generator") ? ClipKind::Generator
+        : (kind == "sequence") ? ClipKind::Sequence : ClipKind::Media;
+    clip.sequence = (Id)json["sequence"].toInt();
     clip.mediaId = (Id)json["media"].toInt();
     clip.start = json["start"].toInt();
     clip.duration = std::max<Time>(1, json["duration"].toInt(1));
@@ -333,6 +456,14 @@ Clip clipFromJson(const Json& json)
         clip.text = textFromJson(json["text"]);
     }
 
+    if (clip.kind == ClipKind::Generator) {
+        clip.shader = json["shader"].toString();
+
+        for (const Json& value : json["shaderParameters"].items()) {
+            clip.shaderParameters.push_back(animatedFromJson(value, 0.f));
+        }
+    }
+
     if (const Json& frame = json["frame"]; frame.isObject()) {
         const Frame defaults;
         Frame& f = clip.frame;
@@ -349,8 +480,12 @@ Clip clipFromJson(const Json& json)
         f.shadowColor = colorFromJson(frame["shadowColor"], defaults.shadowColor);
     }
 
+    clip.videoEffects = videoEffectsFromJson(json["videoEffects"]);
+    clip.effects = slotsFromJson(json["effects"]);
+
     const Json& transition = json["transitionIn"];
-    clip.transitionIn.type = (TransitionType)std::clamp<int64_t>(transition["type"].toInt(), 0, (int64_t)TransitionType::Zoom);
+    clip.transitionIn.type = (TransitionType)std::clamp<int64_t>(transition["type"].toInt(), 0, (int64_t)TransitionType::Shader);
+    clip.transitionIn.shader = transition["shader"].toString();
     clip.transitionIn.duration = std::max<Time>(1, transition["duration"].toInt(TicksPerSecond));
 
     return clip;
@@ -375,20 +510,11 @@ Json trackToJson(const Track& track)
     json["clips"] = clips;
 
     if (!track.effects.empty()) {
-        Json effects = Json::array();
+        json["effects"] = slotsToJson(track.effects);
+    }
 
-        for (const EffectSlot& slot : track.effects) {
-            Json entry = Json::object();
-            entry["id"] = slot.id;
-            entry["path"] = slot.path;
-            entry["classId"] = slot.classId;
-            entry["name"] = slot.name;
-            entry["bypass"] = slot.bypass;
-            entry["state"] = slot.state;
-            effects.push_back(entry);
-        }
-
-        json["effects"] = effects;
+    if (!track.videoEffects.empty()) {
+        json["videoEffects"] = videoEffectsToJson(track.videoEffects);
     }
 
     return json;
@@ -411,16 +537,8 @@ Track trackFromJson(const Json& json, TrackType type)
 
     track.sortClips();
 
-    for (const Json& entry : json["effects"].items()) {
-        EffectSlot slot;
-        slot.id = (Id)entry["id"].toInt();
-        slot.path = entry["path"].toString();
-        slot.classId = entry["classId"].toString();
-        slot.name = entry["name"].toString();
-        slot.bypass = entry["bypass"].toBool();
-        slot.state = entry["state"].toString();
-        track.effects.push_back(slot);
-    }
+    track.effects = slotsFromJson(json["effects"]);
+    track.videoEffects = videoEffectsFromJson(json["videoEffects"]);
 
     return track;
 }
@@ -484,7 +602,7 @@ Time Sequence::duration() const
 {
     Time end = 0;
 
-    for (const auto* tracks : { &videoTracks, &soundTracks, &audioTracks }) {
+    for (const auto* tracks : { &videoTracks, &soundTracks, &audioTracks, &subtitleTracks }) {
         for (const Track& track : *tracks) {
             for (const Clip& clip : track.clips) {
                 end = std::max(end, clip.end());
@@ -500,9 +618,13 @@ void Sequence::addTrack(TrackType type, Id id, Id soundId)
 {
     Track track;
     track.id = id;
-    track.type = (type == TrackType::Video) ? TrackType::Video : TrackType::Audio;
+    track.type = (type == TrackType::Video || type == TrackType::Subtitle) ? type : TrackType::Audio;
 
-    if (track.type == TrackType::Video) {
+    if (track.type == TrackType::Subtitle) {
+        track.name = "ST" + std::to_string(subtitleTracks.size() + 1);
+        subtitleTracks.push_back(track);
+    }
+    else if (track.type == TrackType::Video) {
         track.name = "V" + std::to_string(videoTracks.size() + 1);
         videoTracks.push_back(track);
 
@@ -521,6 +643,9 @@ void Sequence::addTrack(TrackType type, Id id, Id soundId)
 
 Project::Project()
 {
+    _sequence.id = newId();
+    _sequenceOrder.push_back(_sequence.id);
+
     // Default sequence: three video tracks with their sound tracks, and two
     // audio tracks (voice, music).
     for (int i = 0; i < 3; i++) {
@@ -552,7 +677,7 @@ const MediaItem* Project::findMedia(Id id) const
 
 Track* Project::findTrackOfClip(Id clipId)
 {
-    for (auto* tracks : { &_sequence.videoTracks, &_sequence.soundTracks, &_sequence.audioTracks }) {
+    for (auto* tracks : { &_sequence.videoTracks, &_sequence.soundTracks, &_sequence.audioTracks, &_sequence.subtitleTracks }) {
         for (Track& track : *tracks) {
             for (const Clip& clip : track.clips) {
                 if (clip.id == clipId) return &track;
@@ -582,7 +707,7 @@ Clip* Project::findClip(Id clipId)
 
 Track* Project::findTrack(Id trackId)
 {
-    for (auto* tracks : { &_sequence.videoTracks, &_sequence.soundTracks, &_sequence.audioTracks }) {
+    for (auto* tracks : { &_sequence.videoTracks, &_sequence.soundTracks, &_sequence.audioTracks, &_sequence.subtitleTracks }) {
         for (Track& track : *tracks) {
             if (track.id == trackId) return &track;
         }
@@ -594,19 +719,106 @@ Track* Project::findTrack(Id trackId)
 
 EffectSlot* Project::findEffect(Id slotId)
 {
-    for (Track& track : _sequence.soundTracks) {
-        for (EffectSlot& slot : track.effects) {
-            if (slot.id == slotId) return &slot;
-        }
-    }
+    for (auto* tracks : { &_sequence.soundTracks, &_sequence.audioTracks }) {
+        for (Track& track : *tracks) {
+            for (EffectSlot& slot : track.effects) {
+                if (slot.id == slotId) return &slot;
+            }
 
-    for (Track& track : _sequence.audioTracks) {
-        for (EffectSlot& slot : track.effects) {
-            if (slot.id == slotId) return &slot;
+            for (Clip& clip : track.clips) {
+                for (EffectSlot& slot : clip.effects) {
+                    if (slot.id == slotId) return &slot;
+                }
+            }
         }
     }
 
     return nullptr;
+}
+
+
+std::string Project::parentFolder(const std::string& path)
+{
+    const size_t slash = path.rfind('/');
+    return (slash == std::string::npos) ? std::string() : path.substr(0, slash);
+}
+
+
+std::string Project::addMediaFolder(const std::string& parent, const std::string& name)
+{
+    const std::string base = (parent.empty() ? "" : parent + "/") + (name.empty() ? "New Folder" : name);
+    std::string path = base;
+
+    for (int i = 2; std::find(_mediaFolders.begin(), _mediaFolders.end(), path) != _mediaFolders.end(); i++) {
+        path = base + " " + std::to_string(i);
+    }
+
+    _mediaFolders.push_back(path);
+    return path;
+}
+
+
+bool Project::renameMediaFolder(const std::string& path, const std::string& name)
+{
+    if (name.empty() || name.find('/') != std::string::npos) {
+        return false;
+    }
+
+    const std::string parent = parentFolder(path);
+    const std::string renamed = (parent.empty() ? "" : parent + "/") + name;
+
+    if (renamed == path) {
+        return true;
+    }
+
+    if (std::find(_mediaFolders.begin(), _mediaFolders.end(), renamed) != _mediaFolders.end()) {
+        return false;
+    }
+
+    // The folder, and what is under it.
+    auto rename = [&](std::string& folder) {
+        if (folder == path) {
+            folder = renamed;
+        }
+        else if (folder.size() > path.size() && folder.compare(0, path.size(), path) == 0 && folder[path.size()] == '/') {
+            folder = renamed + folder.substr(path.size());
+        }
+    };
+
+    for (std::string& folder : _mediaFolders) rename(folder);
+    for (MediaItem& item : _media) rename(item.folder);
+
+    return true;
+}
+
+
+void Project::removeMediaFolder(const std::string& path)
+{
+    const std::string parent = parentFolder(path);
+
+    auto under = [&](const std::string& folder) {
+        return folder == path || (folder.size() > path.size() && folder.compare(0, path.size(), path) == 0 && folder[path.size()] == '/');
+    };
+
+    for (MediaItem& item : _media) {
+        if (under(item.folder)) {
+            item.folder = parent;
+        }
+    }
+
+    std::erase_if(_mediaFolders, under);
+}
+
+
+void Project::moveMediaToFolder(Id mediaId, const std::string& folder)
+{
+    if (MediaItem* item = findMedia(mediaId)) {
+        item->folder = folder;
+
+        if (!folder.empty() && std::find(_mediaFolders.begin(), _mediaFolders.end(), folder) == _mediaFolders.end()) {
+            _mediaFolders.push_back(folder);
+        }
+    }
 }
 
 
@@ -782,7 +994,7 @@ void Project::removeClips(const std::vector<Id>& clipIds, bool withLinks)
         }
     }
 
-    for (auto* tracks : { &_sequence.videoTracks, &_sequence.soundTracks, &_sequence.audioTracks }) {
+    for (auto* tracks : { &_sequence.videoTracks, &_sequence.soundTracks, &_sequence.audioTracks, &_sequence.subtitleTracks }) {
         for (Track& track : *tracks) {
             if (track.locked) {
                 continue;
@@ -814,7 +1026,7 @@ void Project::rippleDelete(const std::vector<Id>& clipIds, bool withLinks)
             (clip.linkGroup != InvalidId && std::find(linkGroups.begin(), linkGroups.end(), clip.linkGroup) != linkGroups.end());
     };
 
-    for (auto* tracks : { &_sequence.videoTracks, &_sequence.soundTracks, &_sequence.audioTracks }) {
+    for (auto* tracks : { &_sequence.videoTracks, &_sequence.soundTracks, &_sequence.audioTracks, &_sequence.subtitleTracks }) {
         for (Track& track : *tracks) {
             if (track.locked) {
                 continue;
@@ -917,7 +1129,7 @@ void Project::splitAt(Time t, const std::vector<Id>& onlyClips)
         return group;
     };
 
-    for (auto* tracks : { &_sequence.videoTracks, &_sequence.soundTracks, &_sequence.audioTracks }) {
+    for (auto* tracks : { &_sequence.videoTracks, &_sequence.soundTracks, &_sequence.audioTracks, &_sequence.subtitleTracks }) {
         for (Track& track : *tracks) {
             if (track.locked) {
                 continue;
@@ -943,6 +1155,19 @@ void Project::splitAt(Time t, const std::vector<Id>& onlyClips)
             right.transform.shiftKeys(-(t - left.start));
             right.transitionIn = Transition();
 
+            // Its effects: instances of their own; their keys follow.
+            for (EffectSlot& slot : right.effects) {
+                slot.id = newId();
+            }
+
+            for (VideoEffect& effect : right.videoEffects) {
+                effect.id = newId();
+
+                for (AnimatedValue& value : effect.parameters) {
+                    value.shiftKeys(-(t - left.start));
+                }
+            }
+
             // The fades stay at the outer edges.
             right.fadeIn = 0;
             left.fadeOut = 0;
@@ -962,7 +1187,7 @@ Id Project::addTextClip(Id trackId, Time start, Time duration, const std::string
 {
     Track* track = findTrack(trackId);
 
-    if (!track || track->type != TrackType::Video || track->locked || start < 0) {
+    if (!track || (track->type != TrackType::Video && track->type != TrackType::Subtitle) || track->locked || start < 0) {
         return InvalidId;
     }
 
@@ -987,6 +1212,73 @@ Id Project::addTextClip(Id trackId, Time start, Time duration, const std::string
     track->sortClips();
 
     return clip.id;
+}
+
+
+Id Project::addGeneratorClip(Id trackId, Time start, Time duration, const ShaderDef& shader)
+{
+    Track* track = findTrack(trackId);
+
+    if (!track || track->type != TrackType::Video || track->locked || start < 0 || shader.kind != ShaderKind::Generator) {
+        return InvalidId;
+    }
+
+    Time freeStart, freeEnd;
+
+    if (!freeRangeAt(*track, start, InvalidId, freeStart, freeEnd)) {
+        return InvalidId;
+    }
+
+    Clip clip;
+    clip.id = newId();
+    clip.kind = ClipKind::Generator;
+    clip.start = start;
+    clip.duration = std::min(duration, freeEnd - start);
+    clip.shader = shader.id;
+
+    for (const ShaderParameter& parameter : shader.parameters) {
+        clip.shaderParameters.emplace_back(parameter.defaultValue);
+    }
+
+    if (clip.duration <= 0) {
+        return InvalidId;
+    }
+
+    if (shader.id.rfind("builtin:", 0) != 0) {
+        storeShader(shader);
+    }
+
+    track->clips.push_back(clip);
+    track->sortClips();
+
+    return clip.id;
+}
+
+
+void Project::storeShader(const ShaderDef& shader)
+{
+    for (ShaderDef& stored : _shaders) {
+        if (stored.id == shader.id) {
+            stored = shader;
+            return;
+        }
+    }
+
+    _shaders.push_back(shader);
+}
+
+
+const ShaderDef* Project::findShader(const std::string& id) const
+{
+    for (const ShaderDef& shader : _shaders) {
+        if (shader.id == id) return &shader;
+    }
+
+    for (const ShaderDef& shader : builtinShaders()) {
+        if (shader.id == id) return &shader;
+    }
+
+    return nullptr;
 }
 
 
@@ -1015,7 +1307,7 @@ Id Project::insertFreezeFrame(Id clipId, Time t, Time duration)
     // moves later to make room.
     std::vector<Track*> tracks = { track };
 
-    for (auto* list : { &_sequence.videoTracks, &_sequence.soundTracks, &_sequence.audioTracks }) {
+    for (auto* list : { &_sequence.videoTracks, &_sequence.soundTracks, &_sequence.audioTracks, &_sequence.subtitleTracks }) {
         for (Track& other : *list) {
             for (const Clip& c : other.clips) {
                 if (linkGroup != InvalidId && c.linkGroup == linkGroup && &other != track) {
@@ -1060,6 +1352,261 @@ Id Project::insertFreezeFrame(Id clipId, Time t, Time duration)
 }
 
 
+namespace {
+
+Json sequenceToJson(const Sequence& sequence)
+{
+    Json json = Json::object();
+    json["id"] = sequence.id;
+    json["name"] = sequence.name;
+    json["width"] = sequence.width;
+    json["height"] = sequence.height;
+    json["frameRate"] = rationalToJson(sequence.frameRate);
+    json["sampleRate"] = sequence.sampleRate;
+
+    Json videoTracks = Json::array();
+    for (const Track& track : sequence.videoTracks) {
+        videoTracks.push_back(trackToJson(track));
+    }
+
+    Json audioTracks = Json::array();
+    for (const Track& track : sequence.audioTracks) {
+        audioTracks.push_back(trackToJson(track));
+    }
+
+    Json soundTracks = Json::array();
+    for (const Track& track : sequence.soundTracks) {
+        soundTracks.push_back(trackToJson(track));
+    }
+
+    json["videoTracks"] = videoTracks;
+    json["soundTracks"] = soundTracks;
+    json["audioTracks"] = audioTracks;
+    json["soundTracksFolded"] = sequence.soundTracksFolded;
+
+    if (!sequence.subtitleTracks.empty()) {
+        Json subtitleTracks = Json::array();
+
+        for (const Track& track : sequence.subtitleTracks) {
+            subtitleTracks.push_back(trackToJson(track));
+        }
+
+        json["subtitleTracks"] = subtitleTracks;
+    }
+
+    if (sequence.subtitleStyle != SubtitleStyle()) {
+        Json style = Json::object();
+        style["size"] = (double)sequence.subtitleStyle.size;
+        style["color"] = colorToJson(sequence.subtitleStyle.color);
+        style["outlineWidth"] = (double)sequence.subtitleStyle.outlineWidth;
+        style["bottomMargin"] = (double)sequence.subtitleStyle.bottomMargin;
+        json["subtitleStyle"] = style;
+    }
+
+    return json;
+}
+
+
+Sequence sequenceFromJson(const Json& json)
+{
+    Sequence sequence;
+    sequence.id = (Id)json["id"].toInt();
+    sequence.name = json["name"].toString("Sequence 1");
+    sequence.width = (uint32_t)std::max<int64_t>(16, json["width"].toInt(1920));
+    sequence.height = (uint32_t)std::max<int64_t>(16, json["height"].toInt(1080));
+    sequence.frameRate = rationalFromJson(json["frameRate"], { 30, 1 });
+    sequence.sampleRate = (uint32_t)json["sampleRate"].toInt(48000);
+
+    for (const Json& track : json["videoTracks"].items()) {
+        sequence.videoTracks.push_back(trackFromJson(track, TrackType::Video));
+    }
+
+    for (const Json& track : json["audioTracks"].items()) {
+        sequence.audioTracks.push_back(trackFromJson(track, TrackType::Audio));
+    }
+
+    for (const Json& track : json["soundTracks"].items()) {
+        sequence.soundTracks.push_back(trackFromJson(track, TrackType::Sound));
+    }
+
+    sequence.soundTracksFolded = json["soundTracksFolded"].toBool();
+
+    for (const Json& track : json["subtitleTracks"].items()) {
+        sequence.subtitleTracks.push_back(trackFromJson(track, TrackType::Subtitle));
+    }
+
+    if (const Json& style = json["subtitleStyle"]; style.isObject()) {
+        const SubtitleStyle defaults;
+        sequence.subtitleStyle.size = std::max(4.f, (float)style["size"].toDouble(defaults.size));
+        sequence.subtitleStyle.color = colorFromJson(style["color"], defaults.color);
+        sequence.subtitleStyle.outlineWidth = std::max(0.f, (float)style["outlineWidth"].toDouble(defaults.outlineWidth));
+        sequence.subtitleStyle.bottomMargin = (float)style["bottomMargin"].toDouble(defaults.bottomMargin);
+    }
+
+    return sequence;
+}
+
+} // namespace
+
+
+std::vector<const Sequence*> Project::sequences() const
+{
+    std::vector<const Sequence*> list;
+
+    for (Id id : _sequenceOrder) {
+        if (const Sequence* sequence = findSequence(id)) list.push_back(sequence);
+    }
+
+    // Any not in the order (never expected), after.
+    if (std::find(list.begin(), list.end(), &_sequence) == list.end()) list.push_back(&_sequence);
+
+    for (const Sequence& sequence : _otherSequences) {
+        if (std::find(list.begin(), list.end(), &sequence) == list.end()) list.push_back(&sequence);
+    }
+
+    return list;
+}
+
+
+const Sequence* Project::findSequence(Id id) const
+{
+    if (_sequence.id == id) {
+        return &_sequence;
+    }
+
+    for (const Sequence& sequence : _otherSequences) {
+        if (sequence.id == id) return &sequence;
+    }
+
+    return nullptr;
+}
+
+
+Id Project::addSequence(const std::string& name)
+{
+    Sequence sequence;
+    sequence.id = newId();
+    sequence.name = name;
+    sequence.width = _sequence.width;
+    sequence.height = _sequence.height;
+    sequence.frameRate = _sequence.frameRate;
+    sequence.sampleRate = _sequence.sampleRate;
+
+    for (int i = 0; i < 2; i++) {
+        const Id video = newId();
+        sequence.addTrack(TrackType::Video, video, newId());
+    }
+
+    for (int i = 0; i < 2; i++) {
+        sequence.addTrack(TrackType::Audio, newId(), InvalidId);
+    }
+
+    _otherSequences.push_back(std::move(sequence));
+    _sequenceOrder.push_back(_otherSequences.back().id);
+
+    return _otherSequences.back().id;
+}
+
+
+bool Project::switchSequence(Id id)
+{
+    if (id == _sequence.id) {
+        return true;
+    }
+
+    for (Sequence& other : _otherSequences) {
+        if (other.id == id) {
+            std::swap(other, _sequence);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
+bool Project::removeSequence(Id id)
+{
+    if (!findSequence(id) || _otherSequences.empty()) {
+        return false;
+    }
+
+    // Nested somewhere: kept.
+    for (const Sequence* sequence : sequences()) {
+        for (const Track& track : sequence->videoTracks) {
+            for (const Clip& clip : track.clips) {
+                if (clip.kind == ClipKind::Sequence && clip.sequence == id) return false;
+            }
+        }
+    }
+
+    if (_sequence.id == id) {
+        switchSequence(_otherSequences.front().id);
+    }
+
+    std::erase_if(_otherSequences, [&](const Sequence& sequence) { return sequence.id == id; });
+    std::erase(_sequenceOrder, id);
+
+    return true;
+}
+
+
+bool Project::sequenceContains(Id outer, Id inner) const
+{
+    if (outer == inner) {
+        return true;
+    }
+
+    const Sequence* sequence = findSequence(outer);
+
+    if (!sequence) {
+        return false;
+    }
+
+    for (const Track& track : sequence->videoTracks) {
+        for (const Clip& clip : track.clips) {
+            if (clip.kind == ClipKind::Sequence && sequenceContains(clip.sequence, inner)) return true;
+        }
+    }
+
+    return false;
+}
+
+
+Id Project::addSequenceClip(Id sequenceId, Id trackId, Time start)
+{
+    const Sequence* nested = findSequence(sequenceId);
+    Track* track = findTrack(trackId);
+
+    // Never inside itself.
+    if (!nested || !track || track->type != TrackType::Video || track->locked || start < 0 || sequenceContains(sequenceId, _sequence.id)) {
+        return InvalidId;
+    }
+
+    Time freeStart, freeEnd;
+
+    if (!freeRangeAt(*track, start, InvalidId, freeStart, freeEnd)) {
+        return InvalidId;
+    }
+
+    Clip clip;
+    clip.id = newId();
+    clip.kind = ClipKind::Sequence;
+    clip.sequence = sequenceId;
+    clip.start = start;
+    clip.duration = std::min(nested->duration() > 0 ? nested->duration() : 5 * TicksPerSecond, freeEnd - start);
+
+    if (clip.duration <= 0) {
+        return InvalidId;
+    }
+
+    track->clips.push_back(clip);
+    track->sortClips();
+
+    return clip.id;
+}
+
+
 Json Project::toJson(const std::filesystem::path& projectDir) const
 {
     Json json = Json::object();
@@ -1082,42 +1629,49 @@ Json Project::toJson(const std::filesystem::path& projectDir) const
         entry["hasAudio"] = item.hasAudio;
         entry["sampleRate"] = item.sampleRate;
         entry["channels"] = item.channels;
+
+        if (!item.folder.empty()) {
+            entry["folder"] = item.folder;
+        }
+
         media.push_back(entry);
     }
 
     json["media"] = media;
 
-    Json sequence = Json::object();
-    sequence["name"] = _sequence.name;
-    sequence["width"] = _sequence.width;
-    sequence["height"] = _sequence.height;
-    sequence["frameRate"] = rationalToJson(_sequence.frameRate);
-    sequence["sampleRate"] = _sequence.sampleRate;
+    if (!_shaders.empty()) {
+        Json shaders = Json::array();
 
-    Json videoTracks = Json::array();
-    for (const Track& track : _sequence.videoTracks) {
-        videoTracks.push_back(trackToJson(track));
+        for (const ShaderDef& shader : _shaders) {
+            Json entry = Json::object();
+            entry["id"] = shader.id;
+            entry["name"] = shader.name;
+            entry["source"] = shader.source;
+            shaders.push_back(entry);
+        }
+
+        json["shaders"] = shaders;
     }
 
-    Json audioTracks = Json::array();
-    for (const Track& track : _sequence.audioTracks) {
-        audioTracks.push_back(trackToJson(track));
+    if (!_mediaFolders.empty()) {
+        Json folders = Json::array();
+
+        for (const std::string& folder : _mediaFolders) {
+            folders.push_back(folder);
+        }
+
+        json["mediaFolders"] = folders;
     }
 
-    Json soundTracks = Json::array();
-    for (const Track& track : _sequence.soundTracks) {
-        soundTracks.push_back(trackToJson(track));
-    }
-
-    sequence["videoTracks"] = videoTracks;
-    sequence["soundTracks"] = soundTracks;
-    sequence["audioTracks"] = audioTracks;
-    sequence["soundTracksFolded"] = _sequence.soundTracksFolded;
-
-    // A single sequence for now, in an array for the future versions.
+    // The sequences in the order of their tabs, the current one marked.
     Json sequences = Json::array();
-    sequences.push_back(sequence);
+
+    for (const Sequence* sequence : this->sequences()) {
+        sequences.push_back(sequenceToJson(*sequence));
+    }
+
     json["sequences"] = sequences;
+    json["currentSequence"] = _sequence.id;
 
     return json;
 }
@@ -1152,37 +1706,54 @@ void Project::fromJson(const Json& json, const std::filesystem::path& projectDir
         item.hasAudio = entry["hasAudio"].toBool();
         item.sampleRate = (uint32_t)entry["sampleRate"].toInt();
         item.channels = (uint32_t)entry["channels"].toInt();
+        item.folder = entry["folder"].toString();
         loaded._media.push_back(item);
     }
 
-    const Json& sequence = json["sequences"][0];
+    for (const Json& entry : json["shaders"].items()) {
+        ShaderDef shader;
 
-    loaded._sequence.name = sequence["name"].toString("Sequence 1");
-    loaded._sequence.width = (uint32_t)std::max<int64_t>(16, sequence["width"].toInt(1920));
-    loaded._sequence.height = (uint32_t)std::max<int64_t>(16, sequence["height"].toInt(1080));
-    loaded._sequence.frameRate = rationalFromJson(sequence["frameRate"], { 30, 1 });
-    loaded._sequence.sampleRate = (uint32_t)sequence["sampleRate"].toInt(48000);
-
-    for (const Json& track : sequence["videoTracks"].items()) {
-        loaded._sequence.videoTracks.push_back(trackFromJson(track, TrackType::Video));
+        if (parseShader(entry["source"].toString(), shader)) {
+            shader.id = entry["id"].toString();
+            shader.name = entry["name"].toString();
+            loaded._shaders.push_back(std::move(shader));
+        }
     }
 
-    for (const Json& track : sequence["audioTracks"].items()) {
-        loaded._sequence.audioTracks.push_back(trackFromJson(track, TrackType::Audio));
+    for (const Json& folder : json["mediaFolders"].items()) {
+        if (!folder.toString().empty()) {
+            loaded._mediaFolders.push_back(folder.toString());
+        }
     }
 
-    for (const Json& track : sequence["soundTracks"].items()) {
-        loaded._sequence.soundTracks.push_back(trackFromJson(track, TrackType::Sound));
+    // The folders of the media, even when not listed.
+    for (const MediaItem& item : loaded._media) {
+        for (std::string folder = item.folder; !folder.empty(); folder = parentFolder(folder)) {
+            if (std::find(loaded._mediaFolders.begin(), loaded._mediaFolders.end(), folder) == loaded._mediaFolders.end()) {
+                loaded._mediaFolders.push_back(folder);
+            }
+        }
     }
 
-    loaded._sequence.soundTracksFolded = sequence["soundTracksFolded"].toBool();
+    std::vector<Sequence> loadedSequences;
+
+    for (const Json& sequence : json["sequences"].items()) {
+        loadedSequences.push_back(sequenceFromJson(sequence));
+    }
+
+    if (loadedSequences.empty()) {
+        loadedSequences.emplace_back();
+    }
 
     // Never hand out an id already in use, even if nextId is missing.
     Id maxId = 0;
 
     for (const MediaItem& item : loaded._media) maxId = std::max(maxId, item.id);
 
-    for (const auto* tracks : { &loaded._sequence.videoTracks, &loaded._sequence.soundTracks, &loaded._sequence.audioTracks }) {
+    for (const Sequence& sequence : loadedSequences) {
+    maxId = std::max(maxId, sequence.id);
+
+    for (const auto* tracks : { &sequence.videoTracks, &sequence.soundTracks, &sequence.audioTracks, &sequence.subtitleTracks }) {
         for (const Track& track : *tracks) {
             maxId = std::max(maxId, track.id);
 
@@ -1190,49 +1761,85 @@ void Project::fromJson(const Json& json, const std::filesystem::path& projectDir
                 maxId = std::max(maxId, slot.id);
             }
 
+            for (const VideoEffect& effect : track.videoEffects) {
+                maxId = std::max(maxId, effect.id);
+            }
+
             for (const Clip& clip : track.clips) {
                 maxId = std::max({ maxId, clip.id, clip.linkGroup });
+
+                for (const EffectSlot& slot : clip.effects) maxId = std::max(maxId, slot.id);
+                for (const VideoEffect& effect : clip.videoEffects) maxId = std::max(maxId, effect.id);
             }
         }
+    }
     }
 
     loaded._nextId = std::max<Id>((Id)json["nextId"].toInt(), maxId + 1);
 
-    // One sound track per video track. Projects without them: the sound of
-    // each video clip moves from the audio tracks to the sound track of its
-    // video track.
-    const bool migrate = loaded._sequence.soundTracks.empty();
+    for (Sequence& sequence : loadedSequences) {
+        // Older files: sequences without ids.
+        if (sequence.id == InvalidId) {
+            sequence.id = loaded.newId();
+        }
 
-    while (loaded._sequence.soundTracks.size() < loaded._sequence.videoTracks.size()) {
-        Track sound;
-        sound.id = loaded.newId();
-        sound.type = TrackType::Sound;
-        sound.name = "S" + std::to_string(loaded._sequence.soundTracks.size() + 1);
-        loaded._sequence.soundTracks.push_back(sound);
-    }
+        // One sound track per video track. Projects without them: the sound of
+        // each video clip moves from the audio tracks to the sound track of its
+        // video track.
+        const bool migrate = sequence.soundTracks.empty();
 
-    loaded._sequence.soundTracks.resize(loaded._sequence.videoTracks.size());
+        while (sequence.soundTracks.size() < sequence.videoTracks.size()) {
+            Track sound;
+            sound.id = loaded.newId();
+            sound.type = TrackType::Sound;
+            sound.name = "S" + std::to_string(sequence.soundTracks.size() + 1);
+            sequence.soundTracks.push_back(sound);
+        }
 
-    if (migrate) {
-        for (size_t v = 0; v < loaded._sequence.videoTracks.size(); v++) {
-            for (const Clip& video : loaded._sequence.videoTracks[v].clips) {
-                if (video.linkGroup == InvalidId) {
-                    continue;
-                }
+        sequence.soundTracks.resize(sequence.videoTracks.size());
 
-                for (Track& audio : loaded._sequence.audioTracks) {
-                    for (size_t c = 0; c < audio.clips.size(); c++) {
-                        if (audio.clips[c].linkGroup == video.linkGroup) {
-                            loaded._sequence.soundTracks[v].clips.push_back(audio.clips[c]);
-                            audio.clips.erase(audio.clips.begin() + (ptrdiff_t)c);
-                            break;
+        if (migrate) {
+            for (size_t v = 0; v < sequence.videoTracks.size(); v++) {
+                for (const Clip& video : sequence.videoTracks[v].clips) {
+                    if (video.linkGroup == InvalidId) {
+                        continue;
+                    }
+
+                    for (Track& audio : sequence.audioTracks) {
+                        for (size_t c = 0; c < audio.clips.size(); c++) {
+                            if (audio.clips[c].linkGroup == video.linkGroup) {
+                                sequence.soundTracks[v].clips.push_back(audio.clips[c]);
+                                audio.clips.erase(audio.clips.begin() + (ptrdiff_t)c);
+                                break;
+                            }
                         }
                     }
                 }
-            }
 
-            loaded._sequence.soundTracks[v].sortClips();
+                sequence.soundTracks[v].sortClips();
+            }
         }
+    }
+
+    // The current one edited, the others apart, in their order.
+    const Id current = (Id)json["currentSequence"].toInt(loadedSequences.front().id);
+    loaded._sequenceOrder.clear();
+    loaded._otherSequences.clear();
+
+    for (Sequence& sequence : loadedSequences) {
+        loaded._sequenceOrder.push_back(sequence.id);
+
+        if (sequence.id == current) {
+            loaded._sequence = std::move(sequence);
+        }
+        else {
+            loaded._otherSequences.push_back(std::move(sequence));
+        }
+    }
+
+    if (loaded._sequence.id != current) {
+        loaded._sequence = std::move(loaded._otherSequences.front());
+        loaded._otherSequences.erase(loaded._otherSequences.begin());
     }
 
     *this = std::move(loaded);

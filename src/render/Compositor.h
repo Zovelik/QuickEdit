@@ -12,6 +12,7 @@
 #include <imgui.h>
 
 #include <array>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -21,8 +22,9 @@
 // an image of the size of the sequence that the viewer shows (and that the
 // export will encode).
 //
-// Video and image layers are textured quads; text layers are drawn glyph by
-// glyph from the distance fields of the FontLibrary, one instance per glyph
+// Video and image layers are textured quads, their pictures first through
+// the passes of their video effects (into images of their size); text
+// layers are drawn glyph by glyph from the distance fields of the FontLibrary, one instance per glyph
 // (shadow, then outline and fill), with the letter animations applied to
 // each glyph.
 class Compositor
@@ -48,6 +50,28 @@ public:
 
         // Texts: false to show all the letters, as while editing.
         bool animateLetters = true;
+
+        // Video effects of the track of the clip, after the clip's own.
+        const std::vector<core::VideoEffect>* trackEffects = nullptr;
+
+        // Generator clips: their shader.
+        const core::ShaderDef* generator = nullptr;
+
+        // Shader transitions (see core::LayerRequest): the outgoing (1) and
+        // incoming (2) pictures, mixed by the shader.
+        int transitionRole = 0;
+        float transitionProgress = 0.f;
+        const core::ShaderDef* transitionShader = nullptr;
+
+        // A nested sequence: its layers, placed in its own size, composited
+        // into its picture first.
+        std::vector<Layer> children;
+        uint32_t childWidth = 0;
+        uint32_t childHeight = 0;
+
+        // Glyph instances of a text (set by cmdComposite()).
+        uint32_t textFirst = 0;
+        uint32_t textCount = 0;
     };
 
     // Where a layer was drawn, in pixels of the sequence, for picking it in
@@ -88,12 +112,49 @@ public:
     // Layers of the last composition, top first.
     const std::vector<LayerBounds>& bounds() const { return _bounds; }
 
+    // Why a shader of the user could not be used (its compiler messages),
+    // empty when it works.
+    std::string shaderError(const std::string& shaderId) const;
+
 private:
     struct GlyphInstance;
 
     void createPipelines(const GPU::PipelineCache& pipelineCache);
     VkPipeline createPipeline(const GPU::PipelineCache& pipelineCache, VkPipelineLayout layout,
-        const uint32_t* vertexCode, size_t vertexSize, const uint32_t* fragmentCode, size_t fragmentSize);
+        const uint32_t* vertexCode, size_t vertexSize, const uint32_t* fragmentCode, size_t fragmentSize, bool blending = true);
+
+    // The picture of a layer through its effects (the picture itself
+    // without any), in the shader read only layout.
+    const GPU::Image* cmdApplyEffects(VkCommandBuffer commandBuffer, const Layer& layer, uint32_t layoutWidth, uint32_t layoutHeight);
+
+    // An image of a size for a pass, free until the next frame.
+    GPU::Image* passTarget(uint32_t width, uint32_t height);
+
+    // Rendering into a pass target, cleared first when asked; then the
+    // target ready to be sampled.
+    void cmdBeginPass(VkCommandBuffer commandBuffer, GPU::Image* target, bool clear, bool opaque = false);
+
+    // The glyph instances of the texts, at every level of nesting.
+    uint32_t collectTexts(std::vector<Layer>& layers, uint32_t width, uint32_t height, std::vector<GlyphInstance>& instances, std::vector<LayerBounds>* bounds);
+
+    // The layers of a level into target (outputWidth x outputHeight), placed
+    // in pixels of width x height; then target ready to be sampled.
+    void cmdRenderLevel(VkCommandBuffer commandBuffer, GPU::Image* target, std::vector<Layer>& layers,
+        uint32_t outputWidth, uint32_t outputHeight, uint32_t width, uint32_t height, std::vector<LayerBounds>& bounds, int depth);
+    void cmdEndPass(VkCommandBuffer commandBuffer, GPU::Image* target);
+
+    // Draws a layer into the rendering in progress (of the output size).
+    void cmdDrawLayer(VkCommandBuffer commandBuffer, const Layer& layer, const GPU::Image* source, std::pair<uint32_t, uint32_t> textRange,
+        uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight, LayerBounds& bounds);
+
+    // The picture of a generator; the mix of a shader transition.
+    GPU::Image* cmdGenerate(VkCommandBuffer commandBuffer, const Layer& layer, uint32_t width, uint32_t height);
+    GPU::Image* cmdTransition(VkCommandBuffer commandBuffer, const core::ShaderDef& shader, float progress,
+        const GPU::Image* from, const GPU::Image* to, uint32_t width, uint32_t height);
+
+    // The pipeline of a shader of the user, compiled once (null when it
+    // does not compile, see shaderError()).
+    VkPipeline userPipeline(const core::ShaderDef& shader);
 
     void ensureOutput(uint32_t width, uint32_t height);
     void cmdUploadAtlas(VkCommandBuffer commandBuffer);
@@ -114,6 +175,23 @@ private:
     VkPipelineLayout _textPipelineLayout = VK_NULL_HANDLE;
     VkPipeline _layerPipeline = VK_NULL_HANDLE;
     VkPipeline _textPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout _effectPipelineLayout = VK_NULL_HANDLE;
+    std::map<core::VideoEffectType, VkPipeline> _effectPipelines;
+
+    struct PassTarget
+    {
+        std::unique_ptr<GPU::Image> image;
+        bool used = false;
+    };
+
+    std::vector<PassTarget> _passTargets;
+
+    const GPU::PipelineCache& _pipelineCache;
+    VkDescriptorSetLayout _transitionSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout _generatorPipelineLayout = VK_NULL_HANDLE;
+    VkPipelineLayout _transitionPipelineLayout = VK_NULL_HANDLE;
+    std::map<std::string, VkPipeline> _userPipelines;        // By wrapped source
+    std::map<std::string, std::string> _shaderErrors;        // By shader id
     VkDescriptorPool _descriptorPool = VK_NULL_HANDLE;
 
     std::unique_ptr<GPU::Image> _output;

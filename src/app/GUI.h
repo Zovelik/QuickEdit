@@ -5,6 +5,8 @@
 #include <app/Exporter.h>
 #include <app/GUIBase.h>
 #include <app/Inspector.h>
+#include <app/SubtitleGenerator.h>
+#include <app/KeyframeEditor.h>
 #include <app/TextEditor.h>
 #include <app/TimelineView.h>
 
@@ -16,6 +18,7 @@
 #include <core/ThreadPool.h>
 #include <media/HwDevice.h>
 #include <media/MediaManager.h>
+#include <media/Thumbnails.h>
 #include <media/VideoPlayer.h>
 #include <render/Compositor.h>
 #include <render/FontLibrary.h>
@@ -72,6 +75,16 @@ public:
     // Plays from the start time (command line --play, for tests).
     void testPlay() { togglePlayback(); }
 
+    // Opens the Project Properties window (command line --properties).
+    void openProjectProperties() { _requestProjectProperties = true; }
+
+    // Shows the Effects tab of the inspector (command line --effects).
+    void showEffects() { _showEffectsTab = true; }
+
+    // Shows the Keyframes panel (command line --keyframes).
+    void showKeyframes() { _focusKeyframes = true; }
+    bool _focusKeyframes = false;
+
     void testQuitAfter(double seconds) { _testQuitTicks = SDL_GetTicks() + (uint64_t)(seconds * 1000.0); }
 
     ~GUI();
@@ -124,6 +137,10 @@ private:
     // Tabs of the inspector: the selected clip, the effects of its track.
     void clipTab();
     void effectsTab();
+
+    // A chain of VST effects (of a track or a clip): bypass, editor, order,
+    // the plugins to add.
+    void audioEffectChain(std::vector<core::EffectSlot>& slots, const char* id);
     bool _showEffectsTab = false;
 
     // Media panel focused, for its Delete key.
@@ -229,6 +246,53 @@ private:
 
     void addText();
 
+    // Subtitles: a line added at the playhead, the lines of a SubRip file
+    // imported into a new track, those shown exported to one.
+    void addSubtitle();
+
+    // Subtitles from the speech of the sequence: the model chosen (and
+    // downloaded) for the computer, the language, GPU or not.
+    void subtitleGeneratorWindow();
+    std::vector<float> speechSamples(std::string& error);
+    bool _showSubtitleGenerator = false;
+    ModelDownload _modelDownload;
+    SubtitleGenerator _subtitleGenerator;
+    std::string _whisperModel;
+    int _whisperLanguage = 0;
+    bool _whisperGpu = true;
+    std::string _generatorError;
+    bool _testTranscribe = false;
+
+public:
+    // Generates the subtitles with a model, logs them, quits (command line
+    // --transcribe, for tests).
+    void testTranscribe(const std::string& model) { _showSubtitleGenerator = true; _whisperModel = model; _testTranscribe = true; }
+
+private:
+    void importSubtitles(const std::filesystem::path& path);
+    bool exportSubtitles(const std::filesystem::path& path);
+    static void SDLCALL onSubtitleFile(void* userdata, const char* const* filelist, int filter);
+    std::filesystem::path _dialogSubtitlePath;
+    bool _subtitleDialogSaves = false;
+    bool _exportSubtitles = true;
+
+    // Sequences: shown in the timeline (one tab each), added, renamed,
+    // removed. The playhead of each is kept.
+    void sequenceTabs();
+    void showSequence(core::Id id);
+    std::map<core::Id, core::Time> _sequencePlayheads;
+    core::Id _selectTab = core::InvalidId;
+    core::Id _renamingSequence = core::InvalidId;
+    std::string _sequenceName;
+
+    // Shaders of the user (Documents/QuickEdit/Shaders), generators added
+    // at the playhead.
+    std::vector<core::ShaderDef> _userShaders;
+    std::filesystem::path shaderFolder() const;
+    void reloadShaders(bool commitChanges);
+    void openShaderFolder();
+    void addGenerator(const core::ShaderDef& shader);
+
     // Closes the gap selected in the timeline.
     void closeGap();
 
@@ -279,6 +343,20 @@ private:
     // Background tasks. Declared first: destroyed last.
     core::ThreadPool _threadPool;
     media::MediaManager _media{ _threadPool };
+
+    // Pictures of the videos, for the timeline and the media panel: the
+    // strips of the files, and their ImGui textures (kept for the session,
+    // freed by the ImGui backend at its shutdown).
+    media::ThumbnailCache _thumbnails{ _threadPool };
+
+    struct ThumbnailTexture
+    {
+        std::shared_ptr<media::ThumbnailStrip> strip;
+        ImTextureData* texture = nullptr;
+    };
+
+    std::map<std::filesystem::path, ThumbnailTexture> _thumbnailTextures;
+    TimelineView::Thumbnails thumbnailsOf(core::Id mediaId);
     audio::AudioEngine _audio;
 
     // Voice-over recording, in a window of its own.
@@ -372,11 +450,28 @@ private:
     std::unique_ptr<media::HwDevice> _hwDevice;
     std::unique_ptr<FontLibrary> _fonts;
     std::unique_ptr<Compositor> _compositor;
-    std::vector<std::unique_ptr<media::VideoPlayer>> _trackPlayers;
-    std::vector<std::unique_ptr<VideoFrameRenderer>> _trackRenderers;
+    // Decoders of the viewer, by layer key (track, slot and nesting, see
+    // core::LayerRequest), so that the layers decode in parallel.
+    struct Decoder
+    {
+        std::unique_ptr<media::VideoPlayer> player;
+        std::unique_ptr<VideoFrameRenderer> renderer;
+        bool used = false;
+        int idleFrames = 0;
+    };
+
+    std::map<uint64_t, Decoder> _decoders;
+
+    // The subtitles of the frame being composited, as text clips.
+    std::vector<core::Clip> _subtitleClips;
     std::set<core::Id> _loggedVideoMedia;
 
     Inspector _inspector;
+
+    // Curves of the animations of the selected clip, in a tab beside the
+    // timeline.
+    void keyframesPanel();
+    KeyframeEditor _keyframes;
     TextEditor _textEditor;
 
     // Starts / stops editing a text in the viewer.
@@ -389,6 +484,10 @@ private:
     ExportSettings _exportSettings;
     std::string _exportPathText;
     bool _requestExportPopup = false;
+
+    // Settings of the sequence, from the Edit menu.
+    void projectPropertiesPopup();
+    bool _requestProjectProperties = false;
     bool _autoExport = false;
 
     // Layer moved, scaled or rotated in the viewer: its placement when the
@@ -423,6 +522,13 @@ private:
 
     std::vector<core::Id> _selection;
     core::Id _selectedMedia = core::InvalidId;
+
+    // Folders of the media panel: the selected one (imports go there), the
+    // one renamed in place.
+    std::string _selectedFolder;
+    std::string _renamingFolder;
+    std::string _folderName;
+    bool _focusFolderName = false;
 
     TimelineView _timeline;
     core::Time _playhead = 0;
@@ -460,6 +566,10 @@ private:
 
     static constexpr SDL_DialogFileFilter projectFilters[] = {
         { "QuickEdit project", "qep" }
+    };
+
+    static constexpr SDL_DialogFileFilter subtitleFilters[] = {
+        { "SubRip subtitles", "srt" },
     };
 
     static constexpr SDL_DialogFileFilter exportFilters[] = {

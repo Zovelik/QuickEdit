@@ -95,6 +95,10 @@ int main(int argc, char* argv[])
     int exportFps = 0;
     double recordScreen = 0.0;
     bool play = false;
+    bool properties = false;
+    bool effectsTab = false;
+    bool keyframes = false;
+    std::string transcribe;
     int screenSource = 0;
     float dropX = 0.f, dropY = 0.f;
 
@@ -135,6 +139,18 @@ int main(int argc, char* argv[])
             }
             else if (std::wstring(argv[i]) == L"--record" && i + 1 < argc) {
                 recordSeconds = std::wcstod(argv[++i], nullptr);
+            }
+            else if (std::wstring(argv[i]) == L"--transcribe" && i + 1 < argc) {
+                for (const wchar_t* c = argv[++i]; *c; c++) transcribe += (char)(*c & 0x7F);
+            }
+            else if (std::wstring(argv[i]) == L"--keyframes") {
+                keyframes = true;
+            }
+            else if (std::wstring(argv[i]) == L"--effects") {
+                effectsTab = true;
+            }
+            else if (std::wstring(argv[i]) == L"--properties") {
+                properties = true;
             }
             else if (std::wstring(argv[i]) == L"--play") {
                 play = true;
@@ -194,6 +210,18 @@ int main(int argc, char* argv[])
         else if (std::string(argv[i]) == "--record" && i + 1 < argc) {
             recordSeconds = std::strtod(argv[++i], nullptr);
         }
+        else if (std::string(argv[i]) == "--transcribe" && i + 1 < argc) {
+            transcribe = argv[++i];
+        }
+        else if (std::string(argv[i]) == "--keyframes") {
+            keyframes = true;
+        }
+        else if (std::string(argv[i]) == "--effects") {
+            effectsTab = true;
+        }
+        else if (std::string(argv[i]) == "--properties") {
+            properties = true;
+        }
         else if (std::string(argv[i]) == "--play") {
             play = true;
         }
@@ -225,6 +253,22 @@ int main(int argc, char* argv[])
         // The editor of an effect (slot id).
         if (effectEditor) {
             gui.openEffectEditor(effectEditor);
+        }
+
+        if (!transcribe.empty()) {
+            gui.testTranscribe(transcribe);
+        }
+
+        if (keyframes) {
+            gui.showKeyframes();
+        }
+
+        if (effectsTab) {
+            gui.showEffects();
+        }
+
+        if (properties) {
+            gui.openProjectProperties();
         }
 
         if (play) {

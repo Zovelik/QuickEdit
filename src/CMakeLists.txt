@@ -33,6 +33,13 @@ function(compile_shader shader_source shader_output)
 endfunction()
 
 set(SHADERS
+    shader/effect.vert
+    shader/effect_blur.frag
+    shader/effect_chromakey.frag
+    shader/effect_color.frag
+    shader/effect_pixelate.frag
+    shader/effect_sharpen.frag
+    shader/effect_vignette.frag
     shader/rgb_to_nv12.comp
     shader/layer.frag
     shader/layer.vert
@@ -54,8 +61,11 @@ add_library(QuickEditCore STATIC
     core/Json.cpp
     core/Layers.cpp
     core/Project.cpp
+    core/Shaders.cpp
+    core/Subtitles.cpp
     core/Text.cpp
     core/TextEdit.cpp
+    core/VideoEffects.cpp
     core/ThreadPool.cpp
 )
 
@@ -69,6 +79,7 @@ add_library(QuickEditMedia STATIC
     media/HwDevice.cpp
     media/MediaFile.cpp
     media/MediaManager.cpp
+    media/Thumbnails.cpp
     media/VideoPlayer.cpp
     media/VideoReader.cpp
     media/Waveform.cpp
@@ -94,6 +105,8 @@ set(QUICKEDIT_SRC
     app/GUIBase.cpp
     app/GUI.cpp
     app/Inspector.cpp
+    app/SubtitleGenerator.cpp
+    app/KeyframeEditor.cpp
     app/TextEditor.cpp
     app/TimelineView.cpp
 
@@ -106,6 +119,7 @@ set(QUICKEDIT_SRC
     render/Compositor.cpp
     render/FontLibrary.cpp
     render/Nv12Converter.cpp
+    render/ShaderCompiler.cpp
     render/TextLayout.cpp
     render/VideoFrameRenderer.cpp
 
@@ -152,6 +166,32 @@ if (WIN32)
     )
 
     install(FILES ${FFMPEG_RUNTIME_DLLS} DESTINATION .)
+endif()
+
+# Speech recognition for the subtitles, when whisper.cpp was cloned (see
+# 3rdparty/CMakeLists.txt).
+if (QUICKEDIT_WHISPER)
+    target_link_libraries(QuickEdit PRIVATE whisper)
+    target_compile_definitions(QuickEdit PRIVATE QUICKEDIT_WHISPER)
+endif()
+
+# Compiler of the shaders of the user (render/ShaderCompiler.cpp): shaderc,
+# from the Vulkan SDK on Windows (its DLL next to the executable).
+if (WIN32)
+    get_filename_component(VULKAN_SDK_LIB_DIR "${Vulkan_LIBRARY}" DIRECTORY)
+    find_library(SHADERC_LIBRARY shaderc_shared HINTS "${VULKAN_SDK_LIB_DIR}" REQUIRED)
+    find_file(SHADERC_DLL shaderc_shared.dll HINTS "${VULKAN_SDK_LIB_DIR}/../Bin" REQUIRED)
+
+    target_link_libraries(QuickEdit PRIVATE ${SHADERC_LIBRARY})
+
+    add_custom_command(TARGET QuickEdit POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${SHADERC_DLL} $<TARGET_FILE_DIR:QuickEdit>
+    )
+
+    install(FILES ${SHADERC_DLL} DESTINATION .)
+else()
+    find_library(SHADERC_LIBRARY NAMES shaderc_shared shaderc REQUIRED)
+    target_link_libraries(QuickEdit PRIVATE ${SHADERC_LIBRARY})
 endif()
 
 if (WIN32)

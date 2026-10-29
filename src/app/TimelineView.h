@@ -33,6 +33,9 @@ public:
     // ImGui drag and drop payload type of the media items.
     static constexpr const char* MediaPayload = "QE_MEDIA";
 
+    // A sequence of the project dropped to be nested ("QE_SEQUENCE", its id).
+    static constexpr const char* SequencePayload = "QE_SEQUENCE";
+
     struct Result
     {
         // An edit was finished during this frame.
@@ -44,6 +47,9 @@ public:
 
         // Effects button of an audio track clicked.
         core::Id effectsOfTrack = core::InvalidId;
+
+        // A nested sequence double clicked: to show.
+        core::Id openSequence = core::InvalidId;
 
         // Files of the file manager dropped on a track (see setFileDrop()),
         // to place one after the other from dropStart.
@@ -84,6 +90,26 @@ public:
 
     // Waveform drawn in the audio clips of a media, nullptr when not ready.
     std::function<std::shared_ptr<const media::Waveform>(core::Id mediaId)> waveformOf;
+
+    // Pictures drawn in the video clips of a media: an atlas of tiles
+    // (Columns per row, TileWidth x TileHeight of atlasWidth x atlasHeight),
+    // one every interval of the media, the first ready ones usable.
+    struct Thumbnails
+    {
+        ImTextureRef texture;
+        int count = 0;
+        int ready = 0;
+        core::Time interval = 0;
+        bool image = false;
+        int columns = 1;
+        float tileU = 1.f;              // Size of a tile in the atlas, in texture coordinates
+        float tileV = 1.f;
+    };
+
+    std::function<Thumbnails(core::Id mediaId)> thumbnailsOf;
+
+    // The shaders of the user, offered with the built-in transitions.
+    const std::vector<core::ShaderDef>* userShaders = nullptr;
 
     // Empty range between two clips of a track (or before the first one),
     // selected by a click: Delete closes it.

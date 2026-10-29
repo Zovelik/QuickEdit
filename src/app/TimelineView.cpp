@@ -25,6 +25,12 @@ constexpr ImU32 AudioClipSelectedColor = IM_COL32( 70, 176, 128, 255);
 constexpr ImU32 TextClipColor          = IM_COL32(124,  78, 168, 255);
 constexpr ImU32 TextClipSelectedColor  = IM_COL32(166, 116, 214, 255);
 constexpr ImU32 FrozenClipColor        = IM_COL32( 60, 120, 150, 255);
+constexpr ImU32 GeneratorClipColor     = IM_COL32(168, 104,  40, 255);
+constexpr ImU32 SequenceClipColor      = IM_COL32( 40, 130, 130, 255);
+constexpr ImU32 SubtitleClipColor      = IM_COL32( 92, 100, 118, 255);
+constexpr ImU32 SubtitleClipSelectedColor = IM_COL32(136, 146, 170, 255);
+constexpr ImU32 SequenceClipSelectedColor = IM_COL32( 70, 180, 180, 255);
+constexpr ImU32 GeneratorClipSelectedColor = IM_COL32(214, 146,  70, 255);
 constexpr ImU32 PlayheadColor          = IM_COL32(255, 122,   0, 255);
 constexpr ImU32 SnapLineColor          = IM_COL32(255, 230, 120, 200);
 
@@ -94,7 +100,7 @@ const std::vector<Track>& TimelineView::tracksOfType(const Sequence& sequence, T
 int TimelineView::groupOf(TrackType type)
 {
     // A video track and its sound track move together.
-    return (type == TrackType::Audio) ? 1 : 0;
+    return (type == TrackType::Audio) ? 1 : (type == TrackType::Subtitle ? 2 : 0);
 }
 
 
@@ -108,7 +114,7 @@ void TimelineView::addWithLinks(const Project& project, Id clipId, std::vector<I
 {
     Id linkGroup = InvalidId;
 
-    for (const auto* tracks : { &project.sequence().videoTracks, &project.sequence().soundTracks, &project.sequence().audioTracks }) {
+    for (const auto* tracks : { &project.sequence().videoTracks, &project.sequence().soundTracks, &project.sequence().audioTracks, &project.sequence().subtitleTracks }) {
         for (const Track& track : *tracks) {
             for (const Clip& clip : track.clips) {
                 if (clip.id == clipId) linkGroup = clip.linkGroup;
@@ -116,7 +122,7 @@ void TimelineView::addWithLinks(const Project& project, Id clipId, std::vector<I
         }
     }
 
-    for (const auto* tracks : { &project.sequence().videoTracks, &project.sequence().soundTracks, &project.sequence().audioTracks }) {
+    for (const auto* tracks : { &project.sequence().videoTracks, &project.sequence().soundTracks, &project.sequence().audioTracks, &project.sequence().subtitleTracks }) {
         for (const Track& track : *tracks) {
             for (const Clip& clip : track.clips) {
                 const bool linked = clip.id == clipId || (linkGroup != InvalidId && clip.linkGroup == linkGroup);
@@ -219,6 +225,18 @@ void TimelineView::layoutRows(const Sequence& sequence, float top)
     for (int i = 0; i < (int)sequence.audioTracks.size(); i++) {
         _rows.push_back({ TrackType::Audio, i, y, audioHeight });
         y += audioHeight;
+    }
+
+    // Subtitles, when there are some.
+    if (!sequence.subtitleTracks.empty()) {
+        y += gap;
+        _groupHeaders.push_back({ TrackType::Subtitle, y, headerHeight });
+        y += headerHeight;
+
+        for (int i = 0; i < (int)sequence.subtitleTracks.size(); i++) {
+            _rows.push_back({ TrackType::Subtitle, i, y, 2.f * unit });
+            y += 2.f * unit;
+        }
     }
 }
 
@@ -458,6 +476,11 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
         _gap = Gap();
     }
 
+    // Double click on a nested sequence: shown.
+    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && hoveredClip && hoveredClip->kind == ClipKind::Sequence) {
+        result.openSequence = hoveredClip->sequence;
+    }
+
     // Right click on the selected gap: close it.
     if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !hoveredClip && hasGap() && hoveredRow &&
         tracksOfType(sequence, hoveredRow->type)[hoveredRow->trackIndex].id == _gap.trackId) {
@@ -529,6 +552,33 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
     // ------------------------------------------------------------------------
 
     if (ImGui::BeginDragDropTarget()) {
+        // A sequence: nested where dropped, on a video track.
+        if (const ImGuiPayload* sequencePayload = ImGui::AcceptDragDropPayload(SequencePayload, ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
+            sequencePayload && hoveredRow && hoveredRow->type == TrackType::Video && mouse.x >= _timelineLeft) {
+            const Id sequenceId = *(const Id*)sequencePayload->Data;
+            const Sequence* nested = project.findSequence(sequenceId);
+            const Time start = std::max<Time>(0, snapToFrame(snapTime(project, xToTime(mouse.x), false), sequence.frameRate));
+            const bool allowed = nested && !project.sequenceContains(sequenceId, sequence.id);
+
+            drawList->PushClipRect(ImVec2(_timelineLeft, _tracksTop), ImVec2(_timelineRight, _tracksBottom), true);
+            drawList->AddRect(
+                ImVec2(timeToX(start), hoveredRow->top + 2.f),
+                ImVec2(timeToX(start + (nested && nested->duration() > 0 ? nested->duration() : 5 * TicksPerSecond)), hoveredRow->top + hoveredRow->height - 2.f),
+                allowed ? IM_COL32(255, 255, 255, 180) : IM_COL32(230, 70, 60, 200), 3.f, 0, 2.f);
+            drawList->PopClipRect();
+
+            if (sequencePayload->IsDelivery() && allowed) {
+                const Track& track = tracksOfType(sequence, hoveredRow->type)[hoveredRow->trackIndex];
+                const Id clipId = project.addSequenceClip(sequenceId, track.id, start);
+
+                if (clipId != InvalidId) {
+                    selection = { clipId };
+                    result.edited = true;
+                    result.label = "Nest sequence";
+                }
+            }
+        }
+
         const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(MediaPayload, ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
 
         if (payload && hoveredRow && mouse.x >= _timelineLeft) {
@@ -621,6 +671,38 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
                     result.edited = true;
                     result.label = (type == 0) ? "Remove transition" : "Add transition";
                 }
+            }
+
+            // Shaders: the built-in ones, then the user's.
+            ImGui::Separator();
+
+            auto shaderItem = [&](const ShaderDef& shader) {
+                if (shader.kind != ShaderKind::Transition || !ImGui::MenuItem((std::string(ICON_MD_AUTO_AWESOME " ") + shader.name).c_str())) {
+                    return;
+                }
+
+                for (Id clipId : selection) {
+                    const Track* track = project.findTrackOfClip(clipId);
+                    Clip* clip = project.findClip(clipId);
+
+                    if (clip && track && track->type == TrackType::Video) {
+                        clip->transitionIn.type = TransitionType::Shader;
+                        clip->transitionIn.shader = shader.id;
+                    }
+                }
+
+                if (shader.id.rfind("builtin:", 0) != 0) {
+                    project.storeShader(shader);
+                }
+
+                result.edited = true;
+                result.label = "Add transition";
+            };
+
+            for (const ShaderDef& shader : builtinShaders()) shaderItem(shader);
+
+            if (userShaders) {
+                for (const ShaderDef& shader : *userShaders) shaderItem(shader);
             }
 
             ImGui::EndMenu();
@@ -786,7 +868,7 @@ bool TimelineView::drawTrackHeaders(ImDrawList* drawList, Sequence& sequence, st
         drawList->AddRectFilled(min, max, ImGui::GetColorU32(ImGuiCol_TitleBgActive));
 
         // Track type stripe
-        const ImU32 stripe = (row.type == TrackType::Video) ? VideoClipColor : AudioClipColor;
+        const ImU32 stripe = (row.type == TrackType::Video) ? VideoClipColor : (row.type == TrackType::Subtitle ? SubtitleClipColor : AudioClipColor);
         drawList->AddRectFilled(min, ImVec2(min.x + 0.25f * unit, max.y), stripe);
 
         drawList->AddText(ImVec2(min.x + 0.6f * unit, min.y + 0.3f * unit), ImGui::GetColorU32(ImGuiCol_Text), track.name.c_str());
@@ -803,7 +885,7 @@ bool TimelineView::drawTrackHeaders(ImDrawList* drawList, Sequence& sequence, st
 
         x -= buttonSize + 0.15f * unit;
 
-        if (row.type != TrackType::Video) {
+        if (row.type == TrackType::Sound || row.type == TrackType::Audio) {
             // Effects, on the second line; highlighted when the track has some.
             if (headerButton(drawList, ImVec2(max.x - 0.3f * unit - buttonSize, y + buttonSize + 0.1f * unit), buttonSize,
                     ICON_MD_TUNE, !track.effects.empty(), canvasHovered)) {
@@ -819,14 +901,15 @@ bool TimelineView::drawTrackHeaders(ImDrawList* drawList, Sequence& sequence, st
             x -= buttonSize + 0.15f * unit;
         }
 
-        const char* muteIcon = (row.type == TrackType::Video)
+        const bool picture = row.type == TrackType::Video || row.type == TrackType::Subtitle;
+        const char* muteIcon = picture
             ? (track.muted ? ICON_MD_VISIBILITY_OFF : ICON_MD_VISIBILITY)
             : (track.muted ? ICON_MD_VOLUME_OFF : ICON_MD_VOLUME_UP);
 
         // Shown as active when the track is visible / audible.
         if (headerButton(drawList, ImVec2(x, y), buttonSize, muteIcon, !track.muted, canvasHovered)) {
             track.muted = !track.muted;
-            label = (row.type == TrackType::Video) ? "Toggle track output" : "Mute track";
+            label = picture ? "Toggle track output" : "Mute track";
             edited = true;
         }
     }
@@ -864,7 +947,7 @@ bool TimelineView::drawGroupHeaders(ImDrawList* drawList, Sequence& sequence, st
             x += buttonSize + 0.2f * unit;
         }
 
-        const char* title = sound ? "Video sound" : "Audio";
+        const char* title = sound ? "Video sound" : (header.type == TrackType::Subtitle ? "Subtitles" : "Audio");
         drawList->AddText(ImVec2(x, min.y + 0.5f * (header.height - ImGui::GetFontSize())), ImGui::GetColorU32(ImGuiCol_TextDisabled), title);
 
         // Mute / unmute the whole group, after the title.
@@ -909,8 +992,17 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
                 ? (selected ? VideoClipSelectedColor : VideoClipColor)
                 : (selected ? AudioClipSelectedColor : AudioClipColor);
 
-            if (clip.kind == ClipKind::Text) {
+            if (row.type == TrackType::Subtitle) {
+                color = selected ? SubtitleClipSelectedColor : SubtitleClipColor;
+            }
+            else if (clip.kind == ClipKind::Text) {
                 color = selected ? TextClipSelectedColor : TextClipColor;
+            }
+            else if (clip.kind == ClipKind::Generator) {
+                color = selected ? GeneratorClipSelectedColor : GeneratorClipColor;
+            }
+            else if (clip.kind == ClipKind::Sequence) {
+                color = selected ? SequenceClipSelectedColor : SequenceClipColor;
             }
             else if (clip.frozen && !selected) {
                 color = FrozenClipColor;
@@ -925,8 +1017,45 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
 
             drawList->AddRectFilled(min, max, color, 3.f);
 
+            // Pictures of a video along the clip, the time of each tile from
+            // its left edge.
+            if (video && clip.kind == ClipKind::Media && thumbnailsOf && max.y - min.y > 8.f) {
+                const Thumbnails thumbnails = thumbnailsOf(clip.mediaId);
+
+                if (thumbnails.ready > 0) {
+                    const float tileWidth = (max.y - min.y - 2.f) * 16.f / 9.f;
+                    const float left = std::max(min.x, _timelineLeft);
+                    const float right = std::min(max.x, _timelineRight);
+                    const ImU32 tint = (track.muted || clip.frozen) ? IM_COL32(255, 255, 255, 110) : IM_COL32(255, 255, 255, 200);
+
+                    drawList->PushClipRect(ImVec2(left, min.y), ImVec2(right, max.y), true);
+
+                    for (float x = min.x + std::floor((left - min.x) / tileWidth) * tileWidth; x < right; x += tileWidth) {
+                        const Time source = clip.frozen ? clip.sourceIn : clip.sourceIn + std::max<Time>(0, xToTime(x) - clip.start);
+                        int index = thumbnails.image ? 0 : (int)std::clamp<Time>((source + thumbnails.interval / 2) / std::max<Time>(1, thumbnails.interval), 0, thumbnails.count - 1);
+
+                        if (index >= thumbnails.ready) {
+                            continue;
+                        }
+
+                        const float u = (float)(index % thumbnails.columns) * thumbnails.tileU;
+                        const float v = (float)(index / thumbnails.columns) * thumbnails.tileV;
+
+                        drawList->AddImage(thumbnails.texture, ImVec2(x, min.y + 1.f), ImVec2(x + tileWidth, max.y - 1.f),
+                            ImVec2(u, v), ImVec2(u + thumbnails.tileU, v + thumbnails.tileV), tint);
+                    }
+
+                    // The name stays readable.
+                    drawList->AddRectFilledMultiColor(min, ImVec2(max.x, min.y + 1.3f * unit),
+                        IM_COL32(0, 0, 0, 150), IM_COL32(0, 0, 0, 150), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
+                    drawList->PopClipRect();
+                }
+            }
+
             // Audio fades: the curve, and the handles at the top corners.
-            if (!video) {
+            const bool sound = row.type == TrackType::Sound || row.type == TrackType::Audio;
+
+            if (sound) {
                 const float fadeInX = std::min(timeToX(clip.start + clip.fadeIn), max.x);
                 const float fadeOutX = std::max(timeToX(clip.end() - clip.fadeOut), min.x);
                 const ImU32 fadeColor = IM_COL32(0, 0, 0, 90);
@@ -948,7 +1077,7 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
                 }
             }
 
-            if (!video && waveformOf) {
+            if (sound && waveformOf) {
                 if (const std::shared_ptr<const media::Waveform> waveform = waveformOf(clip.mediaId)) {
                     // Below the name of the clip.
                     const ImVec2 waveMin(min.x, min.y + 1.2f * unit);
@@ -961,12 +1090,20 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
             // Name, kept visible when the clip starts before the view.
             const MediaItem* media = project.findMedia(clip.mediaId);
 
-            if ((media || clip.kind == ClipKind::Text) && max.x - min.x > 2.f * unit) {
+            if ((media || clip.kind != ClipKind::Media) && max.x - min.x > 2.f * unit) {
                 std::string name;
 
                 if (clip.kind == ClipKind::Text) {
                     name = ICON_MD_TEXT_FIELDS " " + clip.text.plainText();
                     std::replace(name.begin(), name.end(), '\n', ' ');
+                }
+                else if (clip.kind == ClipKind::Generator) {
+                    const ShaderDef* shader = project.findShader(clip.shader);
+                    name = std::string(ICON_MD_AUTO_AWESOME " ") + (shader ? shader->name : clip.shader);
+                }
+                else if (clip.kind == ClipKind::Sequence) {
+                    const Sequence* nested = project.findSequence(clip.sequence);
+                    name = std::string(ICON_MD_VIDEO_LIBRARY " ") + (nested ? nested->name : "?");
                 }
                 else {
                     name = clip.frozen ? std::string(ICON_MD_PAUSE_CIRCLE " ") + media->name() : media->name();
@@ -1162,7 +1299,7 @@ void TimelineView::beginDrag(Project& project, DragMode mode, const Clip& grabbe
         addWithLinks(project, grabbed.id, clipIds);
     }
 
-    for (const TrackType type : { TrackType::Video, TrackType::Sound, TrackType::Audio }) {
+    for (const TrackType type : { TrackType::Video, TrackType::Sound, TrackType::Audio, TrackType::Subtitle }) {
         const std::vector<Track>& tracks = tracksOfType(sequence, type);
 
         for (int i = 0; i < (int)tracks.size(); i++) {
@@ -1214,7 +1351,7 @@ Time TimelineView::snapTime(const Project& project, Time t, bool excludeDragged)
     consider(0);
     consider(_playhead);
 
-    for (const auto* tracks : { &project.sequence().videoTracks, &project.sequence().soundTracks, &project.sequence().audioTracks }) {
+    for (const auto* tracks : { &project.sequence().videoTracks, &project.sequence().soundTracks, &project.sequence().audioTracks, &project.sequence().subtitleTracks }) {
         for (const Track& track : *tracks) {
             for (const Clip& clip : track.clips) {
                 const bool dragged = excludeDragged && std::any_of(_dragItems.begin(), _dragItems.end(),
@@ -1326,7 +1463,7 @@ void TimelineView::updateDrag(Project& project, float mouseX, float mouseY)
 
     // Take the dragged clips off their tracks, then place them again.
     for (const DragItem& item : _dragItems) {
-        for (const TrackType type : { TrackType::Video, TrackType::Sound, TrackType::Audio }) {
+        for (const TrackType type : { TrackType::Video, TrackType::Sound, TrackType::Audio, TrackType::Subtitle }) {
             for (Track& track : tracksOfType(sequence, type)) {
                 std::erase_if(track.clips, [&](const Clip& clip) { return clip.id == item.original.id; });
             }

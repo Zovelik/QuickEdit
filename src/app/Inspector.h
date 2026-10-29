@@ -4,6 +4,7 @@
 
 #include <core/Project.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,20 @@ public:
     std::string draw(core::Project& project, const std::vector<core::Id>& selection, core::Time playhead,
         FontLibrary& fonts, const TextSelection& textSelection = {});
 
+    // The shaders of the user (offered with the built-in ones), why one does
+    // not compile, and the folder they are in.
+    const std::vector<core::ShaderDef>* userShaders = nullptr;
+    std::function<std::string(const std::string& shaderId)> shaderError;
+    std::function<void()> openShaderFolder;
+
+    // Name, resolution, frame rate and sample rate of the sequence (also
+    // in the Project Properties window).
+    void sequenceSection(core::Project& project, std::string& edit);
+
+    // A list of video effects (of a clip or a track): on / off, order,
+    // parameters with keyframes at localTime, and the effects to add.
+    void videoEffectsSection(core::Project& project, std::vector<core::VideoEffect>& effects, core::Time localTime, std::string& edit);
+
 private:
     // Rows of animated values: the keyframe button, then the value.
     bool animatedRow(const char* label, core::AnimatedValue& value, core::Time localTime,
@@ -34,12 +49,19 @@ private:
     void transformSection(core::Clip& clip, core::Time localTime, std::string& edit);
     void frameSection(core::Clip& clip, std::string& edit);
     void presetsSection(core::Clip& clip, std::string& edit);
-    void transitionSection(core::Clip& clip, std::string& edit);
+    void transitionSection(core::Project& project, core::Clip& clip, std::string& edit);
+    void generatorSection(core::Project& project, core::Clip& clip, core::Time localTime, std::string& edit);
+    void subtitleSection(core::Project& project, core::Clip& clip, std::string& edit);
+
+public:
+    // Size, color, outline and place of the subtitles of the sequence (also
+    // in the Project Properties window).
+    void subtitleStyleSection(core::Project& project, std::string& edit);
+
+private:
     void textSection(core::Clip& clip, FontLibrary& fonts, const TextSelection& textSelection, std::string& edit);
     bool styleEditor(core::TextStyle& style, FontLibrary& fonts, std::string& edit);
     bool fontCombo(const char* label, std::string& font, FontLibrary& fonts);
-
-    void sequenceSection(core::Project& project, std::string& edit);
 
     std::string _fontFilter;
 };

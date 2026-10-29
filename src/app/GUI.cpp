@@ -11,11 +11,14 @@
 
 #include <audio/Vst3Plugin.h>
 #include <core/Layers.h>
+#include <core/Subtitles.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <ctime>
+#include <fstream>
+#include <sstream>
 
 
 using namespace core;
@@ -136,6 +139,12 @@ GUI::GUI(const std::filesystem::path& projectPath, double startSeconds, Id selec
     );
 
     _timeline.waveformOf = [this](Id mediaId) { return _media.waveform(mediaId); };
+    _timeline.thumbnailsOf = [this](Id mediaId) { return thumbnailsOf(mediaId); };
+    _timeline.userShaders = &_userShaders;
+    _inspector.userShaders = &_userShaders;
+    _inspector.shaderError = [this](const std::string& id) { return _compositor ? _compositor->shaderError(id) : std::string(); };
+    _inspector.openShaderFolder = [this]() { openShaderFolder(); };
+    reloadShaders(false);
 
     createVideo();
 
@@ -244,93 +253,142 @@ void GUI::cmdCompose(VkCommandBuffer commandBuffer)
 
     const Sequence& sequence = _project.sequence();
 
-    // Two decoders per video track (the second one for the other clip of a
-    // transition), so that the layers decode in parallel.
-    const size_t slotCount = sequence.videoTracks.size() * 2;
-
-    while (_trackPlayers.size() < slotCount) {
-        _trackPlayers.push_back(std::make_unique<media::VideoPlayer>(_hwDevice ? _hwDevice->context() : nullptr));
-        _trackRenderers.push_back(std::make_unique<VideoFrameRenderer>(device(), *pipelineCache()));
+    for (auto& [key, decoder] : _decoders) {
+        decoder.renderer->beginFrame();
+        decoder.used = false;
     }
 
-    if (_trackPlayers.size() > slotCount) {
-        _trackPlayers.resize(slotCount);
-        _trackRenderers.resize(slotCount);
-    }
-
-    for (const std::unique_ptr<VideoFrameRenderer>& renderer : _trackRenderers) {
-        renderer->beginFrame();
-    }
-
-    std::vector<bool> usedSlots(slotCount, false);
-    std::vector<Compositor::Layer> layers;
     _viewerLoading = false;
 
-    for (const LayerRequest& request : layersAt(sequence, _playhead)) {
-        const Clip& clip = *request.clip;
+    // The layers of a level (the sequence, or a nested one).
+    std::function<std::vector<Compositor::Layer>(const std::vector<LayerRequest>&, const Sequence&)> build;
 
-        Compositor::Layer layer = { &clip, request.localTime, nullptr, 0, 0,
-            request.opacity, request.offsetX, request.offsetY, request.scale, request.wipe };
+    build = [&](const std::vector<LayerRequest>& requests, const Sequence& level) {
+        std::vector<Compositor::Layer> layers;
 
-        if (clip.kind == ClipKind::Text) {
-            layer.animateLetters = _textEditor.clip() != clip.id;
+        for (const LayerRequest& request : requests) {
+            const Clip& clip = *request.clip;
+
+            Compositor::Layer layer = { &clip, request.localTime, nullptr, 0, 0,
+                request.opacity, request.offsetX, request.offsetY, request.scale, request.wipe };
+            layer.trackEffects = &level.videoTracks[request.track].videoEffects;
+            layer.transitionRole = request.transitionRole;
+            layer.transitionProgress = request.transitionProgress;
+            layer.transitionShader = request.transition ? _project.findShader(request.transition->shader) : nullptr;
+
+            if (clip.kind == ClipKind::Text) {
+                layer.animateLetters = _textEditor.clip() != clip.id;
+                layers.push_back(layer);
+                continue;
+            }
+
+            // Generators: the shader makes the picture.
+            if (clip.kind == ClipKind::Generator) {
+                layer.generator = _project.findShader(clip.shader);
+
+                if (layer.generator) {
+                    layers.push_back(layer);
+                }
+
+                continue;
+            }
+
+            // A nested sequence: its own layers, composited first.
+            if (clip.kind == ClipKind::Sequence) {
+                if (request.nested) {
+                    layer.children = build(request.children, *request.nested);
+                    layer.childWidth = request.nested->width;
+                    layer.childHeight = request.nested->height;
+                    layers.push_back(std::move(layer));
+                }
+
+                continue;
+            }
+
+            const MediaItem* media = _project.findMedia(clip.mediaId);
+
+            if (!media || media->type == MediaType::Audio) {
+                continue;
+            }
+
+            if (!media->probed) {
+                _viewerLoading |= _media.state(media->id).status != media::MediaStatus::Error;
+                continue;
+            }
+
+            Decoder& decoder = _decoders[request.key];
+
+            if (!decoder.player) {
+                decoder.player = std::make_unique<media::VideoPlayer>(_hwDevice ? _hwDevice->context() : nullptr);
+                decoder.renderer = std::make_unique<VideoFrameRenderer>(device(), *pipelineCache());
+                decoder.renderer->beginFrame();
+            }
+
+            decoder.used = true;
+            decoder.idleFrames = 0;
+
+            media::VideoPlayer& player = *decoder.player;
+            VideoFrameRenderer& renderer = *decoder.renderer;
+
+            player.request(media->id, media->path, request.sourceTime, _playing && !request.still);
+
+            const std::shared_ptr<media::VideoFrame> frame = player.frame();
+            VideoFrameRenderer::Sync sync;
+
+            // Not decoded yet (opening the file, seeking), unless it cannot be.
+            if (!frame || !frame->covers(request.sourceTime)) {
+                _viewerLoading |= !player.failed(media->id);
+            }
+
+            if (!frame || !renderer.cmdRender(commandBuffer, frame, sync) || !renderer.image()) {
+                continue;
+            }
+
+            if (_loggedVideoMedia.insert(media->id).second) {
+                SDL_Log("Decoding %s on the %s", media->name().c_str(), frame->hwFrame ? "GPU (Vulkan Video)" : "CPU");
+            }
+
+            for (const VideoFrameRenderer::SemaphoreOp& wait : sync.waits) {
+                addFrameWaitSemaphore(wait.semaphore, wait.value, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+            }
+
+            for (const VideoFrameRenderer::SemaphoreOp& signal : sync.signals) {
+                addFrameSignalSemaphore(signal.semaphore, signal.value);
+            }
+
+            layer.image = renderer.image();
+            layer.width = renderer.width();
+            layer.height = renderer.height();
             layers.push_back(layer);
-            continue;
         }
 
-        const MediaItem* media = _project.findMedia(clip.mediaId);
+        return layers;
+    };
 
-        if (!media || media->type == MediaType::Audio) {
-            continue;
-        }
+    std::vector<Compositor::Layer> layers = build(
+        layersAt(sequence, _playhead, [this](Id id) { return _project.findSequence(id); }), sequence);
 
-        if (!media->probed) {
-            _viewerLoading = _media.state(media->id).status != media::MediaStatus::Error;
-            continue;
-        }
+    // The subtitles, over everything (kept until the frame is recorded).
+    _subtitleClips = subtitleClipsAt(sequence, _playhead);
 
-        const size_t slot = request.track * 2 + (size_t)request.slot;
-        media::VideoPlayer& player = *_trackPlayers[slot];
-        VideoFrameRenderer& renderer = *_trackRenderers[slot];
-        usedSlots[slot] = true;
-
-        player.request(media->id, media->path, request.sourceTime, _playing && !request.still);
-
-        const std::shared_ptr<media::VideoFrame> frame = player.frame();
-        VideoFrameRenderer::Sync sync;
-
-        // Not decoded yet (opening the file, seeking), unless it cannot be.
-        if (!frame || !frame->covers(request.sourceTime)) {
-            _viewerLoading |= !player.failed(media->id);
-        }
-
-        if (!frame || !renderer.cmdRender(commandBuffer, frame, sync) || !renderer.image()) {
-            continue;
-        }
-
-        if (_loggedVideoMedia.insert(media->id).second) {
-            SDL_Log("Decoding %s on the %s", media->name().c_str(), frame->hwFrame ? "GPU (Vulkan Video)" : "CPU");
-        }
-
-        for (const VideoFrameRenderer::SemaphoreOp& wait : sync.waits) {
-            addFrameWaitSemaphore(wait.semaphore, wait.value, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-        }
-
-        for (const VideoFrameRenderer::SemaphoreOp& signal : sync.signals) {
-            addFrameSignalSemaphore(signal.semaphore, signal.value);
-        }
-
-        layer.image = renderer.image();
-        layer.width = renderer.width();
-        layer.height = renderer.height();
+    for (const Clip& clip : _subtitleClips) {
+        Compositor::Layer layer = { &clip, _playhead - clip.start, nullptr, 0, 0, 1.f, 0.f, 0.f, 1.f, 1.f };
         layers.push_back(layer);
     }
 
-    // The decoders with nothing to show stop.
-    for (size_t slot = 0; slot < slotCount; slot++) {
-        if (!usedSlots[slot]) {
-            _trackPlayers[slot]->clear();
+    // The decoders with nothing to show stop; those unused for a while go
+    // (the GPU is done with their images: GUIBase waited for the frame).
+    for (auto it = _decoders.begin(); it != _decoders.end();) {
+        if (!it->second.used) {
+            it->second.player->clear();
+
+            if (++it->second.idleFrames > 600) {
+                it = _decoders.erase(it);
+                continue;
+            }
         }
+
+        ++it;
     }
 
     _compositor->cmdComposite(commandBuffer, sequence.width, sequence.height, layers);
@@ -370,6 +428,7 @@ void GUI::render(
     viewerPanel();
     inspectorPanel();
     timelinePanel();
+    keyframesPanel();
 
     if (_testRecordSeconds > 0.0 && _recorder.isOpen()) {
         if (!_recorder.recording()) {
@@ -411,10 +470,12 @@ void GUI::render(
 
     recorderWindow();
     screenRecorderWindow();
+    subtitleGeneratorWindow();
 
     fileDropped();
 
     exportPopup();
+    projectPropertiesPopup();
     errorPopup();
     unsavedChangesPopup();
 
@@ -482,6 +543,7 @@ void GUI::dockLayout(ImGuiID dockSpaceId)
     ImGui::DockBuilderDockWindow("Viewer", viewerNode);
     ImGui::DockBuilderDockWindow("Inspector", inspectorNode);
     ImGui::DockBuilderDockWindow("Timeline", timelineNode);
+    ImGui::DockBuilderDockWindow("Keyframes", timelineNode);
     ImGui::DockBuilderFinish(dockSpaceId);
 }
 
@@ -572,6 +634,17 @@ void GUI::menuBar()
             if (ImGui::MenuItem(ICON_MD_UPLOAD_FILE " Import Media...",    "Ctrl+I"))       { requestImportMedia(); }
             if (ImGui::MenuItem(ICON_MD_MOVIE_CREATION " Export Video...", "Ctrl+E"))       { _requestExportPopup = true; }
             ImGui::Separator();
+
+            if (ImGui::MenuItem(ICON_MD_SUBTITLES " Import Subtitles (.srt)...")) {
+                _subtitleDialogSaves = false;
+                SDL_ShowOpenFileDialog(GUI::onSubtitleFile, this, window(), subtitleFilters, SDL_arraysize(subtitleFilters), nullptr, false);
+            }
+
+            if (ImGui::MenuItem(ICON_MD_SUBTITLES " Export Subtitles (.srt)...", nullptr, false, !subtitleCues(_project.sequence()).empty())) {
+                _subtitleDialogSaves = true;
+                SDL_ShowSaveFileDialog(GUI::onSubtitleFile, this, window(), subtitleFilters, SDL_arraysize(subtitleFilters), nullptr);
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem(ICON_MD_EXIT_TO_APP " Exit",               "Alt+F4"))       { quit(); }
             ImGui::EndMenu();
         }
@@ -593,11 +666,35 @@ void GUI::menuBar()
             ImGui::Separator();
 
             if (ImGui::MenuItem(ICON_MD_TEXT_FIELDS " Add Text", "T")) { addText(); }
+            if (ImGui::MenuItem(ICON_MD_SUBTITLES " Add Subtitle", "Shift+T")) { addSubtitle(); }
+            if (ImGui::MenuItem(ICON_MD_RECORD_VOICE_OVER " Generate Subtitles...")) { _showSubtitleGenerator = true; }
+
+            if (ImGui::BeginMenu(ICON_MD_AUTO_AWESOME " Add Generator")) {
+                for (const ShaderDef& shader : builtinShaders()) {
+                    if (shader.kind == ShaderKind::Generator && ImGui::MenuItem(shader.name.c_str())) addGenerator(shader);
+                }
+
+                bool separated = false;
+
+                for (const ShaderDef& shader : _userShaders) {
+                    if (shader.kind != ShaderKind::Generator) continue;
+                    if (!std::exchange(separated, true)) ImGui::Separator();
+                    if (ImGui::MenuItem(shader.name.c_str())) addGenerator(shader);
+                }
+
+                ImGui::Separator();
+                if (ImGui::MenuItem(ICON_MD_FOLDER_OPEN " Open Shaders Folder")) { openShaderFolder(); }
+                if (ImGui::MenuItem(ICON_MD_REFRESH " Reload Shaders")) { reloadShaders(true); }
+                ImGui::EndMenu();
+            }
             ImGui::MenuItem(ICON_MD_MIC " Record Voice-Over...", "R", &_showRecorder);
             ImGui::MenuItem(ICON_MD_SCREEN_SHARE " Record Screen...", "Shift+R", &_showScreenRecorder);
             ImGui::Separator();
             if (ImGui::MenuItem(ICON_MD_LIBRARY_ADD " Add Video Track")) { addTrack(TrackType::Video); }
             if (ImGui::MenuItem(ICON_MD_PLAYLIST_ADD " Add Audio Track")) { addTrack(TrackType::Audio); }
+            if (ImGui::MenuItem(ICON_MD_SUBTITLES " Add Subtitle Track")) { addTrack(TrackType::Subtitle); }
+            ImGui::Separator();
+            if (ImGui::MenuItem(ICON_MD_VIDEO_SETTINGS " Project Properties...")) { _requestProjectProperties = true; }
             ImGui::Separator();
 
             bool snapping = _timeline.snapping();
@@ -623,6 +720,8 @@ void GUI::menuBar()
             if (ImGui::MenuItem(ICON_MD_ZOOM_IN    " Zoom In Timeline",  "Ctrl++")) { _timeline.setZoom(_timeline.zoom() * 1.5f); }
             if (ImGui::MenuItem(ICON_MD_ZOOM_OUT   " Zoom Out Timeline", "Ctrl+-")) { _timeline.setZoom(_timeline.zoom() / 1.5f); }
             if (ImGui::MenuItem(ICON_MD_FIT_SCREEN " Fit Sequence",      "Ctrl+0")) { _timeline.requestZoomToFit(); }
+            ImGui::Separator();
+            if (ImGui::MenuItem(ICON_MD_TIMELINE " Keyframes")) { ImGui::SetWindowFocus("Keyframes"); }
             ImGui::Separator();
             if (ImGui::MenuItem("Reset Layout")) { _dockLayoutInitialized = false; ImGui::DockBuilderRemoveNode(ImGui::GetID("MainDockSpace")); }
             ImGui::EndMenu();
@@ -813,6 +912,7 @@ void GUI::shortcuts()
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_I, global)) { requestImportMedia(); }
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_E, global)) { _requestExportPopup = true; }
     if (ImGui::Shortcut(ImGuiKey_R, global))                 { _showRecorder = !_showRecorder; }
+    if (ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_T, global)) { addSubtitle(); }
     if (ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_R, global)) { _showScreenRecorder = !_showScreenRecorder; }
 
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Z, repeat)) { undo(); }
@@ -897,6 +997,19 @@ void GUI::mediaPanel()
     }
 
     ImGui::SameLine();
+
+    // A folder in the selected one.
+    std::string newFolderIn;
+    std::string removeFolder;
+    std::vector<std::pair<Id, std::string>> moves;
+    bool newFolder = false;
+
+    if (ImGui::Button(ICON_MD_CREATE_NEW_FOLDER)) {
+        newFolder = true;
+    }
+
+    ImGui::SetItemTooltip("New folder (in the selected one)");
+    ImGui::SameLine();
     ImGui::TextDisabled("%zu item(s)", _project.media().size());
 
     const ImGuiTableFlags flags =
@@ -913,7 +1026,8 @@ void GUI::mediaPanel()
         ImGui::TableSetupColumn("Duration", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("00:00:00:00").x);
         ImGui::TableHeadersRow();
 
-        for (const MediaItem& item : _project.media()) {
+        // A media: its row.
+        auto drawItem = [&](const MediaItem& item) {
             ImGui::PushID((int)item.id);
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
@@ -926,8 +1040,24 @@ void GUI::mediaPanel()
                 ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(230, 90, 80, 255));
             }
 
-            if (ImGui::Selectable(label.c_str(), _selectedMedia == item.id, ImGuiSelectableFlags_SpanAllColumns)) {
+            // The picture of a video or an image, before its name.
+            const TimelineView::Thumbnails thumbnails = thumbnailsOf(item.id);
+            const float pictureHeight = 2.f * ImGui::GetTextLineHeight();
+
+            if (thumbnails.ready > 0) {
+                const int index = thumbnails.image ? 0 : std::min(thumbnails.ready, thumbnails.count) / 3;
+                const float u = (float)(index % thumbnails.columns) * thumbnails.tileU;
+                const float v = (float)(index / thumbnails.columns) * thumbnails.tileV;
+
+                ImGui::Image(thumbnails.texture, ImVec2(pictureHeight * 16.f / 9.f, pictureHeight),
+                    ImVec2(u, v), ImVec2(u + thumbnails.tileU, v + thumbnails.tileV));
+                ImGui::SameLine();
+            }
+
+            if (ImGui::Selectable(label.c_str(), _selectedMedia == item.id, ImGuiSelectableFlags_SpanAllColumns,
+                    ImVec2(0.f, thumbnails.ready > 0 ? pictureHeight : 0.f))) {
                 _selectedMedia = item.id;
+                _selectedFolder = item.folder;
             }
 
             if (missing) {
@@ -972,7 +1102,30 @@ void GUI::mediaPanel()
                 ImGui::EndTooltip();
             }
 
+            // Another media dropped on it: into its folder.
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(TimelineView::MediaPayload)) {
+                    moves.emplace_back(*(const Id*)payload->Data, item.folder);
+                }
+
+                ImGui::EndDragDropTarget();
+            }
+
             if (ImGui::BeginPopupContextItem()) {
+                if (ImGui::BeginMenu(ICON_MD_DRIVE_FILE_MOVE " Move to")) {
+                    if (ImGui::MenuItem("(No folder)", nullptr, item.folder.empty())) {
+                        moves.emplace_back(item.id, std::string());
+                    }
+
+                    for (const std::string& folder : _project.mediaFolders()) {
+                        if (ImGui::MenuItem(folder.c_str(), nullptr, item.folder == folder)) {
+                            moves.emplace_back(item.id, folder);
+                        }
+                    }
+
+                    ImGui::EndMenu();
+                }
+
                 if (ImGui::MenuItem(ICON_MD_DELETE " Remove from Project")) {
                     removeMedia = item.id;
                 }
@@ -996,13 +1149,207 @@ void GUI::mediaPanel()
             }
 
             ImGui::PopID();
+        };
+
+        // A folder: its subfolders, then its media; the top level shows the
+        // media of no known folder too.
+        const std::vector<std::string>& allFolders = _project.mediaFolders();
+
+        std::function<void(const std::string&)> drawFolder = [&](const std::string& folder) {
+            std::vector<std::string> children;
+
+            for (const std::string& path : allFolders) {
+                if (Project::parentFolder(path) == folder) children.push_back(path);
+            }
+
+            std::sort(children.begin(), children.end());
+
+            for (const std::string& child : children) {
+                ImGui::PushID(child.c_str());
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+
+                const std::string name = child.substr(child.rfind('/') == std::string::npos ? 0 : child.rfind('/') + 1);
+                const bool renaming = _renamingFolder == child;
+                const bool selected = _selectedMedia == InvalidId && _selectedFolder == child;
+                const ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_OpenOnArrow |
+                    ImGuiTreeNodeFlags_OpenOnDoubleClick | ImGuiTreeNodeFlags_DefaultOpen | (selected ? ImGuiTreeNodeFlags_Selected : 0);
+
+                const bool open = ImGui::TreeNodeEx("##folder", nodeFlags, "%s %s", ICON_MD_FOLDER, renaming ? "" : name.c_str());
+
+                if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+                    _selectedFolder = child;
+                    _selectedMedia = InvalidId;
+                }
+
+                // Media dropped on it.
+                if (ImGui::BeginDragDropTarget()) {
+                    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(TimelineView::MediaPayload)) {
+                        moves.emplace_back(*(const Id*)payload->Data, child);
+                    }
+
+                    ImGui::EndDragDropTarget();
+                }
+
+                if (ImGui::BeginPopupContextItem()) {
+                    if (ImGui::MenuItem(ICON_MD_CREATE_NEW_FOLDER " New Folder Inside")) {
+                        newFolderIn = child;
+                    }
+
+                    if (ImGui::MenuItem(ICON_MD_EDIT " Rename")) {
+                        _renamingFolder = child;
+                        _folderName = name;
+                        _focusFolderName = true;
+                    }
+
+                    if (ImGui::MenuItem(ICON_MD_DELETE " Delete Folder", "Del")) {
+                        removeFolder = child;
+                    }
+
+                    ImGui::EndPopup();
+                }
+
+                // Renamed in place: Enter confirms, Escape cancels.
+                if (renaming) {
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+
+                    if (std::exchange(_focusFolderName, false)) {
+                        ImGui::SetKeyboardFocusHere();
+                    }
+
+                    const bool entered = ImGui::InputText("##folderName", &_folderName, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+
+                    if (entered || ImGui::IsItemDeactivated()) {
+                        if (!ImGui::IsKeyPressed(ImGuiKey_Escape) && _project.renameMediaFolder(child, _folderName)) {
+                            const std::string renamed = (Project::parentFolder(child).empty() ? "" : Project::parentFolder(child) + "/") + _folderName;
+
+                            if (_selectedFolder == child) _selectedFolder = renamed;
+                            commit("Rename folder");
+                        }
+
+                        _renamingFolder.clear();
+                    }
+                }
+
+                ImGui::TableNextColumn();
+
+                const size_t count = std::count_if(_project.media().begin(), _project.media().end(), [&](const MediaItem& item) {
+                    return item.folder == child;
+                });
+
+                ImGui::TextDisabled("%zu", count);
+
+                if (open) {
+                    drawFolder(child);
+                    ImGui::TreePop();
+                }
+
+                ImGui::PopID();
+            }
+
+            for (const MediaItem& item : _project.media()) {
+                const bool known = std::find(allFolders.begin(), allFolders.end(), item.folder) != allFolders.end();
+
+                if (item.folder == folder || (folder.empty() && !known)) {
+                    drawItem(item);
+                }
+            }
+        };
+
+        // The sequences of the project, nested by dragging them.
+        if (_project.sequences().size() > 1) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+
+            if (ImGui::TreeNodeEx("##sequences", ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_DefaultOpen, "%s Sequences", ICON_MD_VIDEO_LIBRARY)) {
+                for (const Sequence* sequence : _project.sequences()) {
+                    ImGui::PushID((int)sequence->id);
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+
+                    const bool current = sequence->id == _project.sequence().id;
+                    ImGui::Selectable((std::string(ICON_MD_MOVIE_FILTER " ") + sequence->name + (current ? "  (shown)" : "")).c_str(), false, ImGuiSelectableFlags_SpanAllColumns);
+
+                    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                        showSequence(sequence->id);
+                    }
+
+                    if (ImGui::BeginDragDropSource()) {
+                        ImGui::SetDragDropPayload(TimelineView::SequencePayload, &sequence->id, sizeof(sequence->id));
+                        ImGui::Text(ICON_MD_VIDEO_LIBRARY " %s", sequence->name.c_str());
+                        ImGui::EndDragDropSource();
+                    }
+
+                    ImGui::TableNextColumn();
+                    ImGui::TextDisabled("%s", formatTimecode(sequence->duration(), sequence->frameRate).c_str());
+                    ImGui::PopID();
+                }
+
+                ImGui::TreePop();
+            }
+        }
+
+        drawFolder("");
+
+        // The rest of the list: out of any folder.
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::Dummy(ImVec2(1.f, std::max(ImGui::GetTextLineHeight(), ImGui::GetContentRegionAvail().y)));
+
+        if (ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(TimelineView::MediaPayload)) {
+                moves.emplace_back(*(const Id*)payload->Data, std::string());
+            }
+
+            ImGui::EndDragDropTarget();
+        }
+
+        if (ImGui::IsItemClicked()) {
+            _selectedFolder.clear();
+            _selectedMedia = InvalidId;
         }
 
         ImGui::EndTable();
     }
 
-    // Delete: the selected media, with its clips.
+    // Folders
+    if (newFolder) {
+        newFolderIn = _selectedFolder.empty() ? std::string("\x01") : _selectedFolder;
+    }
+
+    if (!newFolderIn.empty()) {
+        const std::string path = _project.addMediaFolder(newFolderIn == "\x01" ? std::string() : newFolderIn, "New Folder");
+        _selectedFolder = path;
+        _selectedMedia = InvalidId;
+        _renamingFolder = path;
+        _folderName = path.substr(path.rfind('/') == std::string::npos ? 0 : path.rfind('/') + 1);
+        _focusFolderName = true;
+        commit("New folder");
+    }
+
+    if (!moves.empty()) {
+        for (const auto& [mediaId, folder] : moves) {
+            _project.moveMediaToFolder(mediaId, folder);
+        }
+
+        commit("Move media");
+    }
+
     _mediaPanelFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+
+    if (_mediaPanelFocused && _selectedMedia == InvalidId && !_selectedFolder.empty() && _renamingFolder.empty() &&
+        !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
+        removeFolder = _selectedFolder;
+    }
+
+    if (!removeFolder.empty()) {
+        _project.removeMediaFolder(removeFolder);
+        _selectedFolder = Project::parentFolder(removeFolder);
+        commit("Delete folder");
+    }
+
+    // Delete: the selected media, with its clips.
 
     if (_mediaPanelFocused && _selectedMedia != InvalidId && !ImGui::GetIO().WantTextInput &&
         (ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false))) {
@@ -1058,7 +1405,7 @@ std::vector<Id> GUI::clipsOfMedia(Id mediaId) const
     std::vector<Id> clips;
     const Sequence& sequence = _project.sequence();
 
-    for (const auto* tracks : { &sequence.videoTracks, &sequence.soundTracks, &sequence.audioTracks }) {
+    for (const auto* tracks : { &sequence.videoTracks, &sequence.soundTracks, &sequence.audioTracks, &sequence.subtitleTracks }) {
         for (const Track& track : *tracks) {
             for (const Clip& clip : track.clips) {
                 if (clip.mediaId == mediaId) clips.push_back(clip.id);
@@ -1305,7 +1652,10 @@ void GUI::viewerInteraction(const ImVec2& frameMin, const ImVec2& frameSize)
 
     if (_selection.size() >= 1) {
         for (const Compositor::LayerBounds& bounds : _compositor->bounds()) {
-            if (bounds.clipId == _selection.front()) {
+            // Subtitles are placed by their style, not by handles.
+            const Track* track = _project.findTrackOfClip(bounds.clipId);
+
+            if (bounds.clipId == _selection.front() && !(track && track->type == TrackType::Subtitle)) {
                 handleBounds = &bounds;
             }
         }
@@ -1446,6 +1796,12 @@ void GUI::viewerInteraction(const ImVec2& frameMin, const ImVec2& frameSize)
 
             const Clip* clip = _project.findClip(picked);
             const Time localTime = _playhead - clip->start;
+            const Track* track = _project.findTrackOfClip(picked);
+
+            // A subtitle: selected, to edit its text, but not moved.
+            if (track && track->type == TrackType::Subtitle) {
+                return;
+            }
 
             _draggedLayer = picked;
             _layerDrag = LayerDrag::Move;
@@ -1708,6 +2064,441 @@ void GUI::addText()
         // Typing replaces the placeholder.
         beginTextEditing(clipId);
     }
+}
+
+
+std::filesystem::path GUI::shaderFolder() const
+{
+    const char* documents = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS);
+    return (documents ? std::filesystem::u8path(documents) : std::filesystem::temp_directory_path()) / "QuickEdit" / "Shaders";
+}
+
+
+void GUI::reloadShaders(bool commitChanges)
+{
+    _userShaders = loadShaderFolder(shaderFolder());
+
+    // The copies in the project follow their files.
+    bool changed = false;
+
+    for (const ShaderDef& shader : _userShaders) {
+        const ShaderDef* stored = nullptr;
+
+        for (const ShaderDef& s : _project.shaders()) {
+            if (s.id == shader.id) stored = &s;
+        }
+
+        if (stored && stored->source != shader.source) {
+            _project.storeShader(shader);
+            changed = true;
+        }
+    }
+
+    if (changed && commitChanges) {
+        commit("Reload shaders");
+    }
+}
+
+
+void GUI::openShaderFolder()
+{
+    const std::filesystem::path folder = shaderFolder();
+    std::error_code ec;
+
+    // Two examples to start from, the first time.
+    if (!std::filesystem::exists(folder, ec)) {
+        std::filesystem::create_directories(folder, ec);
+
+        auto write = [&](const char* name, const char* text) {
+            std::ofstream(folder / name, std::ios::binary) << text;
+        };
+
+        write("Rings.glsl",
+            "// A generator: the picture of a clip, computed for each of its pixels.\n"
+            "// uv: position in the picture (0 to 1), time: seconds since the start of the clip.\n"
+            "// iResolution: size in pixels, iDuration: length of the clip, param(i): the parameters below.\n"
+            "// Edit, save, then Edit > Add Generator > Reload Shaders.\n"
+            "// @param Speed 0 5 1\n"
+            "// @param Rings 1 40 12\n"
+            "vec4 generate(vec2 uv, float time)\n"
+            "{\n"
+            "    vec2 p = (uv - 0.5) * vec2(iResolution.x / iResolution.y, 1.0);\n"
+            "    float v = 0.5 + 0.5 * sin(length(p) * param(1) * 6.2832 - time * param(0) * 6.2832);\n"
+            "    return vec4(v * vec3(0.2, 0.6, 1.0), 1.0);\n"
+            "}\n");
+
+        write("Stripes.glsl",
+            "// A transition: mixes the outgoing and the incoming pictures.\n"
+            "// getFromColor(uv), getToColor(uv): the two pictures; progress: 0 to 1; ratio: width / height.\n"
+            "vec4 transition(vec2 uv)\n"
+            "{\n"
+            "    float shown = step(fract(uv.x * 10.0), progress);\n"
+            "    return mix(getFromColor(uv), getToColor(uv), shown);\n"
+            "}\n");
+
+        reloadShaders(false);
+    }
+
+    const std::u8string path = folder.generic_u8string();
+    SDL_OpenURL(("file:///" + std::string(path.begin(), path.end())).c_str());
+}
+
+
+void GUI::addGenerator(const ShaderDef& shader)
+{
+    Sequence& sequence = _project.sequence();
+    const Time start = snapToFrame(_playhead, sequence.frameRate);
+    const Time duration = 5 * TicksPerSecond;
+
+    // On the top video track with room at the playhead, or on a new track.
+    Id clipId = InvalidId;
+
+    for (int i = (int)sequence.videoTracks.size() - 1; i >= 0 && clipId == InvalidId; i--) {
+        clipId = _project.addGeneratorClip(sequence.videoTracks[i].id, start, duration, shader);
+    }
+
+    if (clipId == InvalidId) {
+        addTrack(TrackType::Video);
+        clipId = _project.addGeneratorClip(sequence.videoTracks.back().id, start, duration, shader);
+    }
+
+    if (clipId != InvalidId) {
+        _selection = { clipId };
+        commit("Add generator");
+    }
+}
+
+
+void GUI::addSubtitle()
+{
+    Sequence& sequence = _project.sequence();
+    const Time start = snapToFrame(_playhead, sequence.frameRate);
+    const Time duration = 3 * TicksPerSecond;
+
+    // On the first subtitle track with room, or on a new one.
+    Id clipId = InvalidId;
+
+    for (size_t i = 0; i < sequence.subtitleTracks.size() && clipId == InvalidId; i++) {
+        clipId = _project.addTextClip(sequence.subtitleTracks[i].id, start, duration, "Subtitle");
+    }
+
+    if (clipId == InvalidId) {
+        sequence.addTrack(TrackType::Subtitle, _project.newId(), InvalidId);
+        clipId = _project.addTextClip(sequence.subtitleTracks.back().id, start, duration, "Subtitle");
+    }
+
+    if (clipId != InvalidId) {
+        _selection = { clipId };
+        commit("Add subtitle");
+    }
+}
+
+
+std::vector<float> GUI::speechSamples(std::string& error)
+{
+    const Sequence& sequence = _project.sequence();
+    const uint32_t rate = sequence.sampleRate;
+
+    // The sounds must be decoded.
+    for (const auto* tracks : { &sequence.soundTracks, &sequence.audioTracks }) {
+        for (const Track& track : *tracks) {
+            for (const Clip& clip : track.clips) {
+                if (!track.muted && !_media.audio(clip.mediaId)) {
+                    error = "Some sounds are still being analyzed: try again in a moment.";
+                    return {};
+                }
+            }
+        }
+    }
+
+    // The mix, without effects (clearer speech), in mono at 16 kHz.
+    const auto graph = audio::buildMixGraph(_project, [this](Id mediaId) { return _media.audio(mediaId); });
+    const int64_t frames = mulDivFloor(sequence.duration(), rate, TicksPerSecond);
+
+    if (frames <= 0) {
+        error = "The sequence has no sound.";
+        return {};
+    }
+
+    std::vector<float> mono((size_t)frames);
+    std::vector<float> block(2 * 48000);
+
+    for (int64_t first = 0; first < frames; first += 48000) {
+        const int64_t count = std::min<int64_t>(48000, frames - first);
+        audio::mix(*graph, first, count, block.data());
+
+        for (int64_t i = 0; i < count; i++) {
+            mono[(size_t)(first + i)] = 0.5f * (block[2 * i] + block[2 * i + 1]);
+        }
+    }
+
+    const double step = (double)rate / 16000.0;
+    std::vector<float> samples((size_t)((double)frames / step));
+
+    for (size_t i = 0; i < samples.size(); i++) {
+        const double at = (double)i * step;
+        const size_t index = (size_t)at;
+        const float next = (index + 1 < mono.size()) ? mono[index + 1] : mono[index];
+        samples[i] = mono[index] + (next - mono[index]) * (float)(at - (double)index);
+    }
+
+    return samples;
+}
+
+
+void GUI::subtitleGeneratorWindow()
+{
+    // Generated: the subtitles on a track of their own.
+    if (_subtitleGenerator.done()) {
+        const std::vector<SubtitleCue> cues = _subtitleGenerator.cues();
+        _generatorError = _subtitleGenerator.error();
+        _subtitleGenerator.acknowledge();
+
+        if (_testTranscribe) {
+            SDL_Log("Transcription: %zu cue(s) %s", cues.size(), _generatorError.c_str());
+
+            for (const SubtitleCue& cue : cues) {
+                SDL_Log("  %.2f - %.2f  %s", timeToSeconds(cue.start), timeToSeconds(cue.end), cue.text.c_str());
+            }
+
+            _testQuitTicks = SDL_GetTicks() + 3000;
+        }
+
+        if (!cues.empty()) {
+            Sequence& sequence = _project.sequence();
+            const Id trackId = _project.newId();
+            sequence.addTrack(TrackType::Subtitle, trackId, InvalidId);
+            sequence.subtitleTracks.back().name = "Generated";
+
+            for (const SubtitleCue& cue : cues) {
+                _project.addTextClip(trackId, cue.start, cue.end - cue.start, cue.text);
+            }
+
+            commit("Generate subtitles");
+        }
+        else if (_generatorError.empty()) {
+            _generatorError = "No speech was recognized.";
+        }
+    }
+
+    if (!_showSubtitleGenerator) {
+        return;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(30.f * ImGui::GetFontSize(), 0.f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (!ImGui::Begin(ICON_MD_RECORD_VOICE_OVER " Generate Subtitles###subtitleGenerator", &_showSubtitleGenerator, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
+        ImGui::End();
+        return;
+    }
+
+    if (!speechRecognitionAvailable()) {
+        ImGui::TextWrapped("This build has no speech recognition: whisper.cpp was not found when it was built (see docs/ARCHITECTURE.md).");
+        ImGui::End();
+        return;
+    }
+
+    const bool busy = _subtitleGenerator.running();
+
+    // The model: the most accurate downloaded one by default.
+    if (_whisperModel.empty()) {
+        for (const WhisperModel& model : whisperModels()) {
+            if (modelDownloaded(model)) _whisperModel = model.id;
+        }
+    }
+
+    ImGui::SeparatorText("Model");
+    ImGui::TextDisabled("The larger, the more accurate; the large ones want a GPU.");
+    ImGui::BeginDisabled(busy);
+
+    for (const WhisperModel& model : whisperModels()) {
+        ImGui::PushID(model.id);
+
+        const bool downloaded = modelDownloaded(model);
+        const bool downloading = _modelDownload.running() && _modelDownload.modelId() == model.id;
+
+        ImGui::BeginDisabled(!downloaded);
+
+        if (ImGui::RadioButton(model.name, _whisperModel == model.id)) {
+            _whisperModel = model.id;
+        }
+
+        ImGui::EndDisabled();
+        ImGui::SameLine(9.f * ImGui::GetFontSize());
+        ImGui::TextDisabled("%d MB", model.sizeMegabytes);
+        ImGui::SameLine(12.f * ImGui::GetFontSize());
+
+        if (downloaded) {
+            ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.5f, 1.f), ICON_MD_CHECK " Ready");
+        }
+        else if (downloading) {
+            ImGui::ProgressBar(_modelDownload.progress(), ImVec2(-3.f * ImGui::GetFontSize(), 0.f));
+            ImGui::SameLine();
+
+            if (ImGui::SmallButton(ICON_MD_CLOSE)) {
+                _modelDownload.cancel();
+            }
+        }
+        else {
+            ImGui::BeginDisabled(_modelDownload.running());
+
+            if (ImGui::SmallButton(ICON_MD_DOWNLOAD " Download")) {
+                _modelDownload.start(model);
+            }
+
+            ImGui::EndDisabled();
+        }
+
+        ImGui::SetItemTooltip("%s", model.description);
+        ImGui::PopID();
+    }
+
+    if (!_modelDownload.running() && !_modelDownload.error().empty()) {
+        ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " %s", _modelDownload.error().c_str());
+    }
+
+    // Language and processor
+    ImGui::SeparatorText("Speech");
+
+    const char* languages[][2] = {
+        { "auto", "Detected" }, { "fr", "Fran\xc3\xa7" "ais" }, { "en", "English" }, { "es", "Espa\xc3\xb1ol" },
+        { "de", "Deutsch" }, { "it", "Italiano" }, { "pt", "Portugu\xc3\xaas" }, { "nl", "Nederlands" },
+    };
+
+    ImGui::SetNextItemWidth(12.f * ImGui::GetFontSize());
+
+    if (ImGui::BeginCombo("Language", languages[_whisperLanguage][1])) {
+        for (int i = 0; i < (int)IM_ARRAYSIZE(languages); i++) {
+            if (ImGui::Selectable(languages[i][1], i == _whisperLanguage)) _whisperLanguage = i;
+        }
+
+        ImGui::EndCombo();
+    }
+
+    ImGui::Checkbox("Use the GPU", &_whisperGpu);
+    ImGui::SetItemTooltip("Off: on the processor only, much slower with the large models.");
+    ImGui::EndDisabled();
+
+    ImGui::Spacing();
+
+    // Generate
+    const WhisperModel* chosen = nullptr;
+
+    for (const WhisperModel& model : whisperModels()) {
+        if (model.id == _whisperModel && modelDownloaded(model)) chosen = &model;
+    }
+
+    // Test: as soon as the sound is decoded.
+    bool testStart = false;
+
+    if (_testTranscribe && !busy && chosen && !_subtitleGenerator.done() && _testQuitTicks == 0) {
+        std::string error;
+        testStart = !speechSamples(error).empty();
+    }
+
+    if (!busy) {
+        ImGui::BeginDisabled(!chosen);
+
+        if (ImGui::Button(ICON_MD_AUTO_AWESOME " Generate", ImVec2(10.f * ImGui::GetFontSize(), 0.f)) || testStart) {
+            _generatorError.clear();
+            std::vector<float> samples = speechSamples(_generatorError);
+
+            if (!samples.empty()) {
+                SubtitleGenerator::Settings settings;
+                settings.model = modelFolder() / chosen->file;
+                settings.language = languages[_whisperLanguage][0];
+                settings.useGpu = _whisperGpu;
+                _subtitleGenerator.start(std::move(samples), settings);
+            }
+        }
+
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled(chosen ? "From the sound of the sequence, onto a new track." : "Download a model first.");
+    }
+    else {
+        ImGui::ProgressBar(_subtitleGenerator.progress(), ImVec2(-6.f * ImGui::GetFontSize(), 0.f), "Listening...");
+        ImGui::SameLine();
+
+        if (ImGui::Button("Cancel")) {
+            _subtitleGenerator.cancel();
+        }
+    }
+
+    if (!_generatorError.empty()) {
+        ImGui::PushTextWrapPos(0.f);
+        ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " %s", _generatorError.c_str());
+        ImGui::PopTextWrapPos();
+    }
+
+    ImGui::End();
+}
+
+
+void GUI::importSubtitles(const std::filesystem::path& path)
+{
+    std::ifstream file(path, std::ios::binary);
+    std::stringstream text;
+    text << file.rdbuf();
+
+    const std::vector<SubtitleCue> cues = parseSrt(text.str());
+
+    if (cues.empty()) {
+        setErrorMessage("No subtitle could be read from " + pathToUtf8(path.filename()) + ".");
+        return;
+    }
+
+    // A track of their own, named after the file.
+    Sequence& sequence = _project.sequence();
+    const Id trackId = _project.newId();
+    sequence.addTrack(TrackType::Subtitle, trackId, InvalidId);
+    sequence.subtitleTracks.back().name = pathToUtf8(path.stem());
+
+    for (const SubtitleCue& cue : cues) {
+        _project.addTextClip(trackId, cue.start, cue.end - cue.start, cue.text);
+    }
+
+    commit("Import subtitles");
+}
+
+
+bool GUI::exportSubtitles(const std::filesystem::path& path)
+{
+    const std::vector<SubtitleCue> cues = subtitleCues(_project.sequence());
+
+    if (cues.empty()) {
+        return false;
+    }
+
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    file << toSrt(cues);
+
+    if (!file) {
+        setErrorMessage("Could not write " + pathToUtf8(path) + ".");
+        return false;
+    }
+
+    return true;
+}
+
+
+void SDLCALL GUI::onSubtitleFile(void* userdata, const char* const* filelist, int)
+{
+    if (!userdata || !filelist || !filelist[0]) {
+        return;
+    }
+
+    GUI* gui = static_cast<GUI*>(userdata);
+    std::filesystem::path filepath = std::filesystem::u8path(filelist[0]);
+
+    if (gui->_subtitleDialogSaves && filepath.extension().empty()) {
+        filepath += ".srt";
+    }
+
+    std::scoped_lock lock(gui->_dialogMutex);
+    gui->_dialogSubtitlePath = filepath;
 }
 
 
@@ -2937,6 +3728,8 @@ void GUI::timelinePanel()
     const bool open = ImGui::Begin("Timeline", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
     if (open) {
+        sequenceTabs();
+
         // Zoom
         ImGui::PushStyleVarX(ImGuiStyleVar_ItemSpacing, ImGui::GetStyle().ItemInnerSpacing.x);
 
@@ -2969,6 +3762,22 @@ void GUI::timelinePanel()
         }
 
         ImGui::SetItemTooltip("Show the whole sequence (Ctrl+0)");
+
+        // Tracks
+        ImGui::SameLine(0.f, 3.f * ImGui::GetStyle().ItemSpacing.x);
+
+        if (ImGui::SmallButton(ICON_MD_LIBRARY_ADD " Video Track")) {
+            addTrack(TrackType::Video);
+        }
+
+        ImGui::SetItemTooltip("Add a video track (with its sound track)");
+        ImGui::SameLine();
+
+        if (ImGui::SmallButton(ICON_MD_PLAYLIST_ADD " Audio Track")) {
+            addTrack(TrackType::Audio);
+        }
+
+        ImGui::SetItemTooltip("Add an audio track");
         ImGui::PopStyleVar();
 
         ImGui::SameLine();
@@ -3016,6 +3825,10 @@ void GUI::timelinePanel()
 
         if (result.edited) {
             commit(result.label);
+        }
+
+        if (result.openSequence != InvalidId) {
+            showSequence(result.openSequence);
         }
 
         if (result.effectsOfTrack != InvalidId) {
@@ -3081,7 +3894,20 @@ bool GUI::startExport()
     // thread.
     _effects.saveStates(_project);
 
-    _exporter = std::make_unique<Exporter>(std::move(context), _project, std::move(audio),
+    // The subtitles: a file beside the video, or none in the picture.
+    Project exported = _project;
+
+    if (!subtitleCues(_project.sequence()).empty()) {
+        if (_exportSubtitles) {
+            std::filesystem::path srt = _exportSettings.path;
+            exportSubtitles(srt.replace_extension(".srt"));
+        }
+        else {
+            for (Track& track : exported.sequence().subtitleTracks) track.muted = true;
+        }
+    }
+
+    _exporter = std::make_unique<Exporter>(std::move(context), std::move(exported), std::move(audio),
         EffectRack::createForExport(_project), _exportSettings);
 
     return true;
@@ -3095,6 +3921,206 @@ void GUI::exportAndQuit(const std::filesystem::path& path, ExportSettings::Codec
     _exportSettings.height = height;
     _exportSettings.frameRate = { frameRate, 1 };
     _autoExport = true;
+}
+
+
+void GUI::sequenceTabs()
+{
+    if (!ImGui::BeginTabBar("##sequences", ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_Reorderable)) {
+        return;
+    }
+
+    Id show = InvalidId;
+    Id remove = InvalidId;
+    Id selectedTab = InvalidId;
+
+    for (const Sequence* sequence : _project.sequences()) {
+        const bool current = sequence->id == _project.sequence().id;
+        const ImGuiTabItemFlags flags = (_selectTab == sequence->id) ? ImGuiTabItemFlags_SetSelected : 0;
+        const std::string label = std::string(ICON_MD_VIDEO_LIBRARY " ") + sequence->name + "###sequence" + std::to_string(sequence->id);
+
+        const bool selected = ImGui::BeginTabItem(label.c_str(), nullptr, flags);
+
+        // Dragged into the timeline: nested.
+        if (ImGui::BeginDragDropSource()) {
+            ImGui::SetDragDropPayload(TimelineView::SequencePayload, &sequence->id, sizeof(sequence->id));
+            ImGui::Text(ICON_MD_VIDEO_LIBRARY " %s", sequence->name.c_str());
+            ImGui::EndDragDropSource();
+        }
+
+        ImGui::SetItemTooltip("Drag into the timeline of another sequence to nest it");
+
+        if (ImGui::BeginPopupContextItem()) {
+            if (ImGui::MenuItem(ICON_MD_EDIT " Rename")) {
+                _renamingSequence = sequence->id;
+                _sequenceName = sequence->name;
+            }
+
+            if (ImGui::MenuItem(ICON_MD_DELETE " Delete Sequence", nullptr, false, _project.sequences().size() > 1)) {
+                remove = sequence->id;
+            }
+
+            ImGui::EndPopup();
+        }
+
+        // Chosen by the user (not while a tab is being selected by the
+        // application).
+        if (selected) {
+            selectedTab = sequence->id;
+
+            if (!current && _selectTab == InvalidId) {
+                show = sequence->id;
+            }
+
+            ImGui::EndTabItem();
+        }
+    }
+
+    if (selectedTab == _project.sequence().id) {
+        _selectTab = InvalidId;
+    }
+
+    // A new sequence, shown.
+    if (ImGui::TabItemButton(ICON_MD_ADD, ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip)) {
+        const Id id = _project.addSequence("Sequence " + std::to_string(_project.sequences().size() + 1));
+        commit("Add sequence");
+        showSequence(id);
+    }
+
+    ImGui::SetItemTooltip("New sequence");
+    ImGui::EndTabBar();
+
+    if (show != InvalidId) {
+        showSequence(show);
+    }
+
+    if (remove != InvalidId) {
+        if (_project.removeSequence(remove)) {
+            _selection.clear();
+            _selectTab = _project.sequence().id;
+            commit("Delete sequence");
+        }
+        else {
+            setErrorMessage("This sequence is nested in another one: remove it from there first.");
+        }
+    }
+
+    // Renamed in a small window.
+    if (_renamingSequence != InvalidId) {
+        ImGui::OpenPopup("Rename Sequence");
+    }
+
+    if (ImGui::BeginPopupModal("Rename Sequence", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (ImGui::IsWindowAppearing()) {
+            ImGui::SetKeyboardFocusHere();
+        }
+
+        const bool entered = ImGui::InputText("##name", &_sequenceName, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+
+        if ((entered || ImGui::Button("OK")) && !_sequenceName.empty()) {
+            const Id id = _renamingSequence;
+            const Id current = _project.sequence().id;
+
+            // Renamed where it is kept.
+            _project.switchSequence(id);
+            _project.sequence().name = _sequenceName;
+            _project.switchSequence(current);
+
+            _renamingSequence = InvalidId;
+            commit("Rename sequence");
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            _renamingSequence = InvalidId;
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+}
+
+
+void GUI::showSequence(Id id)
+{
+    if (id == _project.sequence().id || !_project.findSequence(id)) {
+        _selectTab = id;
+        return;
+    }
+
+    stopPlayback();
+    endTextEditing();
+    _sequencePlayheads[_project.sequence().id] = _playhead;
+
+    _project.switchSequence(id);
+    _selection.clear();
+    _playhead = _sequencePlayheads.count(id) ? _sequencePlayheads[id] : 0;
+    _selectTab = id;
+
+    // Not an edit: the history keeps the sequences, not which one is shown.
+    projectChanged();
+}
+
+
+void GUI::keyframesPanel()
+{
+    // Beside the timeline, behind it until chosen.
+    if (ImGuiWindow* timeline = ImGui::FindWindowByName("Timeline"); timeline && timeline->DockId) {
+        ImGui::SetNextWindowDockID(timeline->DockId, ImGuiCond_FirstUseEver);
+    }
+
+    if (std::exchange(_focusKeyframes, false)) {
+        ImGui::SetNextWindowFocus();
+    }
+
+    if (ImGui::Begin("Keyframes", nullptr, ImGuiWindowFlags_NoFocusOnAppearing)) {
+        const KeyframeEditor::Result result = _keyframes.draw(_project, _selection, _playhead);
+
+        if (result.seeked) {
+            stopPlayback();
+        }
+
+        if (!result.edit.empty()) {
+            commit(result.edit);
+        }
+    }
+
+    ImGui::End();
+}
+
+
+void GUI::projectPropertiesPopup()
+{
+    if (std::exchange(_requestProjectProperties, false)) {
+        ImGui::OpenPopup("Project Properties");
+    }
+
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(26.f * ImGui::GetFontSize(), 0.f), ImGuiCond_Appearing);
+
+    if (!ImGui::BeginPopupModal("Project Properties", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+        return;
+    }
+
+    std::string edit;
+    _inspector.sequenceSection(_project, edit);
+    _inspector.subtitleStyleSection(_project, edit);
+
+    if (!edit.empty()) {
+        commit(edit);
+    }
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("The export can use another size or frame rate.");
+    ImGui::Spacing();
+
+    if (ImGui::Button("Close", ImVec2(8.f * ImGui::GetFontSize(), 0.f)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
 }
 
 
@@ -3206,6 +4232,14 @@ void GUI::exportPopup()
     ImGui::TextDisabled("Audio");
     ImGui::SameLine(labelWidth);
     ImGui::Checkbox("AAC, 192 kbit/s", &_exportSettings.audio);
+
+    // Subtitles: in the picture, and in a file beside it.
+    if (!subtitleCues(_project.sequence()).empty()) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("Subtitles");
+        ImGui::SameLine(labelWidth);
+        ImGui::Checkbox("In the picture, and a .srt file beside the video", &_exportSubtitles);
+    }
 
     // Size and rate, those of the sequence by default; the shape stays the
     // one of the sequence.
@@ -3363,46 +4397,32 @@ void GUI::eventSdl(const SDL_Event& event)
 
 void GUI::effectsTab()
 {
-    // The track: the one of the selected sound clip, the sound track of the
-    // selected video, otherwise the last one chosen.
-    const Sequence& sequence = _project.sequence();
+    // The selected clip and its track; else the track chosen last.
+    Sequence& sequence = _project.sequence();
+    Clip* clip = _selection.empty() ? nullptr : _project.findClip(_selection.front());
+    const Track* trackOfClip = clip ? _project.findTrackOfClip(clip->id) : nullptr;
+    Track* clipTrack = trackOfClip ? _project.findTrack(trackOfClip->id) : nullptr;
 
-    for (Id id : _selection) {
-        const Track* track = _project.findTrackOfClip(id);
-
-        if (track && track->type != TrackType::Video) {
-            _effectsTrack = track->id;
-            break;
-        }
-
-        for (size_t i = 0; track && i < sequence.videoTracks.size(); i++) {
-            if (&sequence.videoTracks[i] == track && i < sequence.soundTracks.size()) {
-                _effectsTrack = sequence.soundTracks[i].id;
-            }
-        }
-
-        if (track) {
-            break;
-        }
+    if (clipTrack) {
+        _effectsTrack = clipTrack->id;
     }
 
     Track* track = _project.findTrack(_effectsTrack);
 
-    if (track && track->type == TrackType::Video) {
-        track = nullptr;
-    }
-
-    // Any sound or audio track can be picked.
+    // Any track can be picked.
     ImGui::SetNextItemWidth(-FLT_MIN);
 
-    if (ImGui::BeginCombo("##effectsTrack", track ? (std::string(ICON_MD_TUNE " Effects of ") + track->name).c_str() : "Choose a track...")) {
-        for (const auto* tracks : { &sequence.soundTracks, &sequence.audioTracks }) {
+    auto count = [](const Track& t) { return t.effects.size() + t.videoEffects.size(); };
+
+    if (ImGui::BeginCombo("##effectsTrack", track ? (std::string(ICON_MD_TUNE " Track ") + track->name).c_str() : "Choose a track...")) {
+        for (const auto* tracks : { &sequence.videoTracks, &sequence.soundTracks, &sequence.audioTracks, &sequence.subtitleTracks }) {
             for (const Track& t : *tracks) {
-                const std::string label = t.name + (t.effects.empty() ? "" : "  (" + std::to_string(t.effects.size()) + ")");
+                const std::string label = t.name + (count(t) == 0 ? "" : "  (" + std::to_string(count(t)) + ")");
 
                 if (ImGui::Selectable(label.c_str(), track && t.id == track->id)) {
                     _effectsTrack = t.id;
                     _selection.clear();
+                    clip = nullptr;
                 }
             }
         }
@@ -3410,10 +4430,49 @@ void GUI::effectsTab()
         ImGui::EndCombo();
     }
 
+    track = _project.findTrack(_effectsTrack);
+
     if (!track) {
-        ImGui::TextDisabled("Select a sound clip, or choose a track.");
+        ImGui::TextDisabled("Select a clip, or choose a track.");
         return;
     }
+
+    const bool video = track->type == TrackType::Video;
+    const Time localTime = clip ? std::clamp<Time>(_playhead - clip->start, 0, clip->duration) : 0;
+    std::string edit;
+
+    // The clip first: its effects come before those of its track.
+    if (clip && clip->kind == ClipKind::Media) {
+        ImGui::SeparatorText(video ? ICON_MD_MOVIE " Clip" : ICON_MD_AUDIOTRACK " Clip");
+
+        if (video) {
+            _inspector.videoEffectsSection(_project, clip->videoEffects, localTime, edit);
+        }
+        else {
+            audioEffectChain(clip->effects, "clip");
+        }
+    }
+
+    ImGui::SeparatorText((std::string(ICON_MD_TUNE " Track ") + track->name).c_str());
+    ImGui::TextDisabled(video ? "On each clip of the track, after its own." : "Applied in order, to the whole track.");
+
+    if (video) {
+        // Keyframes of track effects: in the time of the sequence.
+        _inspector.videoEffectsSection(_project, track->videoEffects, _playhead, edit);
+    }
+    else {
+        audioEffectChain(track->effects, "track");
+    }
+
+    if (!edit.empty()) {
+        commit(edit);
+    }
+}
+
+
+void GUI::audioEffectChain(std::vector<EffectSlot>& slots, const char* id)
+{
+    ImGui::PushID(id);
 
     // The plugins installed, listed once (their files only, not loaded).
     if (!_pluginFilesListed) {
@@ -3421,13 +4480,11 @@ void GUI::effectsTab()
         _pluginFilesListed = true;
     }
 
-    ImGui::TextDisabled("Applied in order, to the whole track.");
-
     Id removed = InvalidId;
     int moveUp = -1;
 
-    for (int i = 0; i < (int)track->effects.size(); i++) {
-        EffectSlot& slot = track->effects[i];
+    for (int i = 0; i < (int)slots.size(); i++) {
+        EffectSlot& slot = slots[i];
         ImGui::PushID((int)slot.id);
 
         bool active = !slot.bypass;
@@ -3485,19 +4542,19 @@ void GUI::effectsTab()
         ImGui::PopID();
     }
 
-    if (track->effects.empty()) {
+    if (slots.empty()) {
         ImGui::TextDisabled("No effect yet.");
     }
 
     if (moveUp > 0) {
         _effects.saveStates(_project);
-        std::swap(track->effects[moveUp], track->effects[moveUp - 1]);
+        std::swap(slots[moveUp], slots[moveUp - 1]);
         commit("Reorder effects");
     }
 
     if (removed != InvalidId) {
         _effects.saveStates(_project);
-        std::erase_if(track->effects, [&](const EffectSlot& s) { return s.id == removed; });
+        std::erase_if(slots, [&](const EffectSlot& s) { return s.id == removed; });
         commit("Remove effect");
     }
 
@@ -3518,7 +4575,7 @@ void GUI::effectsTab()
 
                 // Effects stay in the project, their states with them.
                 _effects.saveStates(_project);
-                track->effects.push_back(slot);
+                slots.push_back(slot);
                 commit("Add effect");
 
                 // Opened at once, to set it.
@@ -3537,6 +4594,8 @@ void GUI::effectsTab()
 
         ImGui::EndCombo();
     }
+
+    ImGui::PopID();
 }
 
 
@@ -3677,6 +4736,64 @@ void GUI::newProject()
 }
 
 
+TimelineView::Thumbnails GUI::thumbnailsOf(Id mediaId)
+{
+    const MediaItem* item = _project.findMedia(mediaId);
+
+    // Once probed: the length places the pictures.
+    if (!item || !item->probed || item->type == MediaType::Audio) {
+        return {};
+    }
+
+    ThumbnailTexture& entry = _thumbnailTextures[item->path];
+
+    if (!entry.strip) {
+        entry.strip = _thumbnails.get(item->path, item->duration, item->type == MediaType::Image);
+    }
+
+    media::ThumbnailStrip& strip = *entry.strip;
+
+    if (!entry.texture) {
+        entry.texture = IM_NEW(ImTextureData)();
+        entry.texture->Create(ImTextureFormat_RGBA32, strip.atlasWidth(), strip.atlasHeight());
+        ImGui::RegisterUserTexture(entry.texture);
+    }
+
+    TimelineView::Thumbnails thumbnails;
+
+    {
+        std::scoped_lock lock(strip.mutex);
+
+        // New tiles: the whole atlas to the GPU (a few MB at most, while
+        // the strip is being made).
+        if (strip.dirty) {
+            strip.dirty = false;
+            std::memcpy(entry.texture->GetPixels(), strip.rgba.data(), std::min(strip.rgba.size(), (size_t)entry.texture->GetSizeInBytes()));
+
+            if (entry.texture->Status == ImTextureStatus_OK || entry.texture->Status == ImTextureStatus_WantUpdates) {
+                const ImTextureRect all = { 0, 0, (unsigned short)strip.atlasWidth(), (unsigned short)strip.atlasHeight() };
+                entry.texture->UpdateRect = all;
+                entry.texture->Updates.resize(0);
+                entry.texture->Updates.push_back(all);
+                entry.texture->SetStatus(ImTextureStatus_WantUpdates);
+            }
+        }
+
+        thumbnails.ready = strip.ready;
+    }
+
+    thumbnails.texture = entry.texture->GetTexRef();
+    thumbnails.count = strip.count;
+    thumbnails.interval = strip.interval;
+    thumbnails.image = item->type == MediaType::Image;
+    thumbnails.columns = media::ThumbnailStrip::Columns;
+    thumbnails.tileU = (float)media::ThumbnailStrip::TileWidth / (float)strip.atlasWidth();
+    thumbnails.tileV = (float)media::ThumbnailStrip::TileHeight / (float)strip.atlasHeight();
+
+    return thumbnails;
+}
+
+
 void GUI::matchSequenceToVideo()
 {
     // The media known when the project opens stay as they are.
@@ -3736,6 +4853,8 @@ void GUI::replaceProject(Project project, const std::filesystem::path& path)
 {
     endTextEditing();
     _matchedMediaSeeded = false;
+    _sequencePlayheads.clear();
+    _selectTab = project.sequence().id;
 
     // The ids of the new project restart: nothing analyzed or decoded for
     // the previous one may be taken for its media.
@@ -3809,6 +4928,11 @@ void GUI::importMedia(const std::filesystem::path& filepath)
     const size_t count = _project.media().size();
     const Id id = _project.importMedia(filepath);
 
+    // Into the selected folder.
+    if (_project.media().size() != count && !_selectedFolder.empty()) {
+        _project.moveMediaToFolder(id, _selectedFolder);
+    }
+
     _selectedMedia = id;
 
     if (_project.media().size() != count) {
@@ -3856,7 +4980,7 @@ void GUI::updateMedia()
         _mixDirty = false;
         _audio.setGraph(audio::buildMixGraph(_project,
             [this](Id mediaId) { return _media.audio(mediaId); },
-            [this](const Track& track) { return _effects.effectsOf(track); }));
+            [this](Id, const std::vector<EffectSlot>& slots) { return _effects.effectsOf(slots); }));
     }
 }
 
@@ -4126,8 +5250,7 @@ void GUI::eventBeforeFrame()
     if (_resetDecoders) {
         _resetDecoders = false;
         vkDeviceWaitIdle(device().device());
-        _trackRenderers.clear();
-        _trackPlayers.clear();
+        _decoders.clear();
     }
 
     // Actions asked from the menus, between two frames: their confirmation
@@ -4155,6 +5278,8 @@ void GUI::eventBeforeFrame()
         }
     }
 
+    std::filesystem::path subtitlePath;
+
     {
         std::scoped_lock lock(_dialogMutex);
 
@@ -4163,10 +5288,21 @@ void GUI::eventBeforeFrame()
             _dialogExportPath.clear();
         }
 
+        subtitlePath.swap(_dialogSubtitlePath);
+
         openPath.swap(_dialogOpenPath);
         savePath.swap(_dialogSavePath);
         importPaths.swap(_dialogImportPaths);
         actionAfterSave = _actionAfterSave;
+    }
+
+    if (!subtitlePath.empty()) {
+        if (_subtitleDialogSaves) {
+            exportSubtitles(subtitlePath);
+        }
+        else {
+            importSubtitles(subtitlePath);
+        }
     }
 
     if (!openPath.empty()) {

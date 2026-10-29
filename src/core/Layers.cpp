@@ -73,12 +73,14 @@ const char* transitionName(TransitionType type)
         case TransitionType::Push:       return "Push";
         case TransitionType::Wipe:       return "Wipe";
         case TransitionType::Zoom:       return "Zoom";
+        case TransitionType::Shader:     return "Shader";
         default:                         return "None";
     }
 }
 
 
-std::vector<LayerRequest> layersAt(const Sequence& sequence, Time t)
+std::vector<LayerRequest> layersAt(const Sequence& sequence, Time t,
+    const std::function<const Sequence*(Id)>& sequenceOf, uint64_t parentKey, int depth)
 {
     std::vector<LayerRequest> layers;
 
@@ -177,11 +179,32 @@ std::vector<LayerRequest> layersAt(const Sequence& sequence, Time t)
 
         applyTransition(incoming->transitionIn.type, p, (float)sequence.width, outgoing ? &outgoingLayer : nullptr, incomingLayer);
 
+        // The shader mixes the two pictures as they are.
+        if (incoming->transitionIn.type == TransitionType::Shader) {
+            outgoingLayer.transitionRole = 1;
+            incomingLayer.transitionRole = 2;
+            outgoingLayer.transitionProgress = incomingLayer.transitionProgress = p;
+            outgoingLayer.transition = incomingLayer.transition = &incoming->transitionIn;
+        }
+
         if (outgoing) {
             layers.push_back(outgoingLayer);
         }
 
         layers.push_back(incomingLayer);
+    }
+
+    // Decoders, and the nested sequences (never deeper than a few levels).
+    for (LayerRequest& layer : layers) {
+        layer.key = parentKey * 1000003ull + (uint64_t)(layer.track * 2 + (size_t)layer.slot + 1);
+
+        if (layer.clip->kind == ClipKind::Sequence && sequenceOf && depth < 8) {
+            layer.nested = sequenceOf(layer.clip->sequence);
+
+            if (layer.nested) {
+                layer.children = layersAt(*layer.nested, layer.clip->sourceIn + layer.localTime, sequenceOf, layer.key, depth + 1);
+            }
+        }
     }
 
     return layers;

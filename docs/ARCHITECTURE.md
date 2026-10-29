@@ -228,6 +228,23 @@ Conséquences sur le modèle :
 8. ~~Export H.264/H.265/AV1 via Vulkan Video.~~ (AV1 par NVENC/AMF/QSV pour
    l'instant, voir plus haut.)
 9. Vérification et paquet Linux.
+10. ~~Enregistrement~~ : voix off (`audio/Recorder`, WAV 24 bits), écran,
+    fenêtre ou caméra (`capture/ScreenRecorder` : filtre `gfxcapture` de
+    FFmpeg, images GPU jusqu'à NVENC/AMF, son de l'ordinateur par WASAPI,
+    caméras par DirectShow), progression en direct sur la timeline.
+11. ~~Effets vidéo GPU par clip et par piste~~ (`core/VideoEffects`, passes
+    `shader/effect_*.frag` de `Compositor::cmdApplyEffects`), VST par clip,
+    recadrage / coins / bordure / ombre (`core::Frame`, `shader/layer.frag`).
+12. ~~Shaders de l'utilisateur~~ (`core/Shaders`, `render/ShaderCompiler` avec
+    shaderc) : générateurs (`ClipKind::Generator`) et transitions
+    (`TransitionType::Shader`), dans `Documents/QuickEdit/Shaders`.
+13. ~~Éditeur de courbes~~ (`app/KeyframeEditor`), vignettes
+    (`media/Thumbnails`), dossiers de médias, séquences multiples et
+    imbriquées (`ClipKind::Sequence`, `Compositor::cmdRenderLevel`),
+    sous-titres (`TrackType::Subtitle`, `core/Subtitles` : SRT, incrustation).
+    Génération automatique des sous-titres (`app/SubtitleGenerator`,
+    whisper.cpp sur GPU par Vulkan ou sur CPU, modèles téléchargés depuis
+    l'application dans `Documents/QuickEdit/Models`).
 
 ## Compilation
 
@@ -241,6 +258,8 @@ Dépendances téléchargées, ignorées par git :
 - SDK VST3 3.8.1 (MIT) :
   `git clone --depth 1 --branch v3.8.1_build_84 https://github.com/steinbergmedia/vst3sdk.git 3rdparty/vst3sdk`
   puis `git submodule update --init --depth 1 base pluginterfaces public.sdk` dans ce dossier.
+- whisper.cpp 1.8.7 (MIT), facultatif (sous-titres automatiques) :
+  `git clone --depth 1 --branch v1.8.7 https://github.com/ggml-org/whisper.cpp.git 3rdparty/whisper.cpp`.
 
 ```
 git submodule update --init --recursive

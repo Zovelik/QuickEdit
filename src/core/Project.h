@@ -2,8 +2,10 @@
 
 #include <core/Animation.h>
 #include <core/Json.h>
+#include <core/Shaders.h>
 #include <core/Text.h>
 #include <core/Time.h>
+#include <core/VideoEffects.h>
 
 #include <cstdint>
 #include <filesystem>
@@ -40,6 +42,9 @@ namespace core
         std::filesystem::path path;
         MediaType type = MediaType::Video;
 
+        // Folder of the media panel ('/' between the levels), empty for none.
+        std::string folder;
+
         // False until the file was probed: the properties below are then
         // placeholders.
         bool probed = false;
@@ -59,7 +64,9 @@ namespace core
     enum class ClipKind
     {
         Media,      // A piece of a media item
-        Text        // A text, generated
+        Text,       // A text, generated
+        Generator,  // A picture made by a shader (core/Shaders.h)
+        Sequence    // Another sequence of the project, nested
     };
 
 
@@ -83,7 +90,8 @@ namespace core
         DipToBlack,     // Fade out, then in
         Push,           // The incoming picture pushes the other one left
         Wipe,           // The incoming picture is revealed from the left
-        Zoom            // The incoming picture grows and fades in
+        Zoom,           // The incoming picture grows and fades in
+        Shader          // A transition shader (core/Shaders.h)
     };
 
 
@@ -93,10 +101,25 @@ namespace core
     {
         TransitionType type = TransitionType::None;
         Time duration = TicksPerSecond;
+        std::string shader;         // Id of a shader, for TransitionType::Shader
     };
 
 
     // An element of a track: a piece of a media item, or a text.
+    // An audio effect (VST3 plugin) of a track or a clip.
+    struct EffectSlot
+    {
+        Id id = InvalidId;
+        std::string path;           // Of the .vst3 bundle or file, UTF-8
+        std::string classId;        // Of the plugin class, in hexadecimal
+        std::string name;
+        bool bypass = false;
+
+        // State of the plugin, base64 (component, then controller).
+        std::string state;
+    };
+
+
     // Look of the picture of a video or image clip.
     struct Frame
     {
@@ -156,11 +179,24 @@ namespace core
         // Text clips only.
         TextContent text;
 
+        // Generators: the shader, and the values of its parameters.
+        std::string shader;
+        std::vector<AnimatedValue> shaderParameters;
+
+        // Nested sequences: the sequence, shown from sourceIn (its picture,
+        // and its sound mixed with the sound track of the video track).
+        Id sequence = InvalidId;
+
         // Video clips: transition from the previous clip.
         Transition transitionIn;
 
         // Video and image clips: crop, border and shadow.
         Frame frame;
+
+        // Effects of the clip, before those of its track: on its picture
+        // (video), or on its sound (audio, in processing order).
+        std::vector<VideoEffect> videoEffects;
+        std::vector<EffectSlot> effects;
 
         Time end() const { return start + duration; }
     };
@@ -170,21 +206,20 @@ namespace core
     {
         Video,
         Sound,      // The sound of the clips of the video track of the same index
-        Audio       // Voice, music...
+        Audio,      // Voice, music...
+        Subtitle    // Text clips shown as subtitles (core/Subtitles.h)
     };
 
 
-    // An audio effect (VST3 plugin) of a track.
-    struct EffectSlot
+    // Look of the subtitles of a sequence.
+    struct SubtitleStyle
     {
-        Id id = InvalidId;
-        std::string path;           // Of the .vst3 bundle or file, UTF-8
-        std::string classId;        // Of the plugin class, in hexadecimal
-        std::string name;
-        bool bypass = false;
+        float size = 54.f;              // Pixels of the sequence
+        Color color;
+        float outlineWidth = 4.f;
+        float bottomMargin = 70.f;      // From the bottom of the frame
 
-        // State of the plugin, base64 (component, then controller).
-        std::string state;
+        bool operator==(const SubtitleStyle& other) const = default;
     };
 
 
@@ -201,8 +236,10 @@ namespace core
         // Clips sorted by start time, never overlapping.
         std::vector<Clip> clips;
 
-        // Audio tracks: effects, in processing order.
+        // Audio tracks: effects, in processing order. Video tracks: effects
+        // on the picture of each of their clips, after the clip's own.
         std::vector<EffectSlot> effects;
+        std::vector<VideoEffect> videoEffects;
 
         // Index of the clip at time t, or -1.
         int clipAt(Time t) const;
@@ -215,6 +252,7 @@ namespace core
     // An edit: the tracks and their clips, with the output format.
     struct Sequence
     {
+        Id id = InvalidId;
         std::string name = "Sequence 1";
 
         uint32_t width = 1920;
@@ -228,6 +266,8 @@ namespace core
         // the other sounds (voice, music).
         std::vector<Track> videoTracks;
         std::vector<Track> soundTracks;
+        std::vector<Track> subtitleTracks;
+        SubtitleStyle subtitleStyle;
         std::vector<Track> audioTracks;
 
         // The sound tracks are folded in the timeline.
@@ -235,7 +275,9 @@ namespace core
 
         std::vector<Track>& tracks(TrackType type)
         {
-            return (type == TrackType::Video) ? videoTracks : (type == TrackType::Sound ? soundTracks : audioTracks);
+            return (type == TrackType::Video) ? videoTracks
+                : (type == TrackType::Sound) ? soundTracks
+                : (type == TrackType::Subtitle) ? subtitleTracks : audioTracks;
         }
 
         const std::vector<Track>& tracks(TrackType type) const
@@ -243,7 +285,8 @@ namespace core
             return const_cast<Sequence*>(this)->tracks(type);
         }
 
-        // Adds a video track with its sound track, or an audio track.
+        // Adds a video track with its sound track, an audio track, or a
+        // subtitle track.
         void addTrack(TrackType type, Id id, Id soundId);
 
         // End of the last clip.
@@ -266,8 +309,51 @@ namespace core
         std::vector<MediaItem>& media() { return _media; }
         const std::vector<MediaItem>& media() const { return _media; }
 
+        // Folders of the media panel, '/' between the levels, empty ones
+        // included.
+        const std::vector<std::string>& mediaFolders() const { return _mediaFolders; }
+
+        // A new folder in parent (empty: at the top), its name made unique.
+        // Returns its path.
+        std::string addMediaFolder(const std::string& parent, const std::string& name);
+
+        // Renames the last level of a folder, its subfolders and media
+        // following. False when the name is empty, has a '/', or is taken.
+        bool renameMediaFolder(const std::string& path, const std::string& name);
+
+        // Removes a folder and its subfolders; their media go to its parent.
+        void removeMediaFolder(const std::string& path);
+
+        // Moves media into a folder (empty: out of any).
+        void moveMediaToFolder(Id mediaId, const std::string& folder);
+
+        static std::string parentFolder(const std::string& path);
+
+        // The sequence being edited; the others are kept apart until shown.
         Sequence& sequence() { return _sequence; }
         const Sequence& sequence() const { return _sequence; }
+
+        // All the sequences, in the order of their tabs.
+        std::vector<const Sequence*> sequences() const;
+        const Sequence* findSequence(Id id) const;
+
+        // A new sequence with the settings of the current one and empty
+        // tracks, after the others. Returns its id.
+        Id addSequence(const std::string& name);
+
+        // Edits another sequence. The selections refer to clips of the
+        // current one: clear them.
+        bool switchSequence(Id id);
+
+        // False when it is the only one, or nested in another.
+        bool removeSequence(Id id);
+
+        // True when outer is inner, or shows it (nested at any depth).
+        bool sequenceContains(Id outer, Id inner) const;
+
+        // A clip of another sequence on a video track of the current one, as
+        // long as the sequence (not containing the current one).
+        Id addSequenceClip(Id sequenceId, Id trackId, Time start);
 
         MediaItem* findMedia(Id id);
         const MediaItem* findMedia(Id id) const;
@@ -309,7 +395,18 @@ namespace core
 
         // Places a text on a video track. Returns its id, InvalidId when there
         // is no room at start.
+        // On a video track, or a subtitle track (a line of subtitles).
         Id addTextClip(Id trackId, Time start, Time duration, const std::string& text);
+
+        // A clip of a generator shader, its parameters at their defaults.
+        // InvalidId when there is no room at start on the track.
+        Id addGeneratorClip(Id trackId, Time start, Time duration, const ShaderDef& shader);
+
+        // The shaders of the user used in the project, saved with it (the
+        // built-in ones come from the code).
+        const std::vector<ShaderDef>& shaders() const { return _shaders; }
+        void storeShader(const ShaderDef& shader);
+        const ShaderDef* findShader(const std::string& id) const;
 
         // Freezes the frame of a video clip shown at time t for the given
         // duration: the clip is cut at t, a still of that frame is inserted
@@ -332,7 +429,11 @@ namespace core
         Id _nextId = 1;
 
         std::vector<MediaItem> _media;
+        std::vector<std::string> _mediaFolders;
+        std::vector<ShaderDef> _shaders;
         Sequence _sequence;
+        std::vector<Sequence> _otherSequences;
+        std::vector<Id> _sequenceOrder;
     };
 
 

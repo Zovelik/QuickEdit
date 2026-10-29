@@ -2,6 +2,8 @@
 
 #include <core/Project.h>
 
+#include <cstdint>
+#include <functional>
 #include <vector>
 
 
@@ -31,6 +33,20 @@ namespace core
         float offsetY = 0.f;
         float scale = 1.f;
         float wipe = 1.f;               // Part of the width shown, from the left
+
+        // A shader transition: 1 for the outgoing picture, 2 for the
+        // incoming one (drawn together by the shader), at progress.
+        int transitionRole = 0;
+        float transitionProgress = 0.f;
+        const Transition* transition = nullptr;
+
+        // The decoder of the layer: one per track, slot and level of
+        // nesting, the same from frame to frame.
+        uint64_t key = 0;
+
+        // A nested sequence: it, and its layers at the time shown.
+        const Sequence* nested = nullptr;
+        std::vector<LayerRequest> children;
     };
 
 
@@ -41,7 +57,8 @@ namespace core
     // before the cut, the incoming clip shows its first frame; after it, the
     // outgoing clip shows its last frame. Without an outgoing clip, the
     // incoming one appears over what is below.
-    std::vector<LayerRequest> layersAt(const Sequence& sequence, Time t);
+    std::vector<LayerRequest> layersAt(const Sequence& sequence, Time t,
+        const std::function<const Sequence*(Id)>& sequenceOf = {}, uint64_t parentKey = 0, int depth = 0);
 
 
     const char* transitionName(TransitionType type);

@@ -14,6 +14,16 @@ namespace audio
 {
     // An audible clip, in frames (one frame = one sample per channel) of the
     // sample rate of the sequence.
+    // An effect processing a track (a plugin), in place, on interleaved
+    // stereo samples. Called by one thread at a time, block after block.
+    class AudioEffect
+    {
+    public:
+        virtual ~AudioEffect() = default;
+        virtual void process(float* samples, int frames, int64_t position) = 0;
+    };
+
+
     struct MixClip
     {
         int64_t start = 0;          // On the timeline
@@ -23,16 +33,9 @@ namespace audio
         int64_t fadeIn = 0;         // Frames
         int64_t fadeOut = 0;
         std::shared_ptr<const media::AudioBuffer> buffer;
-    };
 
-
-    // An effect processing a track (a plugin), in place, on interleaved
-    // stereo samples. Called by one thread at a time, block after block.
-    class AudioEffect
-    {
-    public:
-        virtual ~AudioEffect() = default;
-        virtual void process(float* samples, int frames, int64_t position) = 0;
+        // Effects of the clip, before those of its track.
+        std::vector<std::shared_ptr<AudioEffect>> effects;
     };
 
 
@@ -60,7 +63,7 @@ namespace audio
     std::shared_ptr<const MixGraph> buildMixGraph(
         const core::Project& project,
         const std::function<std::shared_ptr<const media::AudioBuffer>(core::Id mediaId)>& audioOf,
-        const std::function<std::vector<std::shared_ptr<AudioEffect>>(const core::Track& track)>& effectsOf = {});
+        const std::function<std::vector<std::shared_ptr<AudioEffect>>(core::Id owner, const std::vector<core::EffectSlot>& slots)>& effectsOf = {});
 
 
     // Mixes the frames [first, first + count) of the graph into output,

@@ -2,6 +2,7 @@
 
 #include <audio/Mixer.h>
 #include <core/Layers.h>
+#include <core/Subtitles.h>
 #include <media/VideoReader.h>
 #include <render/Compositor.h>
 #include <render/FontLibrary.h>
@@ -377,14 +378,10 @@ void Exporter::exportVideo()
     Compositor compositor(device, *_context.pipelineCache, fonts, false);
     Nv12Converter converter(device, *_context.pipelineCache);
 
-    // Two slots per track: the second one for the other clip of a transition.
-    const size_t slotCount = sequence.videoTracks.size() * 2;
-    std::vector<std::unique_ptr<VideoFrameRenderer>> renderers;
-    std::vector<std::map<Id, std::unique_ptr<media::VideoReader>>> readers(slotCount);
-
-    for (size_t i = 0; i < slotCount; i++) {
-        renderers.push_back(std::make_unique<VideoFrameRenderer>(device, *_context.pipelineCache));
-    }
+    // Decoders by layer key (track, slot and nesting, see LayerRequest):
+    // a renderer each, a reader per media, decoding forward.
+    std::map<uint64_t, std::unique_ptr<VideoFrameRenderer>> renderers;
+    std::map<uint64_t, std::map<Id, std::unique_ptr<media::VideoReader>>> readers;
 
     // CPU encoders: the frame is read back.
     std::unique_ptr<GPU::Buffer> readback;
@@ -408,8 +405,8 @@ void Exporter::exportVideo()
             const auto it = _audio.find(mediaId);
             return (it != _audio.end()) ? it->second : nullptr;
         },
-        [this](const Track& track) {
-            const auto it = _effects.find(track.id);
+        [this](Id owner, const std::vector<EffectSlot>&) {
+            const auto it = _effects.find(owner);
             return (it != _effects.end()) ? it->second : std::vector<std::shared_ptr<audio::AudioEffect>>();
         });
 
@@ -470,7 +467,7 @@ void Exporter::exportVideo()
         compositor.beginFrame();
         converter.beginFrame();
 
-        for (auto& renderer : renderers) {
+        for (auto& [key, renderer] : renderers) {
             renderer->beginFrame();
         }
 
@@ -482,47 +479,95 @@ void Exporter::exportVideo()
         VK_THROW_IF_FAILED(vkBeginCommandBuffer(gpu.commandBuffer, &beginInfo));
 
         VideoFrameRenderer::Sync sync;
-        std::vector<Compositor::Layer> layers;
 
-        for (const LayerRequest& request : layersAt(sequence, t)) {
-            const Clip& clip = *request.clip;
+        // The layers of a level (the sequence, or a nested one).
+        std::function<std::vector<Compositor::Layer>(const std::vector<LayerRequest>&, const Sequence&)> build;
 
-            Compositor::Layer layer = { &clip, request.localTime, nullptr, 0, 0,
-                request.opacity, request.offsetX, request.offsetY, request.scale, request.wipe };
+        build = [&](const std::vector<LayerRequest>& requests, const Sequence& level) {
+            std::vector<Compositor::Layer> layers;
 
-            if (clip.kind == ClipKind::Text) {
-                layers.push_back(layer);
-                continue;
-            }
+            for (const LayerRequest& request : requests) {
+                const Clip& clip = *request.clip;
 
-            const MediaItem* media = _project.findMedia(clip.mediaId);
+                Compositor::Layer layer = { &clip, request.localTime, nullptr, 0, 0,
+                    request.opacity, request.offsetX, request.offsetY, request.scale, request.wipe };
+                layer.trackEffects = &level.videoTracks[request.track].videoEffects;
+                layer.transitionRole = request.transitionRole;
+                layer.transitionProgress = request.transitionProgress;
+                layer.transitionShader = request.transition ? _project.findShader(request.transition->shader) : nullptr;
 
-            if (!media || media->type == MediaType::Audio) {
-                continue;
-            }
+                // Generators: the shader makes the picture.
+                if (clip.kind == ClipKind::Generator) {
+                    layer.generator = _project.findShader(clip.shader);
 
-            // One reader per media and slot, decoding forward.
-            const size_t slot = request.track * 2 + (size_t)request.slot;
-            std::unique_ptr<media::VideoReader>& reader = readers[slot][media->id];
+                    if (layer.generator) {
+                        layers.push_back(layer);
+                    }
 
-            if (!reader) {
-                try {
-                    reader = std::make_unique<media::VideoReader>(media->path, _context.hwDevice);
+                    continue;
                 }
-                catch (const std::exception& e) {
-                    throw std::runtime_error(media->name() + ": " + e.what());
+
+                if (clip.kind == ClipKind::Text) {
+                    layers.push_back(layer);
+                    continue;
+                }
+
+                // A nested sequence: its own layers, composited first.
+                if (clip.kind == ClipKind::Sequence) {
+                    if (request.nested) {
+                        layer.children = build(request.children, *request.nested);
+                        layer.childWidth = request.nested->width;
+                        layer.childHeight = request.nested->height;
+                        layers.push_back(std::move(layer));
+                    }
+
+                    continue;
+                }
+
+                const MediaItem* media = _project.findMedia(clip.mediaId);
+
+                if (!media || media->type == MediaType::Audio) {
+                    continue;
+                }
+
+                std::unique_ptr<media::VideoReader>& reader = readers[request.key][media->id];
+
+                if (!reader) {
+                    try {
+                        reader = std::make_unique<media::VideoReader>(media->path, _context.hwDevice);
+                    }
+                    catch (const std::exception& e) {
+                        throw std::runtime_error(media->name() + ": " + e.what());
+                    }
+                }
+
+                std::unique_ptr<VideoFrameRenderer>& renderer = renderers[request.key];
+
+                if (!renderer) {
+                    renderer = std::make_unique<VideoFrameRenderer>(device, *_context.pipelineCache);
+                    renderer->beginFrame();
+                }
+
+                const std::shared_ptr<media::VideoFrame> frame = reader->frameAt(request.sourceTime);
+
+                if (frame && renderer->cmdRender(gpu.commandBuffer, frame, sync) && renderer->image()) {
+                    layer.image = renderer->image();
+                    layer.width = renderer->width();
+                    layer.height = renderer->height();
+                    layers.push_back(layer);
                 }
             }
 
-            const std::shared_ptr<media::VideoFrame> frame = reader->frameAt(request.sourceTime);
-            VideoFrameRenderer& renderer = *renderers[slot];
+            return layers;
+        };
 
-            if (frame && renderer.cmdRender(gpu.commandBuffer, frame, sync) && renderer.image()) {
-                layer.image = renderer.image();
-                layer.width = renderer.width();
-                layer.height = renderer.height();
-                layers.push_back(layer);
-            }
+        std::vector<Compositor::Layer> layers = build(layersAt(sequence, t, [this](Id id) { return _project.findSequence(id); }), sequence);
+
+        // The subtitles, over everything.
+        const std::vector<Clip> subtitles = subtitleClipsAt(sequence, t);
+
+        for (const Clip& clip : subtitles) {
+            layers.push_back({ &clip, t - clip.start, nullptr, 0, 0, 1.f, 0.f, 0.f, 1.f, 1.f });
         }
 
         compositor.cmdComposite(gpu.commandBuffer, width, height, layers, sequence.width, sequence.height);

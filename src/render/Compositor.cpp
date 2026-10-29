@@ -1,6 +1,14 @@
 #include <render/Compositor.h>
+#include <render/ShaderCompiler.h>
 #include <render/TextLayout.h>
 
+#include <shader/effect.vert.h>
+#include <shader/effect_blur.frag.h>
+#include <shader/effect_chromakey.frag.h>
+#include <shader/effect_color.frag.h>
+#include <shader/effect_pixelate.frag.h>
+#include <shader/effect_sharpen.frag.h>
+#include <shader/effect_vignette.frag.h>
 #include <shader/layer.frag.h>
 #include <shader/layer.vert.h>
 #include <shader/text.frag.h>
@@ -9,6 +17,7 @@
 #include <vkutils/util.h>
 
 #include <backends/imgui_impl_vulkan.h>
+#include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <cmath>
@@ -37,6 +46,9 @@ constexpr VkFormat OutputFormat = VK_FORMAT_R8G8B8A8_UNORM;
 // Most layers drawn in a frame (descriptor sets of the pool).
 constexpr uint32_t MaxLayers = 64;
 
+// Descriptor sets of a frame: the layers and their effect passes.
+constexpr uint32_t MaxSets = 8 * MaxLayers;
+
 constexpr float Pi = 3.14159265358979f;
 
 
@@ -55,6 +67,18 @@ struct LayerParameters
 };
 
 static_assert(sizeof(LayerParameters) <= 128);
+
+
+// Push constants of the effect passes (shader/effect_common.glsl).
+struct EffectParameters
+{
+    float a[4];
+    float b[4];
+    float texel[2];
+    float direction[2];
+    float pixelScale;
+    float padding[3];
+};
 
 
 // Placement of a layer: layer pixels (centered, y down) to sequence pixels.
@@ -151,6 +175,7 @@ Compositor::Compositor(const GPU::Device& device, const GPU::PipelineCache& pipe
     : _device(device)
     , _fonts(fonts)
     , _display(display)
+    , _pipelineCache(pipelineCache)
 {
     createPipelines(pipelineCache);
 
@@ -186,6 +211,19 @@ Compositor::~Compositor()
     _glyphBuffer.reset();
 
     vkDestroyDescriptorPool(device, _descriptorPool, nullptr);
+    for (const auto& [type, pipeline] : _effectPipelines) {
+        vkDestroyPipeline(device, pipeline, nullptr);
+    }
+
+    vkDestroyPipelineLayout(device, _effectPipelineLayout, nullptr);
+
+    for (const auto& [code, pipeline] : _userPipelines) {
+        if (pipeline) vkDestroyPipeline(device, pipeline, nullptr);
+    }
+
+    vkDestroyPipelineLayout(device, _generatorPipelineLayout, nullptr);
+    vkDestroyPipelineLayout(device, _transitionPipelineLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device, _transitionSetLayout, nullptr);
     vkDestroyPipeline(device, _layerPipeline, nullptr);
     vkDestroyPipeline(device, _textPipeline, nullptr);
     vkDestroyPipelineLayout(device, _layerPipelineLayout, nullptr);
@@ -251,14 +289,67 @@ void Compositor::createPipelines(const GPU::PipelineCache& pipelineCache)
         _textPipeline = createPipeline(pipelineCache, _textPipelineLayout, text_vert, text_vert_size, text_frag, text_frag_size);
     }
 
+    // Video effects: a picture in, a picture out (no blending).
+    {
+        const VkPushConstantRange pushConstants = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(EffectParameters) };
+
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+        pipelineLayoutInfo.setLayoutCount = 1;
+        pipelineLayoutInfo.pSetLayouts = &_layerSetLayout;
+        pipelineLayoutInfo.pushConstantRangeCount = 1;
+        pipelineLayoutInfo.pPushConstantRanges = &pushConstants;
+        VK_THROW_IF_FAILED(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &_effectPipelineLayout));
+
+        auto effect = [&](VideoEffectType type, const uint32_t* code, size_t size) {
+            _effectPipelines[type] = createPipeline(pipelineCache, _effectPipelineLayout, effect_vert, effect_vert_size, code, size, false);
+        };
+
+        effect(VideoEffectType::ColorCorrection, effect_color_frag, effect_color_frag_size);
+        effect(VideoEffectType::Blur, effect_blur_frag, effect_blur_frag_size);
+        effect(VideoEffectType::Sharpen, effect_sharpen_frag, effect_sharpen_frag_size);
+        effect(VideoEffectType::Vignette, effect_vignette_frag, effect_vignette_frag_size);
+        effect(VideoEffectType::ChromaKey, effect_chromakey_frag, effect_chromakey_frag_size);
+        effect(VideoEffectType::Pixelate, effect_pixelate_frag, effect_pixelate_frag_size);
+    }
+
+    // Shaders of the user: generators (parameters only), transitions (the
+    // two pictures). Their pipelines are made when first used.
+    {
+        const VkPushConstantRange generatorConstants = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 48 };
+
+        VkPipelineLayoutCreateInfo generatorLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+        generatorLayoutInfo.pushConstantRangeCount = 1;
+        generatorLayoutInfo.pPushConstantRanges = &generatorConstants;
+        VK_THROW_IF_FAILED(vkCreatePipelineLayout(device, &generatorLayoutInfo, nullptr, &_generatorPipelineLayout));
+
+        const VkDescriptorSetLayoutBinding bindings[] = {
+            { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
+            { 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
+        };
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+        layoutInfo.bindingCount = C_ARRAY_SIZE(bindings);
+        layoutInfo.pBindings = bindings;
+        VK_THROW_IF_FAILED(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &_transitionSetLayout));
+
+        const VkPushConstantRange transitionConstants = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 8 };
+
+        VkPipelineLayoutCreateInfo transitionLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+        transitionLayoutInfo.setLayoutCount = 1;
+        transitionLayoutInfo.pSetLayouts = &_transitionSetLayout;
+        transitionLayoutInfo.pushConstantRangeCount = 1;
+        transitionLayoutInfo.pPushConstantRanges = &transitionConstants;
+        VK_THROW_IF_FAILED(vkCreatePipelineLayout(device, &transitionLayoutInfo, nullptr, &_transitionPipelineLayout));
+    }
+
     // Sets of the frame, recycled by beginFrame().
     const VkDescriptorPoolSize poolSizes[] = {
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MaxLayers },
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MaxSets },
         { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MaxLayers },
     };
 
     VkDescriptorPoolCreateInfo poolInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-    poolInfo.maxSets = MaxLayers;
+    poolInfo.maxSets = MaxSets;
     poolInfo.poolSizeCount = C_ARRAY_SIZE(poolSizes);
     poolInfo.pPoolSizes = poolSizes;
     VK_THROW_IF_FAILED(vkCreateDescriptorPool(device, &poolInfo, nullptr, &_descriptorPool));
@@ -266,7 +357,7 @@ void Compositor::createPipelines(const GPU::PipelineCache& pipelineCache)
 
 
 VkPipeline Compositor::createPipeline(const GPU::PipelineCache& pipelineCache, VkPipelineLayout layout,
-    const uint32_t* vertexCode, size_t vertexSize, const uint32_t* fragmentCode, size_t fragmentSize)
+    const uint32_t* vertexCode, size_t vertexSize, const uint32_t* fragmentCode, size_t fragmentSize, bool blending)
 {
     VkDevice device = _device.device();
 
@@ -312,7 +403,7 @@ VkPipeline Compositor::createPipeline(const GPU::PipelineCache& pipelineCache, V
 
     // Straight alpha over the layers below.
     VkPipelineColorBlendAttachmentState blendAttachment = {};
-    blendAttachment.blendEnable = VK_TRUE;
+    blendAttachment.blendEnable = blending ? VK_TRUE : VK_FALSE;
     blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
     blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
@@ -362,6 +453,140 @@ VkPipeline Compositor::createPipeline(const GPU::PipelineCache& pipelineCache, V
 void Compositor::beginFrame()
 {
     vkResetDescriptorPool(_device.device(), _descriptorPool, 0);
+
+    for (PassTarget& target : _passTargets) {
+        target.used = false;
+    }
+}
+
+
+GPU::Image* Compositor::passTarget(uint32_t width, uint32_t height)
+{
+    for (PassTarget& target : _passTargets) {
+        if (!target.used && target.image->width() == width && target.image->height() == height) {
+            target.used = true;
+            return target.image.get();
+        }
+    }
+
+    // Images of sizes no longer used go, beyond a few.
+    if (_passTargets.size() > 16) {
+        std::erase_if(_passTargets, [](const PassTarget& target) { return !target.used; });
+    }
+
+    PassTarget& target = _passTargets.emplace_back();
+    target.image = std::make_unique<GPU::Image>("Effect pass", _device,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, OutputFormat, width, height);
+    target.used = true;
+
+    return target.image.get();
+}
+
+
+const GPU::Image* Compositor::cmdApplyEffects(VkCommandBuffer commandBuffer, const Layer& layer, uint32_t layoutWidth, uint32_t layoutHeight)
+{
+    // The effects of the clip, then those of its track; the ones on.
+    // Their keyframes: in the time of the clip, or of the sequence for a
+    // track.
+    std::vector<std::pair<const VideoEffect*, Time>> effects;
+
+    for (const VideoEffect& effect : layer.clip->videoEffects) {
+        if (effect.enabled && effect.info()) effects.emplace_back(&effect, layer.localTime);
+    }
+
+    if (layer.trackEffects) {
+        for (const VideoEffect& effect : *layer.trackEffects) {
+            if (effect.enabled && effect.info()) effects.emplace_back(&effect, layer.clip->start + layer.localTime);
+        }
+    }
+
+    const GPU::Image* source = layer.image;
+
+    if (effects.empty()) {
+        return source;
+    }
+
+    // Distances in pixels of the sequence, before the transform: in pixels
+    // of the picture through its fit in the frame.
+    const float fit = std::min((float)layoutWidth / (float)layer.width, (float)layoutHeight / (float)layer.height);
+    const uint32_t width = source->width();
+    const uint32_t height = source->height();
+
+    for (const auto& [effect, time] : effects) {
+        const VideoEffectInfo& info = *effect->info();
+        EffectParameters parameters = {};
+
+        for (size_t i = 0; i < effect->parameters.size() && i < 8; i++) {
+            (i < 4 ? parameters.a[i] : parameters.b[i - 4]) = effect->parameters[i].at(time);
+        }
+
+        parameters.texel[0] = 1.f / (float)width;
+        parameters.texel[1] = 1.f / (float)height;
+        parameters.pixelScale = (float)layer.width / std::max(1.f, (float)layer.width * fit) * ((float)width / std::max(1u, layer.width));
+
+        // Nothing to do.
+        if (info.type == VideoEffectType::Blur && parameters.a[0] * parameters.pixelScale < 0.5f) {
+            continue;
+        }
+
+        // A blur in two passes: across, then down.
+        const int passes = (info.type == VideoEffectType::Blur) ? 2 : 1;
+
+        for (int pass = 0; pass < passes; pass++) {
+            const VkDescriptorSet set = allocateSet(_layerSetLayout);
+
+            if (!set) {
+                return source;
+            }
+
+            GPU::Image* target = passTarget(width, height);
+
+            const VkDescriptorImageInfo imageInfo = { _sampler, source->imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+            write.dstSet = set;
+            write.dstBinding = 0;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.pImageInfo = &imageInfo;
+            vkUpdateDescriptorSets(_device.device(), 1, &write, 0, nullptr);
+
+            target->cmdBarrierTransition(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+            VkRenderingAttachmentInfo attachment = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+            attachment.imageView = target->imageView();
+            attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+            VkRenderingInfo renderingInfo = { VK_STRUCTURE_TYPE_RENDERING_INFO };
+            renderingInfo.renderArea = { { 0, 0 }, { width, height } };
+            renderingInfo.layerCount = 1;
+            renderingInfo.colorAttachmentCount = 1;
+            renderingInfo.pColorAttachments = &attachment;
+
+            vkCmdBeginRendering(commandBuffer, &renderingInfo);
+
+            const VkViewport viewport = { 0.f, 0.f, (float)width, (float)height, 0.f, 1.f };
+            const VkRect2D scissor = { { 0, 0 }, { width, height } };
+            vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+            vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+            parameters.direction[0] = (pass == 0) ? 1.f : 0.f;
+            parameters.direction[1] = (pass == 0) ? 0.f : 1.f;
+
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _effectPipelines.at(info.type));
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _effectPipelineLayout, 0, 1, &set, 0, nullptr);
+            vkCmdPushConstants(commandBuffer, _effectPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(parameters), &parameters);
+            vkCmdDraw(commandBuffer, 4, 1, 0, 0);
+
+            vkCmdEndRendering(commandBuffer);
+
+            target->cmdBarrierTransition(commandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            source = target;
+        }
+    }
+
+    return source;
 }
 
 
@@ -531,22 +756,13 @@ void Compositor::cmdComposite(VkCommandBuffer commandBuffer, uint32_t outputWidt
     const uint32_t width = layoutWidth ? layoutWidth : outputWidth;
     const uint32_t height = layoutHeight ? layoutHeight : outputHeight;
 
-    // Texts first: their layout renders the missing glyphs into the atlas,
-    // uploaded before drawing.
+    // Texts first, nested ones included: their layout renders the missing
+    // glyphs into the atlas, uploaded before drawing.
+    std::vector<Layer> tree = layers;
     std::vector<GlyphInstance> instances;
-    std::vector<std::pair<uint32_t, uint32_t>> textRanges(layers.size(), { 0, 0 });
-    std::vector<LayerBounds> bounds(layers.size());
+    std::vector<LayerBounds> bounds(tree.size());
 
-    for (size_t i = 0; i < layers.size(); i++) {
-        const Layer& layer = layers[i];
-        bounds[i].clipId = layer.clip->id;
-
-        if (!layer.image) {
-            const uint32_t first = (uint32_t)instances.size();
-            const uint32_t count = buildText(layer, width, height, instances, bounds[i]);
-            textRanges[i] = { first, count };
-        }
-    }
+    collectTexts(tree, width, height, instances, &bounds);
 
     if (_fonts.dirty()) {
         cmdUploadAtlas(commandBuffer);
@@ -570,166 +786,467 @@ void Compositor::cmdComposite(VkCommandBuffer commandBuffer, uint32_t outputWidt
         std::memcpy(_glyphBuffer->mappedMemory(), instances.data(), (size_t)size);
     }
 
-    // Render
-    _output->cmdBarrierTransition(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    cmdRenderLevel(commandBuffer, _output.get(), tree, outputWidth, outputHeight, width, height, bounds, 0);
+
+    // Top first, for picking.
+    std::reverse(bounds.begin(), bounds.end());
+    _bounds = std::move(bounds);
+}
+
+
+uint32_t Compositor::collectTexts(std::vector<Layer>& layers, uint32_t width, uint32_t height, std::vector<GlyphInstance>& instances, std::vector<LayerBounds>* bounds)
+{
+    uint32_t total = 0;
+
+    for (size_t i = 0; i < layers.size(); i++) {
+        Layer& layer = layers[i];
+        LayerBounds ignored;
+        LayerBounds& layerBounds = bounds ? (*bounds)[i] : ignored;
+        layerBounds.clipId = layer.clip->id;
+
+        if (!layer.children.empty()) {
+            total += collectTexts(layer.children, layer.childWidth, layer.childHeight, instances, nullptr);
+        }
+        else if (!layer.image && layer.clip->kind == ClipKind::Text) {
+            layer.textFirst = (uint32_t)instances.size();
+            layer.textCount = buildText(layer, width, height, instances, layerBounds);
+            total += layer.textCount;
+        }
+    }
+
+    return total;
+}
+
+
+void Compositor::cmdRenderLevel(VkCommandBuffer commandBuffer, GPU::Image* target, std::vector<Layer>& work,
+    uint32_t outputWidth, uint32_t outputHeight, uint32_t width, uint32_t height, std::vector<LayerBounds>& bounds, int depth)
+{
+    // Nested sequences: their frames first, at their size times the scale
+    // of this level.
+    const float scale = (float)outputWidth / (float)std::max(1u, width);
+
+    for (Layer& layer : work) {
+        if (layer.children.empty() || !layer.childWidth || !layer.childHeight || depth > 8) {
+            continue;
+        }
+
+        const uint32_t w = std::max(2u, (uint32_t)std::lround((float)layer.childWidth * scale) & ~1u);
+        const uint32_t h = std::max(2u, (uint32_t)std::lround((float)layer.childHeight * scale) & ~1u);
+
+        GPU::Image* frame = passTarget(w, h);
+        std::vector<LayerBounds> ignored(layer.children.size());
+        cmdRenderLevel(commandBuffer, frame, layer.children, w, h, layer.childWidth, layer.childHeight, ignored, depth + 1);
+
+        layer.image = frame;
+        layer.width = w;
+        layer.height = h;
+    }
+
+    // Generators: their pictures, at the size of the output.
+    for (Layer& layer : work) {
+        if (layer.clip->kind == ClipKind::Generator && layer.generator) {
+            if (GPU::Image* picture = cmdGenerate(commandBuffer, layer, outputWidth, outputHeight)) {
+                layer.image = picture;
+                layer.width = outputWidth;
+                layer.height = outputHeight;
+            }
+        }
+    }
+
+    // The pictures through their effects.
+    std::vector<const GPU::Image*> pictures(work.size(), nullptr);
+
+    for (size_t i = 0; i < work.size(); i++) {
+        if (work[i].image) {
+            pictures[i] = cmdApplyEffects(commandBuffer, work[i], width, height);
+        }
+    }
+
+    // Shader transitions: the outgoing and incoming layers each drawn in a
+    // frame of their own, mixed by the shader into a frame drawn instead.
+    std::vector<const GPU::Image*> frames(work.size(), nullptr);
+    std::vector<bool> skip(work.size(), false);
+
+    auto layerFrame = [&](int index) {
+        GPU::Image* frame = passTarget(outputWidth, outputHeight);
+        cmdBeginPass(commandBuffer, frame, true);
+
+        if (index >= 0) {
+            const Layer& layer = work[index];
+            cmdDrawLayer(commandBuffer, layer, pictures[index], { layer.textFirst, layer.textCount }, width, height, outputWidth, outputHeight, bounds[index]);
+        }
+
+        cmdEndPass(commandBuffer, frame);
+        return frame;
+    };
+
+    for (size_t i = 0; i < work.size(); i++) {
+        if (work[i].transitionRole != 2 || !work[i].transitionShader) {
+            continue;
+        }
+
+        const bool withOutgoing = i > 0 && work[i - 1].transitionRole == 1;
+        const GPU::Image* from = layerFrame(withOutgoing ? (int)i - 1 : -1);
+        const GPU::Image* to = layerFrame((int)i);
+
+        if (const GPU::Image* mixed = cmdTransition(commandBuffer, *work[i].transitionShader, work[i].transitionProgress, from, to, outputWidth, outputHeight)) {
+            frames[i] = mixed;
+
+            if (withOutgoing) {
+                skip[i - 1] = true;
+            }
+        }
+    }
+
+    // The level: black under the sequence shown, transparent under a nested
+    // one (what is below it shows through).
+    cmdBeginPass(commandBuffer, target, true, depth == 0);
+
+    for (size_t i = 0; i < work.size(); i++) {
+        if (skip[i]) {
+            continue;
+        }
+
+        // A shader transition: its frame, over the whole output.
+        if (frames[i]) {
+            static const Clip wholeFrame;
+            Layer frameLayer;
+            frameLayer.clip = &wholeFrame;
+            frameLayer.image = frames[i];
+            frameLayer.width = outputWidth;
+            frameLayer.height = outputHeight;
+
+            LayerBounds ignored;
+            cmdDrawLayer(commandBuffer, frameLayer, frames[i], { 0, 0 }, width, height, outputWidth, outputHeight, ignored);
+            continue;
+        }
+
+        cmdDrawLayer(commandBuffer, work[i], pictures[i], { work[i].textFirst, work[i].textCount }, width, height, outputWidth, outputHeight, bounds[i]);
+    }
+
+    cmdEndPass(commandBuffer, target);
+}
+
+
+void Compositor::cmdDrawLayer(VkCommandBuffer commandBuffer, const Layer& layer, const GPU::Image* source, std::pair<uint32_t, uint32_t> textRange,
+    uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight, LayerBounds& bounds)
+{
+
+    // Wipe transition: the layer only covers the left part of the frame.
+    const VkRect2D layerScissor = { { 0, 0 }, { (uint32_t)std::clamp(std::lround(layer.wipe * (float)outputWidth), 0L, (long)outputWidth), outputHeight } };
+
+    if (layerScissor.extent.width == 0) {
+        return;
+    }
+
+    vkCmdSetScissor(commandBuffer, 0, 1, &layerScissor);
+
+    if (layer.image) {
+        const float opacity = layerOpacity(layer);
+
+        // The picture fits the frame, then the transform applies. The
+        // crop keeps the rest of the picture in place.
+        const float fit = std::min((float)width / (float)layer.width, (float)height / (float)layer.height);
+        const float hw = 0.5f * layer.width * fit;
+        const float hh = 0.5f * layer.height * fit;
+        const Placement place = placement(layer, width, height);
+
+        const Frame& frame = layer.clip->frame;
+        const float cropLeft = std::clamp(frame.cropLeft, 0.f, 0.99f);
+        const float cropTop = std::clamp(frame.cropTop, 0.f, 0.99f);
+        const float cropRight = std::clamp(frame.cropRight, 0.f, 0.99f - cropLeft);
+        const float cropBottom = std::clamp(frame.cropBottom, 0.f, 0.99f - cropTop);
+
+        const float picture[4] = { -hw, -hh, hw, hh };
+        const float box[4] = {
+            -hw + 2.f * hw * cropLeft, -hh + 2.f * hh * cropTop,
+            hw - 2.f * hw * cropRight, hh - 2.f * hh * cropBottom };
+
+        bounds.corners = { place.apply(box[0], box[1]), place.apply(box[2], box[1]), place.apply(box[2], box[3]), place.apply(box[0], box[3]) };
+
+        if (opacity <= 0.f) {
+            return;
+        }
+
+        const VkDescriptorSet set = allocateSet(_layerSetLayout);
+
+        if (!set) {
+            return;
+        }
+
+        const VkDescriptorImageInfo imageInfo = { _sampler, source->imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+
+        VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = set;
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &imageInfo;
+        vkUpdateDescriptorSets(_device.device(), 1, &write, 0, nullptr);
+
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _layerPipeline);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _layerPipelineLayout, 0, 1, &set, 0, nullptr);
+
+        // A quad over the given rectangle of the layer, grown by margin
+        // (layer pixels), the box shaped in it.
+        const float pixel = 1.f / std::max(place.scale, 1e-3f);
+        const float border = std::max(0.f, frame.borderWidth);
+
+        auto draw = [&](const float* shownBox, float margin, const Color& extra, bool shadow) {
+            LayerParameters parameters = {};
+            const float local[4] = { shownBox[0] - margin, shownBox[1] - margin, shownBox[2] + margin, shownBox[3] + margin };
+
+            toNdc(place.apply(local[0], local[1]), width, height, parameters.corners01);
+            toNdc(place.apply(local[2], local[1]), width, height, parameters.corners01 + 2);
+            toNdc(place.apply(local[0], local[3]), width, height, parameters.corners23);
+            toNdc(place.apply(local[2], local[3]), width, height, parameters.corners23 + 2);
+
+            parameters.color[0] = parameters.color[1] = parameters.color[2] = 1.f;
+            parameters.color[3] = opacity;
+            std::copy(local, local + 4, parameters.local);
+            std::copy(picture, picture + 4, parameters.picture);
+            std::copy(shownBox, shownBox + 4, parameters.box);
+            parameters.extra[0] = extra.r;
+            parameters.extra[1] = extra.g;
+            parameters.extra[2] = extra.b;
+            parameters.extra[3] = extra.a;
+            parameters.shape[0] = std::max(0.f, frame.cornerRadius);
+            parameters.shape[1] = border;
+            parameters.shape[2] = std::max(0.f, frame.shadowSoftness);
+            parameters.shape[3] = shadow ? 1.f : 0.f;
+
+            vkCmdPushConstants(commandBuffer, _layerPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(parameters), &parameters);
+            vkCmdDraw(commandBuffer, 4, 1, 0, 0);
+        };
+
+        // Shadow, below.
+        if (frame.hasShadow()) {
+            const float shadowBox[4] = {
+                box[0] + frame.shadowOffsetX, box[1] + frame.shadowOffsetY,
+                box[2] + frame.shadowOffsetX, box[3] + frame.shadowOffsetY };
+
+            draw(shadowBox, border + std::max(0.f, frame.shadowSoftness) + 2.f * pixel, frame.shadowColor, true);
+        }
+
+        draw(box, border + 2.f * pixel, frame.borderColor, false);
+    }
+    else if (textRange.second > 0) {
+        const VkDescriptorSet set = allocateSet(_textSetLayout);
+
+        if (!set) {
+            return;
+        }
+
+        const VkDescriptorImageInfo atlasInfo = { _sampler, _atlas->imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        const VkDescriptorBufferInfo bufferInfo = { _glyphBuffer->buffer(), 0, VK_WHOLE_SIZE };
+
+        VkWriteDescriptorSet writes[2] = {};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = set;
+        writes[0].dstBinding = 0;
+        writes[0].descriptorCount = 1;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].pImageInfo = &atlasInfo;
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = set;
+        writes[1].dstBinding = 1;
+        writes[1].descriptorCount = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[1].pBufferInfo = &bufferInfo;
+        vkUpdateDescriptorSets(_device.device(), 2, writes, 0, nullptr);
+
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _textPipeline);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _textPipelineLayout, 0, 1, &set, 0, nullptr);
+        vkCmdDraw(commandBuffer, 4, textRange.second, 0, textRange.first);
+    }
+}
+
+
+void Compositor::cmdBeginPass(VkCommandBuffer commandBuffer, GPU::Image* target, bool clear, bool opaque)
+{
+    target->cmdBarrierTransition(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
     VkRenderingAttachmentInfo attachment = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-    attachment.imageView = _output->imageView();
+    attachment.imageView = target->imageView();
     attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachment.loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachment.clearValue.color = { { 0.f, 0.f, 0.f, 1.f } };
+    attachment.clearValue.color = { { 0.f, 0.f, 0.f, opaque ? 1.f : 0.f } };
 
     VkRenderingInfo renderingInfo = { VK_STRUCTURE_TYPE_RENDERING_INFO };
-    renderingInfo.renderArea = { { 0, 0 }, { outputWidth, outputHeight } };
+    renderingInfo.renderArea = { { 0, 0 }, { target->width(), target->height() } };
     renderingInfo.layerCount = 1;
     renderingInfo.colorAttachmentCount = 1;
     renderingInfo.pColorAttachments = &attachment;
 
     vkCmdBeginRendering(commandBuffer, &renderingInfo);
 
-    const VkViewport viewport = { 0.f, 0.f, (float)outputWidth, (float)outputHeight, 0.f, 1.f };
-    const VkRect2D scissor = { { 0, 0 }, { outputWidth, outputHeight } };
+    const VkViewport viewport = { 0.f, 0.f, (float)target->width(), (float)target->height(), 0.f, 1.f };
+    const VkRect2D scissor = { { 0, 0 }, { target->width(), target->height() } };
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+}
 
-    for (size_t i = 0; i < layers.size(); i++) {
-        const Layer& layer = layers[i];
 
-        // Wipe transition: the layer only covers the left part of the frame.
-        const VkRect2D layerScissor = { { 0, 0 }, { (uint32_t)std::clamp(std::lround(layer.wipe * (float)outputWidth), 0L, (long)outputWidth), outputHeight } };
+void Compositor::cmdEndPass(VkCommandBuffer commandBuffer, GPU::Image* target)
+{
+    vkCmdEndRendering(commandBuffer);
+    target->cmdBarrierTransition(commandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
 
-        if (layerScissor.extent.width == 0) {
-            continue;
-        }
 
-        vkCmdSetScissor(commandBuffer, 0, 1, &layerScissor);
+namespace {
 
-        if (layer.image) {
-            const float opacity = layerOpacity(layer);
+// The code of the user inside what Vulkan needs (see core/Shaders.h).
+std::string wrapShader(const ShaderDef& shader)
+{
+    std::string code = "#version 460\n";
 
-            // The picture fits the frame, then the transform applies. The
-            // crop keeps the rest of the picture in place.
-            const float fit = std::min((float)width / (float)layer.width, (float)height / (float)layer.height);
-            const float hw = 0.5f * layer.width * fit;
-            const float hh = 0.5f * layer.height * fit;
-            const Placement place = placement(layer, width, height);
-
-            const Frame& frame = layer.clip->frame;
-            const float cropLeft = std::clamp(frame.cropLeft, 0.f, 0.99f);
-            const float cropTop = std::clamp(frame.cropTop, 0.f, 0.99f);
-            const float cropRight = std::clamp(frame.cropRight, 0.f, 0.99f - cropLeft);
-            const float cropBottom = std::clamp(frame.cropBottom, 0.f, 0.99f - cropTop);
-
-            const float picture[4] = { -hw, -hh, hw, hh };
-            const float box[4] = {
-                -hw + 2.f * hw * cropLeft, -hh + 2.f * hh * cropTop,
-                hw - 2.f * hw * cropRight, hh - 2.f * hh * cropBottom };
-
-            bounds[i].corners = { place.apply(box[0], box[1]), place.apply(box[2], box[1]), place.apply(box[2], box[3]), place.apply(box[0], box[3]) };
-
-            if (opacity <= 0.f) {
-                continue;
-            }
-
-            const VkDescriptorSet set = allocateSet(_layerSetLayout);
-
-            if (!set) {
-                continue;
-            }
-
-            const VkDescriptorImageInfo imageInfo = { _sampler, layer.image->imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-
-            VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-            write.dstSet = set;
-            write.dstBinding = 0;
-            write.descriptorCount = 1;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.pImageInfo = &imageInfo;
-            vkUpdateDescriptorSets(_device.device(), 1, &write, 0, nullptr);
-
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _layerPipeline);
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _layerPipelineLayout, 0, 1, &set, 0, nullptr);
-
-            // A quad over the given rectangle of the layer, grown by margin
-            // (layer pixels), the box shaped in it.
-            const float pixel = 1.f / std::max(place.scale, 1e-3f);
-            const float border = std::max(0.f, frame.borderWidth);
-
-            auto draw = [&](const float* shownBox, float margin, const Color& extra, bool shadow) {
-                LayerParameters parameters = {};
-                const float local[4] = { shownBox[0] - margin, shownBox[1] - margin, shownBox[2] + margin, shownBox[3] + margin };
-
-                toNdc(place.apply(local[0], local[1]), width, height, parameters.corners01);
-                toNdc(place.apply(local[2], local[1]), width, height, parameters.corners01 + 2);
-                toNdc(place.apply(local[0], local[3]), width, height, parameters.corners23);
-                toNdc(place.apply(local[2], local[3]), width, height, parameters.corners23 + 2);
-
-                parameters.color[0] = parameters.color[1] = parameters.color[2] = 1.f;
-                parameters.color[3] = opacity;
-                std::copy(local, local + 4, parameters.local);
-                std::copy(picture, picture + 4, parameters.picture);
-                std::copy(shownBox, shownBox + 4, parameters.box);
-                parameters.extra[0] = extra.r;
-                parameters.extra[1] = extra.g;
-                parameters.extra[2] = extra.b;
-                parameters.extra[3] = extra.a;
-                parameters.shape[0] = std::max(0.f, frame.cornerRadius);
-                parameters.shape[1] = border;
-                parameters.shape[2] = std::max(0.f, frame.shadowSoftness);
-                parameters.shape[3] = shadow ? 1.f : 0.f;
-
-                vkCmdPushConstants(commandBuffer, _layerPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(parameters), &parameters);
-                vkCmdDraw(commandBuffer, 4, 1, 0, 0);
-            };
-
-            // Shadow, below.
-            if (frame.hasShadow()) {
-                const float shadowBox[4] = {
-                    box[0] + frame.shadowOffsetX, box[1] + frame.shadowOffsetY,
-                    box[2] + frame.shadowOffsetX, box[3] + frame.shadowOffsetY };
-
-                draw(shadowBox, border + std::max(0.f, frame.shadowSoftness) + 2.f * pixel, frame.shadowColor, true);
-            }
-
-            draw(box, border + 2.f * pixel, frame.borderColor, false);
-        }
-        else if (textRanges[i].second > 0) {
-            const VkDescriptorSet set = allocateSet(_textSetLayout);
-
-            if (!set) {
-                continue;
-            }
-
-            const VkDescriptorImageInfo atlasInfo = { _sampler, _atlas->imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-            const VkDescriptorBufferInfo bufferInfo = { _glyphBuffer->buffer(), 0, VK_WHOLE_SIZE };
-
-            VkWriteDescriptorSet writes[2] = {};
-            writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[0].dstSet = set;
-            writes[0].dstBinding = 0;
-            writes[0].descriptorCount = 1;
-            writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[0].pImageInfo = &atlasInfo;
-            writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[1].dstSet = set;
-            writes[1].dstBinding = 1;
-            writes[1].descriptorCount = 1;
-            writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[1].pBufferInfo = &bufferInfo;
-            vkUpdateDescriptorSets(_device.device(), 2, writes, 0, nullptr);
-
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _textPipeline);
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _textPipelineLayout, 0, 1, &set, 0, nullptr);
-            vkCmdDraw(commandBuffer, 4, textRanges[i].second, 0, textRanges[i].first);
-        }
+    if (shader.kind == ShaderKind::Generator) {
+        code +=
+            "layout(push_constant) uniform QuickEditParameters { vec2 resolution; float time; float duration; vec4 p0; vec4 p1; } qe;\n"
+            "layout(location = 0) in vec2 qeUV;\n"
+            "layout(location = 0) out vec4 qeColor;\n"
+            "#define iResolution qe.resolution\n"
+            "#define iTime qe.time\n"
+            "#define iDuration qe.duration\n"
+            "float param(int i) { return i < 4 ? qe.p0[i] : qe.p1[i - 4]; }\n"
+            "#line 1\n" + shader.source + "\n"
+            "void main() { qeColor = generate(qeUV, qe.time); }\n";
+    }
+    else {
+        code +=
+            "layout(set = 0, binding = 0) uniform sampler2D qeFrom;\n"
+            "layout(set = 0, binding = 1) uniform sampler2D qeTo;\n"
+            "layout(push_constant) uniform QuickEditParameters { float progress; float ratio; } qe;\n"
+            "layout(location = 0) in vec2 qeUV;\n"
+            "layout(location = 0) out vec4 qeColor;\n"
+            "#define progress qe.progress\n"
+            "#define ratio qe.ratio\n"
+            "vec4 getFromColor(vec2 uv) { return texture(qeFrom, uv); }\n"
+            "vec4 getToColor(vec2 uv) { return texture(qeTo, uv); }\n"
+            "#line 1\n" + shader.source + "\n"
+            "void main() { qeColor = transition(qeUV); }\n";
     }
 
-    vkCmdEndRendering(commandBuffer);
+    return code;
+}
 
-    _output->cmdBarrierTransition(commandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+} // namespace
 
-    // Top first, for picking.
-    std::reverse(bounds.begin(), bounds.end());
-    _bounds = std::move(bounds);
+
+VkPipeline Compositor::userPipeline(const ShaderDef& shader)
+{
+    const std::string code = wrapShader(shader);
+
+    if (const auto it = _userPipelines.find(code); it != _userPipelines.end()) {
+        return it->second;
+    }
+
+    std::vector<uint32_t> spirv;
+    std::string error;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+
+    if (compileFragmentShader(code, shader.name, spirv, error)) {
+        const VkPipelineLayout layout = (shader.kind == ShaderKind::Generator) ? _generatorPipelineLayout : _transitionPipelineLayout;
+        pipeline = createPipeline(_pipelineCache, layout, effect_vert, effect_vert_size, spirv.data(), spirv.size() * sizeof(uint32_t), false);
+        _shaderErrors.erase(shader.id);
+    }
+    else {
+        _shaderErrors[shader.id] = error;
+        SDL_Log("Shader %s: %s", shader.name.c_str(), error.c_str());
+    }
+
+    _userPipelines[code] = pipeline;
+
+    return pipeline;
+}
+
+
+std::string Compositor::shaderError(const std::string& shaderId) const
+{
+    const auto it = _shaderErrors.find(shaderId);
+    return (it != _shaderErrors.end()) ? it->second : std::string();
+}
+
+
+GPU::Image* Compositor::cmdGenerate(VkCommandBuffer commandBuffer, const Layer& layer, uint32_t width, uint32_t height)
+{
+    const VkPipeline pipeline = userPipeline(*layer.generator);
+
+    if (!pipeline) {
+        return nullptr;
+    }
+
+    struct
+    {
+        float resolution[2];
+        float time;
+        float duration;
+        float parameters[8];
+    } parameters = {};
+
+    parameters.resolution[0] = (float)width;
+    parameters.resolution[1] = (float)height;
+    parameters.time = (float)timeToSeconds(layer.localTime);
+    parameters.duration = (float)timeToSeconds(layer.clip->duration);
+
+    for (size_t i = 0; i < layer.clip->shaderParameters.size() && i < 8; i++) {
+        parameters.parameters[i] = layer.clip->shaderParameters[i].at(layer.localTime);
+    }
+
+    GPU::Image* target = passTarget(width, height);
+    cmdBeginPass(commandBuffer, target, false);
+
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdPushConstants(commandBuffer, _generatorPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(parameters), &parameters);
+    vkCmdDraw(commandBuffer, 4, 1, 0, 0);
+
+    cmdEndPass(commandBuffer, target);
+
+    return target;
+}
+
+
+GPU::Image* Compositor::cmdTransition(VkCommandBuffer commandBuffer, const ShaderDef& shader, float progress,
+    const GPU::Image* from, const GPU::Image* to, uint32_t width, uint32_t height)
+{
+    const VkPipeline pipeline = userPipeline(shader);
+    const VkDescriptorSet set = pipeline ? allocateSet(_transitionSetLayout) : VK_NULL_HANDLE;
+
+    if (!set) {
+        return nullptr;
+    }
+
+    const VkDescriptorImageInfo images[2] = {
+        { _sampler, from->imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        { _sampler, to->imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+    };
+
+    VkWriteDescriptorSet writes[2] = {};
+
+    for (uint32_t i = 0; i < 2; i++) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = set;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &images[i];
+    }
+
+    vkUpdateDescriptorSets(_device.device(), 2, writes, 0, nullptr);
+
+    const float parameters[2] = { std::clamp(progress, 0.f, 1.f), (float)width / (float)std::max(1u, height) };
+
+    GPU::Image* target = passTarget(width, height);
+    cmdBeginPass(commandBuffer, target, false);
+
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _transitionPipelineLayout, 0, 1, &set, 0, nullptr);
+    vkCmdPushConstants(commandBuffer, _transitionPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(parameters), parameters);
+    vkCmdDraw(commandBuffer, 4, 1, 0, 0);
+
+    cmdEndPass(commandBuffer, target);
+
+    return target;
 }

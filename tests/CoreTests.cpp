@@ -11,8 +11,10 @@
 #include <core/TextEdit.h>
 #include <core/Json.h>
 #include <core/Project.h>
+#include <core/Subtitles.h>
 #include <core/Time.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -196,6 +198,156 @@ void testSaveLoadAndHistory()
 
     std::filesystem::remove_all(dir);
 }
+
+void testMediaFolders()
+{
+    Project project;
+    const Id a = project.importMedia("C:/media/a.mp4");
+    const Id b = project.importMedia("C:/media/b.mp4");
+
+    const std::string clips = project.addMediaFolder("", "Clips");
+    const std::string day = project.addMediaFolder(clips, "Day 1");
+    CHECK(day == "Clips/Day 1");
+    CHECK(project.addMediaFolder("", "Clips") == "Clips 2");
+
+    project.moveMediaToFolder(a, day);
+    project.moveMediaToFolder(b, clips);
+    CHECK(project.renameMediaFolder(clips, "Footage"));
+    CHECK(project.findMedia(a)->folder == "Footage/Day 1");
+    CHECK(project.findMedia(b)->folder == "Footage");
+    CHECK(!project.renameMediaFolder("Footage", "Clips 2"));     // Taken
+
+    // Saved and loaded.
+    Project loaded;
+    loaded.fromJson(project.toJson({}), {});
+    CHECK(loaded.findMedia(a)->folder == "Footage/Day 1");
+    CHECK(loaded.mediaFolders().size() == 3);
+
+    // Effects of a clip, saved and loaded.
+    {
+        Project fx;
+        Sequence& sequence = fx.sequence();
+        const Id m = fx.importMedia("C:/media/c.mp4");
+        const Id clipId = fx.addClip(m, sequence.videoTracks[0].id, 0);
+        Clip* clip = fx.findClip(clipId);
+        clip->videoEffects.push_back(makeVideoEffect(fx.newId(), "blur"));
+        clip->videoEffects.back().parameters[0] = AnimatedValue(25.f);
+        sequence.videoTracks[0].videoEffects.push_back(makeVideoEffect(fx.newId(), "color"));
+
+        Project back;
+        back.fromJson(fx.toJson({}), {});
+        const Clip* loadedClip = back.findClip(clipId);
+        CHECK(loadedClip && loadedClip->videoEffects.size() == 1 && loadedClip->videoEffects[0].type == "blur");
+        CHECK(loadedClip && loadedClip->videoEffects[0].parameters[0].value == 25.f);
+        CHECK(back.sequence().videoTracks[0].videoEffects.size() == 1);
+        CHECK(back.sequence().videoTracks[0].videoEffects[0].parameters.size() == 6);
+    }
+
+    // Removed: its media go up.
+    project.removeMediaFolder("Footage");
+    CHECK(project.findMedia(a)->folder.empty());
+    CHECK(project.findMedia(b)->folder.empty());
+    CHECK(project.mediaFolders().size() == 1);
+}
+
+
+void testSequences()
+{
+    Project project;
+    const Id main = project.sequence().id;
+    const Id intro = project.addSequence("Intro");
+
+    CHECK(project.sequences().size() == 2);
+    CHECK(project.switchSequence(intro));
+    CHECK(project.sequence().name == "Intro");
+
+    // Something in the intro, then the intro in the main sequence.
+    const Id text = project.addTextClip(project.sequence().videoTracks[0].id, 0, 3 * TicksPerSecond, "Hello");
+    CHECK(text != InvalidId);
+    CHECK(project.switchSequence(main));
+
+    const Id nested = project.addSequenceClip(intro, project.sequence().videoTracks[0].id, TicksPerSecond);
+    CHECK(nested != InvalidId);
+    CHECK(project.findClip(nested)->duration == 3 * TicksPerSecond);
+    CHECK(project.sequenceContains(main, intro));
+
+    // Never inside itself, even through another.
+    CHECK(project.switchSequence(intro));
+    CHECK(project.addSequenceClip(main, project.sequence().videoTracks[1].id, 0) == InvalidId);
+    CHECK(project.switchSequence(main));
+
+    // Nested: kept.
+    CHECK(!project.removeSequence(intro));
+
+    // Saved and loaded: both, the current one edited.
+    Project loaded;
+    loaded.fromJson(project.toJson({}), {});
+    CHECK(loaded.sequences().size() == 2);
+    CHECK(loaded.sequence().id == main);
+    CHECK(loaded.findSequence(intro) && loaded.findSequence(intro)->videoTracks[0].clips.size() == 1);
+    CHECK(loaded.findClip(nested) && loaded.findClip(nested)->kind == ClipKind::Sequence);
+
+    // The sound of the intro, with the nested clip: at 1 s in the main one.
+    CHECK(project.switchSequence(intro));
+    const Id voice = project.importMedia("C:/media/voice.wav");
+    project.findMedia(voice)->hasAudio = true;
+    project.findMedia(voice)->type = MediaType::Audio;
+    project.findMedia(voice)->duration = 2 * TicksPerSecond;
+    CHECK(project.addClip(voice, project.sequence().audioTracks[0].id, 0) != InvalidId);
+    CHECK(project.switchSequence(main));
+
+    auto buffer = std::make_shared<media::AudioBuffer>();
+    buffer->sampleRate = project.sequence().sampleRate;
+    buffer->samples.assign(2 * 48000 * 2, 0.5f);
+
+    const auto graph = audio::buildMixGraph(project, [&](Id) { return buffer; });
+    bool found = false;
+
+    for (const audio::MixTrack& track : graph->tracks) {
+        for (const audio::MixClip& clip : track.clips) {
+            found |= clip.start == 48000 && clip.length == 2 * 48000;
+        }
+    }
+
+    CHECK(found);
+}
+
+
+void testSubtitles()
+{
+    const std::string srt =
+        "\xef\xbb\xbf" "1\r\n00:00:01,500 --> 00:00:03,000\r\nHello\r\nworld\r\n\r\n"
+        "2\r\n00:01:00,000 --> 00:01:02,250\r\nSecond\r\n";
+
+    const std::vector<SubtitleCue> cues = parseSrt(srt);
+    CHECK(cues.size() == 2);
+    CHECK(cues[0].start == secondsToTime(1.5) && cues[0].end == secondsToTime(3.0));
+    CHECK(cues[0].text == "Hello\nworld");
+    CHECK(cues[1].end == secondsToTime(62.25));
+
+    // Into a track, saved, written back.
+    Project project;
+    Sequence& sequence = project.sequence();
+    sequence.addTrack(TrackType::Subtitle, project.newId(), InvalidId);
+
+    for (const SubtitleCue& cue : cues) {
+        CHECK(project.addTextClip(sequence.subtitleTracks[0].id, cue.start, cue.end - cue.start, cue.text) != InvalidId);
+    }
+
+    Project loaded;
+    loaded.fromJson(project.toJson({}), {});
+    CHECK(loaded.sequence().subtitleTracks.size() == 1);
+    CHECK(subtitleCues(loaded.sequence()).size() == 2);
+
+    const std::string written = toSrt(subtitleCues(loaded.sequence()));
+    CHECK(written.find("00:00:01,500 --> 00:00:03,000\r\nHello\r\nworld") != std::string::npos);
+    CHECK(parseSrt(written).size() == 2);
+
+    // Shown at 2 s, at the bottom.
+    const std::vector<Clip> shown = subtitleClipsAt(loaded.sequence(), secondsToTime(2.0));
+    CHECK(shown.size() == 1 && shown[0].transform.y.value > 0.f);
+}
+
 
 void testRippleDelete()
 {
@@ -521,6 +673,17 @@ void testDecodeAndMix()
     CHECK(early > 0.5f * peak - 0.01f);
     CHECK(late < 0.2f * peak);
 
+    // An effect on the clip alone: here, silence.
+    struct Mute : audio::AudioEffect
+    {
+        void process(float* samples, int frames, int64_t) override { std::fill(samples, samples + 2 * frames, 0.f); }
+    };
+
+    graph.tracks[0].clips[0].fadeOut = 0;
+    graph.tracks[0].clips[0].effects.push_back(std::make_shared<Mute>());
+    audio::mix(graph, 0, 48000 * 3, output.data());
+    CHECK(*std::max_element(output.begin(), output.end()) == 0.f);
+
     std::filesystem::remove_all(dir);
 }
 
@@ -534,6 +697,9 @@ int main()
     testProjectEdits();
     testSaveLoadAndHistory();
     testRippleDelete();
+    testMediaFolders();
+    testSequences();
+    testSubtitles();
     testAnimation();
     testTextAndFreeze();
     testTransitions();

@@ -75,6 +75,25 @@ std::vector<std::reference_wrapper<const Track>> allSoundTracks(const Project& p
     return tracks;
 }
 
+
+// The slots of the sound tracks and of their clips, with their owner (the
+// track or the clip).
+template<typename ProjectType, typename F>
+void forEachSlot(ProjectType& project, F&& f)
+{
+    for (auto& track : allSoundTracks(project)) {
+        for (auto& slot : track.get().effects) {
+            f(slot, track.get().id);
+        }
+
+        for (auto& clip : track.get().clips) {
+            for (auto& slot : clip.effects) {
+                f(slot, clip.id);
+            }
+        }
+    }
+}
+
 } // namespace
 
 
@@ -102,12 +121,7 @@ bool EffectRack::sync(const Project& project)
     _sampleRate = sampleRate;
 
     std::map<Id, const EffectSlot*> slots;
-
-    for (const Track& track : allSoundTracks(project)) {
-        for (const EffectSlot& slot : track.effects) {
-            slots[slot.id] = &slot;
-        }
-    }
+    forEachSlot(project, [&](const EffectSlot& slot, Id) { slots[slot.id] = &slot; });
 
     // Removed slots, or other plugins in them.
     for (auto it = _instances.begin(); it != _instances.end();) {
@@ -164,11 +178,11 @@ bool EffectRack::sync(const Project& project)
 }
 
 
-std::vector<std::shared_ptr<audio::AudioEffect>> EffectRack::effectsOf(const Track& track) const
+std::vector<std::shared_ptr<audio::AudioEffect>> EffectRack::effectsOf(const std::vector<EffectSlot>& slots) const
 {
     std::vector<std::shared_ptr<audio::AudioEffect>> effects;
 
-    for (const EffectSlot& slot : track.effects) {
+    for (const EffectSlot& slot : slots) {
         const auto it = _instances.find(slot.id);
 
         if (!slot.bypass && it != _instances.end() && it->second.effect) {
@@ -196,13 +210,11 @@ std::string EffectRack::error(Id slotId) const
 
 void EffectRack::saveStates(Project& project) const
 {
-    for (Track& track : allSoundTracks(project)) {
-        for (EffectSlot& slot : track.effects) {
-            if (audio::Vst3Plugin* instance = plugin(slot.id)) {
-                slot.state = base64Encode(instance->saveState());
-            }
+    forEachSlot(project, [&](EffectSlot& slot, Id) {
+        if (audio::Vst3Plugin* instance = plugin(slot.id)) {
+            slot.state = base64Encode(instance->saveState());
         }
-    }
+    });
 }
 
 
@@ -210,17 +222,15 @@ bool EffectRack::completeSlots(Project& project) const
 {
     bool changed = false;
 
-    for (Track& track : allSoundTracks(project)) {
-        for (EffectSlot& slot : track.effects) {
-            audio::Vst3Plugin* instance = plugin(slot.id);
+    forEachSlot(project, [&](EffectSlot& slot, Id) {
+        audio::Vst3Plugin* instance = plugin(slot.id);
 
-            if (instance && slot.classId.empty()) {
-                slot.classId = instance->classId();
-                slot.name = instance->name();
-                changed = true;
-            }
+        if (instance && slot.classId.empty()) {
+            slot.classId = instance->classId();
+            slot.name = instance->name();
+            changed = true;
         }
-    }
+    });
 
     return changed;
 }
@@ -242,19 +252,17 @@ std::map<Id, std::vector<std::shared_ptr<audio::AudioEffect>>> EffectRack::creat
 {
     std::map<Id, std::vector<std::shared_ptr<audio::AudioEffect>>> effects;
 
-    for (const Track& track : allSoundTracks(project)) {
-        for (const EffectSlot& slot : track.effects) {
-            if (slot.bypass) {
-                continue;
-            }
-
-            std::string error;
-
-            if (std::shared_ptr<PluginEffect> effect = loadSlot(slot, project.sequence().sampleRate, error)) {
-                effects[track.id].push_back(std::move(effect));
-            }
+    forEachSlot(project, [&](const EffectSlot& slot, Id owner) {
+        if (slot.bypass) {
+            return;
         }
-    }
+
+        std::string error;
+
+        if (std::shared_ptr<PluginEffect> effect = loadSlot(slot, project.sequence().sampleRate, error)) {
+            effects[owner].push_back(std::move(effect));
+        }
+    });
 
     return effects;
 }

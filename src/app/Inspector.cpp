@@ -109,16 +109,26 @@ std::string Inspector::draw(Project& project, const std::vector<Id>& selection, 
 
     if (!clip) {
         sequenceSection(project, edit);
+        ImGui::Spacing();
+        ImGui::TextDisabled("Select a clip to edit its properties.");
         return edit;
     }
 
     const Track* track = project.findTrackOfClip(clip->id);
     const MediaItem* media = project.findMedia(clip->mediaId);
+
+    // A line of subtitles: its text and timing, the style of them all.
+    if (track && track->type == TrackType::Subtitle) {
+        subtitleSection(project, *clip, edit);
+        return edit;
+    }
     const bool video = track && track->type == TrackType::Video;
     const Sequence& sequence = project.sequence();
     const Time localTime = std::clamp<Time>(playhead - clip->start, 0, clip->duration);
 
     const char* title = (clip->kind == ClipKind::Text) ? ICON_MD_TEXT_FIELDS " Text"
+        : (clip->kind == ClipKind::Generator) ? ICON_MD_AUTO_AWESOME " Generator"
+        : (clip->kind == ClipKind::Sequence) ? ICON_MD_VIDEO_LIBRARY " Nested Sequence"
         : clip->frozen ? ICON_MD_PAUSE_CIRCLE " Freeze Frame"
         : video ? ICON_MD_MOVIE " Video Clip" : ICON_MD_AUDIOTRACK " Audio Clip";
 
@@ -155,15 +165,19 @@ std::string Inspector::draw(Project& project, const std::vector<Id>& selection, 
         textSection(*clip, fonts, textSelection, edit);
     }
 
+    if (clip->kind == ClipKind::Generator) {
+        generatorSection(project, *clip, localTime, edit);
+    }
+
     if (video) {
         transformSection(*clip, localTime, edit);
 
-        if (clip->kind == ClipKind::Media) {
+        if (clip->kind != ClipKind::Text) {
             frameSection(*clip, edit);
         }
 
         presetsSection(*clip, edit);
-        transitionSection(*clip, edit);
+        transitionSection(project, *clip, edit);
     }
     else {
         ImGui::SeparatorText("Audio");
@@ -400,6 +414,111 @@ void Inspector::frameSection(Clip& clip, std::string& edit)
 }
 
 
+void Inspector::videoEffectsSection(Project& project, std::vector<VideoEffect>& effects, Time localTime, std::string& edit)
+{
+    int removed = -1;
+    int moveUp = -1;
+
+    for (int i = 0; i < (int)effects.size(); i++) {
+        VideoEffect& effect = effects[i];
+        const VideoEffectInfo* info = effect.info();
+
+        if (!info) {
+            continue;
+        }
+
+        ImGui::PushID((int)effect.id);
+
+        if (ImGui::Checkbox("##enabled", &effect.enabled)) {
+            edit = effect.enabled ? "Enable effect" : "Disable effect";
+        }
+
+        ImGui::SetItemTooltip("On / off");
+        ImGui::SameLine();
+
+        const std::string title = std::string(info->icon) + " " + info->name;
+        const float buttons = 2.f * ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x;
+        ImGui::SetNextItemAllowOverlap();
+        const bool open = ImGui::CollapsingHeader(title.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
+
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - buttons);
+        ImGui::BeginDisabled(i == 0);
+
+        if (ImGui::SmallButton(ICON_MD_ARROW_UPWARD)) {
+            moveUp = i;
+        }
+
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("Earlier in the chain");
+        ImGui::SameLine();
+
+        if (ImGui::SmallButton(ICON_MD_DELETE)) {
+            removed = i;
+        }
+
+        ImGui::SetItemTooltip("Remove");
+
+        if (open && ImGui::BeginTable("##parameters", 2)) {
+            ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+            size_t first = 0;
+
+            // A color, from its three components.
+            if (info->colorParameter && effect.parameters.size() >= 3) {
+                propertyLabel("Color");
+                float rgb[3] = { effect.parameters[0].at(localTime), effect.parameters[1].at(localTime), effect.parameters[2].at(localTime) };
+
+                if (ImGui::ColorEdit3("##color", rgb, ImGuiColorEditFlags_NoInputs)) {
+                    for (int c = 0; c < 3; c++) effect.parameters[c].set(localTime, rgb[c]);
+                }
+
+                finishedEdit(edit, "Change effect");
+                ImGui::SameLine();
+                ImGui::TextDisabled("Pick the key color with the dropper.");
+                first = 3;
+            }
+
+            for (size_t p = first; p < info->parameters.size() && p < effect.parameters.size(); p++) {
+                const VideoEffectParameter& parameter = info->parameters[p];
+                const float range = (parameter.maximum - parameter.minimum) * parameter.displayScale;
+
+                animatedRow(parameter.name, effect.parameters[p], localTime, range / 300.f,
+                    parameter.minimum * parameter.displayScale, parameter.maximum * parameter.displayScale,
+                    parameter.format, parameter.displayScale, edit);
+            }
+
+            ImGui::EndTable();
+        }
+
+        ImGui::PopID();
+    }
+
+    if (moveUp > 0) {
+        std::swap(effects[moveUp], effects[moveUp - 1]);
+        edit = "Reorder effects";
+    }
+
+    if (removed >= 0) {
+        effects.erase(effects.begin() + removed);
+        edit = "Remove effect";
+    }
+
+    ImGui::SetNextItemWidth(-FLT_MIN);
+
+    if (ImGui::BeginCombo("##addVideoEffect", ICON_MD_ADD " Add a video effect...", ImGuiComboFlags_HeightLarge)) {
+        for (const VideoEffectInfo& info : videoEffectInfos()) {
+            if (ImGui::Selectable((std::string(info.icon) + " " + info.name).c_str())) {
+                effects.push_back(makeVideoEffect(project.newId(), info.id));
+                edit = "Add effect";
+            }
+        }
+
+        ImGui::EndCombo();
+    }
+}
+
+
 void Inspector::presetsSection(Clip& clip, std::string& edit)
 {
     ImGui::SeparatorText(ICON_MD_AUTO_AWESOME " Animation Presets");
@@ -475,7 +594,137 @@ void Inspector::presetsSection(Clip& clip, std::string& edit)
 }
 
 
-void Inspector::transitionSection(Clip& clip, std::string& edit)
+void Inspector::subtitleSection(Project& project, Clip& clip, std::string& edit)
+{
+    const Sequence& sequence = project.sequence();
+    ImGui::SeparatorText(ICON_MD_SUBTITLES " Subtitle");
+
+    // The text: one span, plain.
+    if (clip.text.spans.empty()) {
+        clip.text.spans.emplace_back();
+    }
+
+    std::string text = clip.text.plainText();
+
+    if (ImGui::InputTextMultiline("##subtitle", &text, ImVec2(-FLT_MIN, 4.f * ImGui::GetTextLineHeightWithSpacing()))) {
+        clip.text.spans.resize(1);
+        clip.text.spans[0].text = text;
+    }
+
+    finishedEdit(edit, "Edit subtitle");
+
+    if (ImGui::BeginTable("##subtitleTiming", 2)) {
+        ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+        propertyLabel("Start");
+        ImGui::TextUnformatted(formatTimecode(clip.start, sequence.frameRate).c_str());
+
+        propertyLabel("Duration");
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        float seconds = (float)timeToSeconds(clip.duration);
+
+        if (ImGui::DragFloat("##duration", &seconds, 0.01f, 0.1f, 600.f, "%.2f s")) {
+            Time freeStart, freeEnd;
+            const Track* track = project.findTrackOfClip(clip.id);
+            Time limit = secondsToTime(600.0);
+
+            if (track && project.freeRangeAt(*track, clip.start, clip.id, freeStart, freeEnd)) {
+                limit = freeEnd - clip.start;
+            }
+
+            clip.duration = std::clamp<Time>(secondsToTime(seconds), frameToTime(1, sequence.frameRate), limit);
+        }
+
+        finishedEdit(edit, "Change subtitle duration");
+        ImGui::EndTable();
+    }
+
+    subtitleStyleSection(project, edit);
+}
+
+
+void Inspector::subtitleStyleSection(Project& project, std::string& edit)
+{
+    SubtitleStyle& style = project.sequence().subtitleStyle;
+    ImGui::SeparatorText(ICON_MD_FORMAT_COLOR_TEXT " Subtitles of the Sequence");
+
+    if (!ImGui::BeginTable("##subtitleStyle", 2)) {
+        return;
+    }
+
+    ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed);
+    ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+    propertyLabel("Size");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::DragFloat("##subtitleSize", &style.size, 0.5f, 8.f, 400.f, "%.0f px");
+    finishedEdit(edit, "Change subtitles");
+
+    propertyLabel("Color");
+    colorEdit("##subtitleColor", style.color);
+    finishedEdit(edit, "Change subtitles");
+
+    propertyLabel("Outline");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::DragFloat("##subtitleOutline", &style.outlineWidth, 0.1f, 0.f, 20.f, "%.1f px");
+    finishedEdit(edit, "Change subtitles");
+
+    propertyLabel("Margin");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::DragFloat("##subtitleMargin", &style.bottomMargin, 0.5f, -2000.f, 2000.f, "%.0f px");
+    ImGui::SetItemTooltip("From the bottom of the frame");
+    finishedEdit(edit, "Change subtitles");
+
+    ImGui::EndTable();
+}
+
+
+void Inspector::generatorSection(Project& project, Clip& clip, Time localTime, std::string& edit)
+{
+    const ShaderDef* shader = project.findShader(clip.shader);
+    ImGui::SeparatorText((std::string(ICON_MD_AUTO_AWESOME " ") + (shader ? shader->name : clip.shader)).c_str());
+
+    if (!shader) {
+        ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " Shader not found");
+        return;
+    }
+
+    // As many values as the shader has parameters.
+    if (clip.shaderParameters.size() < shader->parameters.size()) {
+        for (size_t i = clip.shaderParameters.size(); i < shader->parameters.size(); i++) {
+            clip.shaderParameters.emplace_back(shader->parameters[i].defaultValue);
+        }
+    }
+
+    if (!shader->parameters.empty() && ImGui::BeginTable("##shaderParameters", 2)) {
+        ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+        for (size_t i = 0; i < shader->parameters.size(); i++) {
+            const ShaderParameter& parameter = shader->parameters[i];
+            animatedRow(parameter.name.c_str(), clip.shaderParameters[i], localTime, (parameter.maximum - parameter.minimum) / 300.f,
+                parameter.minimum, parameter.maximum, "%.3g", 1.f, edit);
+        }
+
+        ImGui::EndTable();
+    }
+
+    const std::string error = shaderError ? shaderError(shader->id) : std::string();
+
+    if (!error.empty()) {
+        ImGui::PushTextWrapPos(0.f);
+        ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " %s", error.c_str());
+        ImGui::PopTextWrapPos();
+    }
+
+    if (shader->id.rfind("file:", 0) == 0 && openShaderFolder && ImGui::Button(ICON_MD_FOLDER_OPEN " Shaders Folder")) {
+        openShaderFolder();
+    }
+}
+
+
+void Inspector::transitionSection(Project& project, Clip& clip, std::string& edit)
 {
     ImGui::SeparatorText(ICON_MD_COMPARE_ARROWS " Transition In");
 
@@ -489,7 +738,10 @@ void Inspector::transitionSection(Clip& clip, std::string& edit)
     propertyLabel("Type");
     ImGui::SetNextItemWidth(-FLT_MIN);
 
-    if (ImGui::BeginCombo("##type", transitionName(clip.transitionIn.type))) {
+    const ShaderDef* current = (clip.transitionIn.type == TransitionType::Shader) ? project.findShader(clip.transitionIn.shader) : nullptr;
+    const std::string currentName = current ? std::string(ICON_MD_AUTO_AWESOME " ") + current->name : transitionName(clip.transitionIn.type);
+
+    if (ImGui::BeginCombo("##type", currentName.c_str(), ImGuiComboFlags_HeightLarge)) {
         for (int type = 0; type <= (int)TransitionType::Zoom; type++) {
             const bool selected = (int)clip.transitionIn.type == type;
 
@@ -499,7 +751,48 @@ void Inspector::transitionSection(Clip& clip, std::string& edit)
             }
         }
 
+        // Shaders: built in, then the user's.
+        ImGui::Separator();
+
+        auto shaderItem = [&](const ShaderDef& shader) {
+            if (shader.kind != ShaderKind::Transition) {
+                return;
+            }
+
+            const bool selected = current && current->id == shader.id;
+
+            if (ImGui::Selectable((std::string(ICON_MD_AUTO_AWESOME " ") + shader.name).c_str(), selected) && !selected) {
+                clip.transitionIn.type = TransitionType::Shader;
+                clip.transitionIn.shader = shader.id;
+
+                if (shader.id.rfind("builtin:", 0) != 0) {
+                    project.storeShader(shader);
+                }
+
+                edit = "Change transition";
+            }
+        };
+
+        for (const ShaderDef& shader : builtinShaders()) shaderItem(shader);
+
+        if (userShaders) {
+            for (const ShaderDef& shader : *userShaders) shaderItem(shader);
+        }
+
         ImGui::EndCombo();
+    }
+
+    if (current && shaderError) {
+        const std::string error = shaderError(current->id);
+
+        if (!error.empty()) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TableNextColumn();
+            ImGui::PushTextWrapPos(0.f);
+            ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " %s", error.c_str());
+            ImGui::PopTextWrapPos();
+        }
     }
 
     ImGui::BeginDisabled(clip.transitionIn.type == TransitionType::None);
@@ -881,7 +1174,4 @@ void Inspector::sequenceSection(Project& project, std::string& edit)
 
         ImGui::EndCombo();
     }
-
-    ImGui::Spacing();
-    ImGui::TextDisabled("Select a clip to edit its properties.");
 }
