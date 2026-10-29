@@ -7,6 +7,7 @@
 #include <core/Time.h>
 #include <core/VideoEffects.h>
 
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -176,6 +177,10 @@ namespace core
         // Shows the frame at sourceIn for the whole clip (freeze frame).
         bool frozen = false;
 
+        // Media clips: playback speed, 2 shows the media twice as fast (its
+        // sound higher). The clip shows duration * speed of the media.
+        double speed = 1.0;
+
         // Text clips only.
         TextContent text;
 
@@ -199,6 +204,13 @@ namespace core
         std::vector<EffectSlot> effects;
 
         Time end() const { return start + duration; }
+
+        // A length of the clip as a length of its media, and back.
+        Time toSource(Time t) const { return (speed == 1.0) ? t : (Time)std::llround((double)t * speed); }
+        Time fromSource(Time t) const { return (speed == 1.0) ? t : (Time)std::llround((double)t / speed); }
+
+        // Time of the media shown at time localTime of the clip.
+        Time sourceAt(Time localTime) const { return frozen ? sourceIn : sourceIn + toSource(localTime); }
     };
 
 
@@ -289,6 +301,16 @@ namespace core
         // subtitle track.
         void addTrack(TrackType type, Id id, Id soundId);
 
+        // Removes a track with its clips: a video track with its sound
+        // track (and the other way around). The tracks keeping a default
+        // name (V2, A3...) are renamed after their new place. False when it
+        // is the last video track, or not a track of the sequence.
+        bool removeTrack(Id trackId);
+
+        // The track of the given id, or nullptr.
+        Track* findTrack(Id trackId);
+        const Track* findTrack(Id trackId) const { return const_cast<Sequence*>(this)->findTrack(trackId); }
+
         // End of the last clip.
         Time duration() const;
     };
@@ -335,6 +357,7 @@ namespace core
 
         // All the sequences, in the order of their tabs.
         std::vector<const Sequence*> sequences() const;
+        std::vector<Sequence*> sequences();
         const Sequence* findSequence(Id id) const;
 
         // A new sequence with the settings of the current one and empty
@@ -388,6 +411,14 @@ namespace core
         // empty there, so that the videos keep their sound. False when the
         // range is not empty.
         bool closeGap(Id trackId, Time start, Time end);
+
+        // Sets the speed of a media clip and of its linked clips, keeping
+        // the part of the media they show: their length changes, and the
+        // clips after them on their tracks follow. Speeds are clamped to
+        // [MinSpeed, MaxSpeed]. False when nothing changed.
+        static constexpr double MinSpeed = 0.1;
+        static constexpr double MaxSpeed = 16.0;
+        bool setClipSpeed(Id clipId, double speed);
 
         // Cuts every clip crossing time t on unlocked tracks. Only the
         // selected clips (and their links) when the selection is not empty.

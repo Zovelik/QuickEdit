@@ -15,7 +15,7 @@ LayerRequest makeLayer(const Clip& clip, size_t track, int slot, Time localTime,
     layer.track = track;
     layer.slot = slot;
     layer.localTime = std::clamp<Time>(localTime, 0, std::max<Time>(0, clip.duration - 1));
-    layer.sourceTime = clip.frozen ? clip.sourceIn : clip.sourceIn + layer.localTime;
+    layer.sourceTime = clip.sourceAt(layer.localTime);
     layer.still = still || clip.frozen;
     return layer;
 }

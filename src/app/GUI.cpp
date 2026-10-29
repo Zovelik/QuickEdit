@@ -580,6 +580,8 @@ void GUI::beginMainWindow()
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoBringToFrontOnFocus);
 
+    setTitlebarWindow(ImGui::GetCurrentWindow()->ID);
+
     if (borderlessWindow()) {
         ImGui::PopStyleVar();
     }
@@ -719,6 +721,15 @@ void GUI::menuBar()
 
             bool snapping = _timeline.snapping();
             if (ImGui::MenuItem(ICON_MD_VERTICAL_ALIGN_CENTER " Snapping", "N", &snapping)) { _timeline.setSnapping(snapping); }
+
+            if (ImGui::BeginMenu(ICON_MD_HANDYMAN " Timeline Tool")) {
+                for (const TimelineToolInfo& info : timelineTools()) {
+                    if (ImGui::MenuItem(info.label, info.shortcut, _timeline.tool() == info.tool)) { _timeline.setTool(info.tool); }
+                }
+
+                ImGui::EndMenu();
+            }
+
             ImGui::EndMenu();
         }
 
@@ -988,6 +999,10 @@ void GUI::shortcuts()
         }
     }
     if (ImGui::Shortcut(ImGuiKey_N, global))           { _timeline.setSnapping(!_timeline.snapping()); }
+    if (ImGui::Shortcut(ImGuiKey_V, global))           { _timeline.setTool(TimelineView::Tool::Select); }
+    if (ImGui::Shortcut(ImGuiKey_C, global))           { _timeline.setTool(TimelineView::Tool::Blade); }
+    if (ImGui::Shortcut(ImGuiKey_Y, global))           { _timeline.setTool(TimelineView::Tool::Slip); }
+    if (ImGui::Shortcut(ImGuiKey_A, global))           { _timeline.setTool(TimelineView::Tool::SelectForward); }
     if (ImGui::Shortcut(ImGuiKey_T, global))           { addText(); }
 
     if (ImGui::Shortcut(ImGuiKey_Enter, global) && _selection.size() >= 1) {
@@ -4134,6 +4149,23 @@ void GUI::freezeFrame()
 }
 
 
+const std::vector<GUI::TimelineToolInfo>& GUI::timelineTools()
+{
+    static const std::vector<TimelineToolInfo> tools = {
+        { TimelineView::Tool::Select, ICON_MD_NEAR_ME, "Select", "V",
+          "Select, move and trim the clips." },
+        { TimelineView::Tool::Blade, ICON_MD_CONTENT_CUT, "Blade", "C",
+          "Cut a clip where clicked, with its linked clips. Shift: cut all the tracks." },
+        { TimelineView::Tool::Slip, ICON_MD_SWAP_HORIZ, "Slip", "Y",
+          "Drag the media inside a clip: the clip stays in place, it shows another part." },
+        { TimelineView::Tool::SelectForward, ICON_MD_KEYBOARD_DOUBLE_ARROW_RIGHT, "Select Forward", "A",
+          "Select every clip from there to the end, then drag them. Shift: on this track only." },
+    };
+
+    return tools;
+}
+
+
 void GUI::addTrack(TrackType type)
 {
     // A video track comes with its sound track.
@@ -4141,7 +4173,98 @@ void GUI::addTrack(TrackType type)
     const Id soundId = (type == TrackType::Video) ? _project.newId() : InvalidId;
     _project.sequence().addTrack(type, id, soundId);
 
-    commit(type == TrackType::Video ? "Add video track" : "Add audio track");
+    commit(type == TrackType::Video ? "Add video track" : (type == TrackType::Subtitle) ? "Add subtitle track" : "Add audio track");
+}
+
+
+void GUI::requestDeleteTrack(Id trackId)
+{
+    Sequence& sequence = _project.sequence();
+    const Track* track = sequence.findTrack(trackId);
+
+    if (!track || _recorder.recording() || _screenRecording) {
+        return;
+    }
+
+    // With the paired track, a video one goes with its sound.
+    size_t clips = track->clips.size();
+
+    if (track->type == TrackType::Video || track->type == TrackType::Sound) {
+        const std::vector<Track>& own = sequence.tracks(track->type);
+        const size_t index = (size_t)(track - own.data());
+        const std::vector<Track>& other = sequence.tracks(track->type == TrackType::Video ? TrackType::Sound : TrackType::Video);
+
+        if (index < other.size()) {
+            clips += other[index].clips.size();
+        }
+    }
+
+    if (clips == 0) {
+        deleteTrack(trackId);
+    }
+    else {
+        _confirmDeleteTrack = trackId;
+    }
+}
+
+
+void GUI::deleteTrack(Id trackId)
+{
+    const Track* track = _project.sequence().findTrack(trackId);
+    const std::string name = track ? track->name : std::string();
+
+    if (!_project.sequence().removeTrack(trackId)) {
+        return;
+    }
+
+    // Selected clips of the track gone.
+    std::erase_if(_selection, [&](Id id) { return _project.findClip(id) == nullptr; });
+    _timeline.clearGap();
+
+    commit("Delete track " + name);
+}
+
+
+void GUI::deleteTrackPopup()
+{
+    if (_confirmDeleteTrack != InvalidId && !ImGui::IsPopupOpen("Delete Track")) {
+        ImGui::OpenPopup("Delete Track");
+    }
+
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (!ImGui::BeginPopupModal("Delete Track", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+
+    const Track* track = _project.sequence().findTrack(_confirmDeleteTrack);
+
+    if (!track) {
+        _confirmDeleteTrack = InvalidId;
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+
+    const bool paired = track->type == TrackType::Video || track->type == TrackType::Sound;
+    ImGui::Text("The track %s is not empty.", track->name.c_str());
+    ImGui::TextUnformatted(paired ? "Delete it with its clips, and those of its paired video / sound track?" : "Delete it with its clips?");
+    ImGui::Spacing();
+
+    if (ImGui::Button(ICON_MD_DELETE " Delete") || ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
+        deleteTrack(_confirmDeleteTrack);
+        _confirmDeleteTrack = InvalidId;
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::SameLine();
+
+    if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        _confirmDeleteTrack = InvalidId;
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
 }
 
 
@@ -4153,8 +4276,48 @@ void GUI::timelinePanel()
     if (open) {
         sequenceTabs();
 
-        // Zoom
         ImGui::PushStyleVarX(ImGuiStyleVar_ItemSpacing, ImGui::GetStyle().ItemInnerSpacing.x);
+
+        // Tools, then the snapping.
+        for (const TimelineToolInfo& info : timelineTools()) {
+            const bool current = _timeline.tool() == info.tool;
+
+            if (current) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            }
+
+            if (ImGui::SmallButton(info.icon)) {
+                _timeline.setTool(info.tool);
+            }
+
+            if (current) {
+                ImGui::PopStyleColor();
+            }
+
+            ImGui::SetItemTooltip("%s (%s)\n%s", info.label, info.shortcut, info.help);
+            ImGui::SameLine();
+        }
+
+        {
+            const bool snapping = _timeline.snapping();
+
+            if (snapping) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            }
+
+            if (ImGui::SmallButton(ICON_MD_VERTICAL_ALIGN_CENTER)) {
+                _timeline.setSnapping(!snapping);
+            }
+
+            if (snapping) {
+                ImGui::PopStyleColor();
+            }
+
+            ImGui::SetItemTooltip("Snapping (N)");
+        }
+
+        // Zoom
+        ImGui::SameLine(0.f, 3.f * ImGui::GetStyle().ItemSpacing.x);
 
         if (ImGui::SmallButton(ICON_MD_REMOVE)) {
             _timeline.setZoom(_timeline.zoom() / 1.5f);
@@ -4244,6 +4407,7 @@ void GUI::timelinePanel()
 
         if (result.seeked) {
             stopPlayback();
+            _audio.scrub(_playhead);
         }
 
         if (result.edited) {
@@ -4253,6 +4417,16 @@ void GUI::timelinePanel()
         if (result.openSequence != InvalidId) {
             showSequence(result.openSequence);
         }
+
+        if (result.addTrack) {
+            addTrack(result.addTrackType);
+        }
+
+        if (result.deleteTrack != InvalidId) {
+            requestDeleteTrack(result.deleteTrack);
+        }
+
+        deleteTrackPopup();
 
         if (result.generateSubtitles != InvalidId) {
             _subtitleSourceTrack = result.generateSubtitles;
@@ -4509,6 +4683,7 @@ void GUI::keyframesPanel()
 
         if (result.seeked) {
             stopPlayback();
+            _audio.scrub(_playhead);
         }
 
         if (!result.edit.empty()) {
@@ -5494,8 +5669,11 @@ void GUI::togglePlayback()
 
 void GUI::stopPlayback()
 {
-    _playing = false;
-    _audio.stop();
+    // Only when playing: a scrub piece being heard goes on.
+    if (_playing || _audio.playing()) {
+        _playing = false;
+        _audio.stop();
+    }
 }
 
 
@@ -5510,6 +5688,7 @@ void GUI::stepFrames(int64_t frames)
 {
     const Rational& fps = _project.sequence().frameRate;
     seek(frameToTime(timeToFrame(_playhead, fps) + frames, fps));
+    _audio.scrub(_playhead);
 }
 
 

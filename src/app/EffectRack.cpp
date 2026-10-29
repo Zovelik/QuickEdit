@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <type_traits>
 
 
 using namespace core;
@@ -57,21 +58,19 @@ std::shared_ptr<PluginEffect> loadSlot(const EffectSlot& slot, uint32_t sampleRa
 // the graphs that held it.
 constexpr Uint64 GraveyardDelayNS = 3 * SDL_NS_PER_SECOND;
 
-// The tracks that can have effects: sound and audio tracks.
-std::vector<std::reference_wrapper<Track>> allSoundTracks(Project& project)
+// The tracks that can have effects: sound and audio tracks, of every
+// sequence (the nested ones are heard in the current one).
+template<typename ProjectType>
+auto allSoundTracks(ProjectType& project)
 {
-    std::vector<std::reference_wrapper<Track>> tracks;
-    for (Track& track : project.sequence().soundTracks) tracks.push_back(track);
-    for (Track& track : project.sequence().audioTracks) tracks.push_back(track);
-    return tracks;
-}
+    using TrackT = std::conditional_t<std::is_const_v<ProjectType>, const Track, Track>;
+    std::vector<std::reference_wrapper<TrackT>> tracks;
 
+    for (auto* sequence : project.sequences()) {
+        for (TrackT& track : sequence->soundTracks) tracks.push_back(track);
+        for (TrackT& track : sequence->audioTracks) tracks.push_back(track);
+    }
 
-std::vector<std::reference_wrapper<const Track>> allSoundTracks(const Project& project)
-{
-    std::vector<std::reference_wrapper<const Track>> tracks;
-    for (const Track& track : project.sequence().soundTracks) tracks.push_back(track);
-    for (const Track& track : project.sequence().audioTracks) tracks.push_back(track);
     return tracks;
 }
 

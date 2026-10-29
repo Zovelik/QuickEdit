@@ -39,10 +39,18 @@ namespace audio
         // Time being heard while playing.
         core::Time position() const;
 
+        // While stopped: plays a short piece of the sound at time t (the
+        // playhead dragged, a frame step), cutting the previous one. Nothing
+        // when t is the time of the last piece.
+        void scrub(core::Time t);
+
         bool hasDevice() const { return _stream != nullptr; }
 
     private:
         static void SDLCALL callback(void* userdata, SDL_AudioStream* stream, int additionalAmount, int totalAmount);
+
+        // The rest of the scrub piece, while stopped (audio thread).
+        void scrubCallback(SDL_AudioStream* stream, int additionalAmount);
 
         // Sets the sample rate of the samples given to SDL, which converts
         // them to the rate of the device.
@@ -58,6 +66,13 @@ namespace audio
         std::atomic<int64_t> _mixFrame = 0;
         core::Time _startTime = 0;
         Uint64 _startNS = 0;
+
+        // Scrubbing: next frame to mix and frames left of the piece, of
+        // scrubLength (audio thread), and the time of the last piece.
+        std::atomic<int64_t> _scrubFrame = 0;
+        std::atomic<int64_t> _scrubLeft = 0;
+        int64_t _scrubLength = 0;
+        core::Time _lastScrub = -1;
 
         // Mixing buffer of the audio thread.
         std::vector<float> _scratch;

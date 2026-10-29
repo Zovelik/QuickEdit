@@ -16,6 +16,10 @@ constexpr int BytesPerFrame = (int)(media::AudioBuffer::Channels * sizeof(float)
 // Frames mixed at once, at most: about 20 ms at 48 kHz.
 constexpr int64_t MaxChunkFrames = 1024;
 
+// Length of a piece of sound played by scrub(), and of its fades.
+constexpr double ScrubSeconds = 0.08;
+constexpr double ScrubFadeSeconds = 0.006;
+
 } // namespace
 
 
@@ -87,6 +91,7 @@ void AudioEngine::setSampleRate(uint32_t sampleRate)
 void AudioEngine::play(Time from)
 {
     stop();
+    _lastScrub = -1;
 
     _startTime = from;
     _startNS = SDL_GetTicksNS();
@@ -107,6 +112,27 @@ void AudioEngine::stop()
         SDL_PauseAudioStreamDevice(_stream);
         SDL_ClearAudioStream(_stream);
     }
+}
+
+
+void AudioEngine::scrub(Time t)
+{
+    if (playing() || !_stream || t == _lastScrub) {
+        return;
+    }
+
+    _lastScrub = t;
+
+    // The piece before cut: what is queued, and what the audio thread had
+    // left of it.
+    _scrubLeft = 0;
+    SDL_ClearAudioStream(_stream);
+
+    _scrubLength = std::max<int64_t>(1, (int64_t)(ScrubSeconds * _sampleRate));
+    _scrubFrame = mulDivFloor(t, _sampleRate, TicksPerSecond);
+    _scrubLeft = _scrubLength;
+
+    SDL_ResumeAudioStreamDevice(_stream);
 }
 
 
@@ -132,6 +158,7 @@ void SDLCALL AudioEngine::callback(void* userdata, SDL_AudioStream* stream, int 
     AudioEngine* engine = static_cast<AudioEngine*>(userdata);
 
     if (!engine->_playing) {
+        engine->scrubCallback(stream, additionalAmount);
         return;
     }
 
@@ -146,6 +173,42 @@ void SDLCALL AudioEngine::callback(void* userdata, SDL_AudioStream* stream, int 
         SDL_PutAudioStreamData(stream, engine->_scratch.data(), (int)(chunk * BytesPerFrame));
 
         engine->_mixFrame = first + chunk;
+        frames -= chunk;
+    }
+}
+
+
+void AudioEngine::scrubCallback(SDL_AudioStream* stream, int additionalAmount)
+{
+    constexpr int64_t channels = media::AudioBuffer::Channels;
+
+    const std::shared_ptr<const MixGraph> graph = _graph.load();
+    const int64_t length = _scrubLength;
+    const int64_t fade = std::max<int64_t>(1, (int64_t)(ScrubFadeSeconds * _sampleRate));
+    int64_t frames = additionalAmount / BytesPerFrame;
+
+    while (frames > 0 && _scrubLeft.load() > 0) {
+        const int64_t left = _scrubLeft.load();
+        const int64_t chunk = std::min({ frames, MaxChunkFrames, left });
+        const int64_t first = _scrubFrame.load();
+
+        mix(*graph, first, chunk, _scratch.data());
+
+        // Faded in and out: no click at the cuts.
+        for (int64_t i = 0; i < chunk; i++) {
+            const int64_t fromStart = length - left + i;
+            const int64_t fromEnd = left - 1 - i;
+            const float gain = std::min(1.f, (float)std::min(fromStart, fromEnd) / (float)fade);
+
+            for (int64_t c = 0; c < channels; c++) {
+                _scratch[(size_t)(i * channels + c)] *= gain;
+            }
+        }
+
+        SDL_PutAudioStreamData(stream, _scratch.data(), (int)(chunk * BytesPerFrame));
+
+        _scrubFrame = first + chunk;
+        _scrubLeft = left - chunk;
         frames -= chunk;
     }
 }

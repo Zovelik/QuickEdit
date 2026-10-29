@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <iterator>
 #include <limits>
 
@@ -409,6 +410,24 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
         }
     }
 
+    // The other tools than Select do not trim, nor change the fades.
+    if (_tool != Tool::Select && hoveredMode != DragMode::None) {
+        hoveredMode = DragMode::Move;
+    }
+
+    if (_dragMode == DragMode::Slip || (_dragMode == DragMode::None && _tool == Tool::Slip && hoveredClip)) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+
+    // Blade: where the cut would be, across the track.
+    if (_tool == Tool::Blade && _dragMode == DragMode::None && hoveredClip && hoveredRow) {
+        const float x = timeToX(snapToFrame(snapTime(project, xToTime(mouse.x), false), sequence.frameRate));
+        const float top = io.KeyShift ? _tracksTop : hoveredRow->top;
+        const float bottom = io.KeyShift ? _tracksBottom : hoveredRow->top + hoveredRow->height;
+
+        drawList->AddLine(ImVec2(x, top), ImVec2(x, bottom), IM_COL32(255, 80, 60, 230), 2.f);
+    }
+
     if (_dragMode == DragMode::TrimStart || _dragMode == DragMode::TrimEnd ||
         (_dragMode == DragMode::None && (hoveredMode == DragMode::TrimStart || hoveredMode == DragMode::TrimEnd))) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
@@ -419,9 +438,23 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     }
 
+    // A click handled by a tool: no selection of a gap after it.
+    bool toolClick = false;
+
     if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && _dragMode == DragMode::None) {
         if (mouse.y < _tracksTop && mouse.x >= _timelineLeft) {
             _dragMode = DragMode::Scrub;
+        }
+        else if (_tool != Tool::Select && mouse.x >= _timelineLeft && mouse.y >= _tracksTop) {
+            toolClick = true;
+
+            if (toolPressed(project, hoveredClip, hoveredRow, mouse, selection)) {
+                result.edited = true;
+                result.label = "Split clips";
+            }
+
+            // The clips may have moved in memory.
+            hoveredClip = nullptr;
         }
         else if (hoveredClip && mouse.x >= _timelineLeft) {
             if (io.KeyAlt) {
@@ -464,7 +497,7 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
             _marqueeBase = io.KeyCtrl ? selection : std::vector<Id>();
         }
 
-        if (!hoveredClip && mouse.x >= _timelineLeft && mouse.y >= _tracksTop && !io.KeyCtrl) {
+        if (!toolClick && !hoveredClip && mouse.x >= _timelineLeft && mouse.y >= _tracksTop && !io.KeyCtrl) {
             selection.clear();
             _gap = Gap();
 
@@ -522,19 +555,53 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
         ImGui::OpenPopup("##clipContext");
     }
 
-    // Right click on the header of a sound track.
-    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mouse.x < _timelineLeft && hoveredRow &&
-        (hoveredRow->type == TrackType::Sound || hoveredRow->type == TrackType::Audio)) {
-        _contextTrack = tracksOfType(sequence, hoveredRow->type)[hoveredRow->trackIndex].id;
+    // Right click on a track header, or on the timeline away from the clips
+    // (and from the selected gap): the tracks.
+    const bool onGap = hasGap() && hoveredRow && tracksOfType(sequence, hoveredRow->type)[hoveredRow->trackIndex].id == _gap.trackId;
+
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && _dragMode == DragMode::None &&
+        (mouse.x < _timelineLeft || (!hoveredClip && !onGap)) && mouse.y >= _tracksTop) {
+        _contextTrack = hoveredRow ? tracksOfType(sequence, hoveredRow->type)[hoveredRow->trackIndex].id : InvalidId;
         ImGui::OpenPopup("##trackContext");
     }
 
     if (ImGui::BeginPopup("##trackContext")) {
         const Track* track = project.findTrack(_contextTrack);
-        ImGui::TextDisabled("%s", track ? track->name.c_str() : "");
 
-        if (ImGui::MenuItem(ICON_MD_RECORD_VOICE_OVER " Generate Subtitles from this Track...")) {
-            result.generateSubtitles = _contextTrack;
+        if (track) {
+            ImGui::TextDisabled("Track %s", track->name.c_str());
+
+            if ((track->type == TrackType::Sound || track->type == TrackType::Audio) &&
+                ImGui::MenuItem(ICON_MD_RECORD_VOICE_OVER " Generate Subtitles from this Track...")) {
+                result.generateSubtitles = _contextTrack;
+            }
+
+            ImGui::Separator();
+        }
+
+        auto addItem = [&](const char* label, TrackType type) {
+            if (ImGui::MenuItem(label)) {
+                result.addTrack = true;
+                result.addTrackType = type;
+            }
+        };
+
+        addItem(ICON_MD_LIBRARY_ADD " Add Video Track", TrackType::Video);
+        addItem(ICON_MD_PLAYLIST_ADD " Add Audio Track", TrackType::Audio);
+        addItem(ICON_MD_SUBTITLES " Add Subtitle Track", TrackType::Subtitle);
+
+        if (track) {
+            ImGui::Separator();
+
+            // A video track goes with its sound track; one video track stays.
+            const bool paired = track->type == TrackType::Video || track->type == TrackType::Sound;
+            const char* label = (track->type == TrackType::Sound) ? ICON_MD_DELETE " Delete Track (with its Video Track)"
+                : (track->type == TrackType::Video) ? ICON_MD_DELETE " Delete Track (with its Sound Track)"
+                : ICON_MD_DELETE " Delete Track";
+
+            if (ImGui::MenuItem(label, nullptr, false, !paired || sequence.videoTracks.size() > 1)) {
+                result.deleteTrack = _contextTrack;
+            }
         }
 
         ImGui::EndPopup();
@@ -602,11 +669,41 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
             _dragMode = DragMode::None;
         }
     }
+    else if (_dragMode == DragMode::Slip) {
+        // The media under the clips, the other way of the mouse.
+        const Time d = roundToFrame(xToTime(mouse.x) - xToTime(_dragStartX), sequence);
+        bool changed = false;
+
+        for (const DragItem& item : _dragItems) {
+            Clip* clip = project.findClip(item.original.id);
+            const MediaItem* media = clip ? project.findMedia(clip->mediaId) : nullptr;
+
+            if (!clip || !media) {
+                continue;
+            }
+
+            const Time maxIn = std::max<Time>(0, media->duration - clip->toSource(clip->duration));
+            clip->sourceIn = std::clamp<Time>(item.original.sourceIn - clip->toSource(d), 0, maxIn);
+            changed = changed || clip->sourceIn != item.original.sourceIn;
+        }
+
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            _dragMode = DragMode::None;
+            _dragItems.clear();
+            _grabbedClip = InvalidId;
+
+            if (changed) {
+                result.edited = true;
+                result.label = "Slip clip";
+            }
+        }
+    }
     else if (_dragMode != DragMode::None) {
         updateDrag(project, mouse.x, mouse.y);
     }
 
-    if (_dragMode != DragMode::None && _dragMode != DragMode::Marquee && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    if (_dragMode != DragMode::None && _dragMode != DragMode::Marquee && _dragMode != DragMode::Slip &&
+        !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         const DragMode mode = _dragMode;
 
         if (endDrag(project)) {
@@ -1103,7 +1200,7 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
                     drawList->PushClipRect(ImVec2(left, min.y), ImVec2(right, max.y), true);
 
                     for (float x = min.x + std::floor((left - min.x) / tileWidth) * tileWidth; x < right; x += tileWidth) {
-                        const Time source = clip.frozen ? clip.sourceIn : clip.sourceIn + std::max<Time>(0, xToTime(x) - clip.start);
+                        const Time source = clip.sourceAt(std::max<Time>(0, xToTime(x) - clip.start));
                         int index = thumbnails.image ? 0 : (int)std::clamp<Time>((source + thumbnails.interval / 2) / std::max<Time>(1, thumbnails.interval), 0, thumbnails.count - 1);
 
                         if (index >= thumbnails.ready) {
@@ -1179,6 +1276,12 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
                 }
                 else {
                     name = clip.frozen ? std::string(ICON_MD_PAUSE_CIRCLE " ") + media->name() : media->name();
+
+                    if (clip.speed != 1.0) {
+                        char speed[32];
+                        std::snprintf(speed, sizeof(speed), "  " ICON_MD_SPEED " %g%%", std::round(clip.speed * 1000.0) / 10.0);
+                        name += speed;
+                    }
                 }
                 const float textX = std::max(min.x, _timelineLeft) + 0.35f * unit;
 
@@ -1288,7 +1391,8 @@ void TimelineView::drawWaveform(ImDrawList* drawList, const Clip& clip, const me
     }
 
     const double rate = (double)waveform.sampleRate;
-    const double framesPerPixel = rate / _pixelsPerSecond;
+    // Frames of the source per pixel: more when the clip plays faster.
+    const double framesPerPixel = rate * clip.speed / _pixelsPerSecond;
 
     // The coarsest level still finer than a pixel.
     size_t level = 0;
@@ -1336,6 +1440,101 @@ void TimelineView::drawWaveform(ImDrawList* drawList, const Clip& clip, const me
         const float bottom = centerY - displayLevel(low * gain) * halfHeight;
 
         drawList->AddRectFilled(ImVec2(x, top), ImVec2(x + 1.f, std::max(bottom, top + 1.f)), color);
+    }
+}
+
+
+bool TimelineView::toolPressed(Project& project, const Clip* hoveredClip, const Row* hoveredRow, const ImVec2& mouse, std::vector<Id>& selection)
+{
+    const ImGuiIO& io = ImGui::GetIO();
+    Sequence& sequence = project.sequence();
+    const Track* track = hoveredClip ? project.findTrackOfClip(hoveredClip->id) : nullptr;
+
+    switch (_tool) {
+        case Tool::Blade: {
+            if (!hoveredClip || !track || track->locked) {
+                return false;
+            }
+
+            // Shift: across all the tracks.
+            const Time t = snapToFrame(snapTime(project, xToTime(mouse.x), false), sequence.frameRate);
+
+            if (!io.KeyShift && (t <= hoveredClip->start || t >= hoveredClip->end())) {
+                return false;
+            }
+
+            const std::string before = project.toJson({}).dump(0);
+            project.splitAt(t, io.KeyShift ? std::vector<Id>() : std::vector<Id>{ hoveredClip->id });
+
+            return project.toJson({}).dump(0) != before;
+        }
+
+        case Tool::Slip: {
+            const MediaItem* media = hoveredClip ? project.findMedia(hoveredClip->mediaId) : nullptr;
+
+            if (!hoveredClip || !track || track->locked || !media || media->type == MediaType::Image ||
+                hoveredClip->kind != ClipKind::Media || hoveredClip->frozen) {
+                return false;
+            }
+
+            selection.clear();
+            addWithLinks(project, hoveredClip->id, selection);
+
+            _dragMode = DragMode::Slip;
+            _dragItems.clear();
+            _grabbedClip = hoveredClip->id;
+            _dragStartX = mouse.x;
+
+            for (Id id : selection) {
+                const Clip* clip = project.findClip(id);
+                Track* clipTrack = project.findTrackOfClip(id);
+                const MediaItem* clipMedia = clip ? project.findMedia(clip->mediaId) : nullptr;
+
+                // The sound of a video slips with it.
+                if (clip && clipTrack && !clipTrack->locked && clip->kind == ClipKind::Media && !clip->frozen &&
+                    clipMedia && clipMedia->type != MediaType::Image) {
+                    const std::vector<Track>& list = tracksOfType(sequence, clipTrack->type);
+                    _dragItems.push_back({ *clip, clipTrack->type, (int)(clipTrack - list.data()) });
+                }
+            }
+
+            return false;
+        }
+
+        case Tool::SelectForward: {
+            // The clips from the click on: all the tracks, or this one
+            // (Shift), with their links.
+            const Time t = hoveredClip ? hoveredClip->start : xToTime(mouse.x);
+            const Track* onlyTrack = (io.KeyShift && hoveredRow) ? &tracksOfType(sequence, hoveredRow->type)[hoveredRow->trackIndex] : nullptr;
+
+            if (!io.KeyCtrl) {
+                selection.clear();
+            }
+
+            for (const Row& row : _rows) {
+                const Track& rowTrack = tracksOfType(sequence, row.type)[row.trackIndex];
+
+                if ((onlyTrack && &rowTrack != onlyTrack) || rowTrack.locked) {
+                    continue;
+                }
+
+                for (const Clip& clip : rowTrack.clips) {
+                    if (clip.start >= t && !isSelected(selection, clip.id)) {
+                        addWithLinks(project, clip.id, selection);
+                    }
+                }
+            }
+
+            if (hoveredClip && track && !track->locked && isSelected(selection, hoveredClip->id)) {
+                const Clip grabbed = *hoveredClip;
+                beginDrag(project, DragMode::Move, grabbed, selection);
+            }
+
+            return false;
+        }
+
+        default:
+            return false;
     }
 }
 
@@ -1505,14 +1704,14 @@ void TimelineView::updateDrag(Project& project, float mouseX, float mouseY)
                 minDelta = std::max(minDelta, -clip.start);
                 break;
             case DragMode::TrimStart:
-                minDelta = std::max({ minDelta, -clip.start, limited ? -clip.sourceIn : minDelta });
+                minDelta = std::max({ minDelta, -clip.start, limited ? -clip.fromSource(clip.sourceIn) : minDelta });
                 maxDelta = std::min(maxDelta, clip.duration - frame);
                 break;
             case DragMode::TrimEnd:
                 minDelta = std::max(minDelta, -(clip.duration - frame));
 
                 if (limited) {
-                    maxDelta = std::min(maxDelta, media->duration - (clip.sourceIn + clip.duration));
+                    maxDelta = std::min(maxDelta, clip.fromSource(media->duration - clip.sourceIn) - clip.duration);
                 }
                 break;
             default:
@@ -1566,7 +1765,7 @@ void TimelineView::updateDrag(Project& project, float mouseX, float mouseY)
                     // A still shows the same frame whatever its start; the
                     // animation stays where it was in time.
                     if (!clip.frozen) {
-                        clip.sourceIn += d;
+                        clip.sourceIn = std::max<Time>(0, clip.sourceIn + clip.toSource(d));
                     }
 
                     clip.transform.shiftKeys(-d);

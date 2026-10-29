@@ -303,9 +303,13 @@ void testSequences()
     const auto graph = audio::buildMixGraph(project, [&](Id) { return buffer; });
     bool found = false;
 
+    // In a sub-track of the sound track of the video track: through the
+    // effects of its own track first.
     for (const audio::MixTrack& track : graph->tracks) {
-        for (const audio::MixClip& clip : track.clips) {
-            found |= clip.start == 48000 && clip.length == 2 * 48000;
+        for (const audio::MixTrack& sub : track.subTracks) {
+            for (const audio::MixClip& clip : sub.clips) {
+                found |= clip.start == 48000 && clip.length == 2 * 48000;
+            }
         }
     }
 
@@ -684,7 +688,79 @@ void testDecodeAndMix()
     audio::mix(graph, 0, 48000 * 3, output.data());
     CHECK(*std::max_element(output.begin(), output.end()) == 0.f);
 
+    // A sub-track (the sound of a nested sequence) through its own effects,
+    // mixed with the clips of its track.
+    audio::MixTrack nested;
+    nested.clips.push_back(graph.tracks[0].clips[0]);
+    graph.tracks[0].clips[0].effects.clear();
+    graph.tracks[0].subTracks.push_back(nested);
+    audio::mix(graph, 0, 48000 * 3, output.data());
+
+    float mixed = 0.f;
+    for (int i = 0; i < 48000; i++) mixed = std::max(mixed, std::abs(output[2 * (48000 + i)]));
+    CHECK(mixed > 0.5f * peak - 0.01f && mixed < 0.5f * peak + 0.01f);
+
+    // Twice as fast: the clip plays the source over half its length.
+    graph.tracks[0].subTracks.clear();
+    graph.tracks[0].clips[0].speed = 2.0;
+    graph.tracks[0].clips[0].length = 24000;
+    audio::mix(graph, 0, 48000 * 3, output.data());
+    CHECK(std::abs(output[2 * (48000 + 30000)]) == 0.f);
+
     std::filesystem::remove_all(dir);
+}
+
+
+void testSpeedAndTracks()
+{
+    Project project;
+    Sequence& sequence = project.sequence();
+
+    const Id video = project.importMedia("C:/media/clip.mp4");
+    project.findMedia(video)->duration = 10 * TicksPerSecond;
+
+    const Id v1 = sequence.videoTracks[0].id;
+    const Id first = project.addClip(video, v1, 0);
+    const Id second = project.addClip(video, v1, 12 * TicksPerSecond);
+    CHECK(first != InvalidId && second != InvalidId);
+
+    // Twice as fast: half as long, with its sound; the next clip follows.
+    CHECK(project.setClipSpeed(first, 2.0));
+    CHECK(sequence.videoTracks[0].clips[0].duration == 5 * TicksPerSecond);
+    CHECK(sequence.soundTracks[0].clips[0].duration == 5 * TicksPerSecond);
+    CHECK(sequence.soundTracks[0].clips[0].speed == 2.0);
+    CHECK(sequence.videoTracks[0].clips[1].start == 7 * TicksPerSecond);
+    CHECK(sequence.soundTracks[0].clips[1].start == 7 * TicksPerSecond);
+    CHECK(!project.setClipSpeed(first, 2.0));
+
+    // The media at a time of the clip, and a cut keeping it.
+    CHECK(sequence.videoTracks[0].clips[0].sourceAt(TicksPerSecond) == 2 * TicksPerSecond);
+    project.splitAt(TicksPerSecond, { first });
+    CHECK(sequence.videoTracks[0].clips[1].sourceIn == 2 * TicksPerSecond);
+    CHECK(sequence.videoTracks[0].clips[1].speed == 2.0);
+
+    // Saved and loaded.
+    Project loaded;
+    loaded.fromJson(project.toJson({}), {});
+    CHECK(loaded.sequence().videoTracks[0].clips[0].speed == 2.0);
+
+    // Tracks: a video track goes with its sound track; one stays.
+    const size_t videos = sequence.videoTracks.size();
+    CHECK(sequence.removeTrack(sequence.soundTracks[1].id));
+    CHECK(sequence.videoTracks.size() == videos - 1);
+    CHECK(sequence.soundTracks.size() == videos - 1);
+    CHECK(sequence.videoTracks[1].name == "V2");
+
+    while (sequence.videoTracks.size() > 1) {
+        CHECK(sequence.removeTrack(sequence.videoTracks.back().id));
+    }
+
+    CHECK(!sequence.removeTrack(sequence.videoTracks[0].id));
+
+    const size_t audios = sequence.audioTracks.size();
+    CHECK(sequence.removeTrack(sequence.audioTracks[0].id));
+    CHECK(sequence.audioTracks.size() == audios - 1);
+    CHECK(sequence.audioTracks.empty() || sequence.audioTracks[0].name == "A1");
 }
 
 } // namespace
@@ -704,6 +780,7 @@ int main()
     testTextAndFreeze();
     testTransitions();
     testTextEditing();
+    testSpeedAndTracks();
 
     try {
         testDecodeAndMix();

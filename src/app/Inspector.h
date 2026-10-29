@@ -53,6 +53,9 @@ private:
 
     void transformSection(core::Clip& clip, core::Time localTime, std::string& edit);
     void frameSection(core::Clip& clip, std::string& edit);
+
+    // Speed of a media clip (and its linked clips), in percent, with presets.
+    void speedSection(core::Project& project, core::Clip& clip, std::string& edit);
     void presetsSection(core::Clip& clip, std::string& edit);
     void transitionSection(core::Project& project, core::Clip& clip, std::string& edit);
     void generatorSection(core::Project& project, core::Clip& clip, core::Time localTime, std::string& edit);

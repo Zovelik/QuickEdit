@@ -339,6 +339,25 @@ private:
     void freezeFrame();
     void addTrack(core::TrackType type);
 
+    // Tools of the timeline, as shown in its toolbar and in the Edit menu.
+    struct TimelineToolInfo
+    {
+        TimelineView::Tool tool;
+        const char* icon;
+        const char* label;
+        const char* shortcut;
+        const char* help;
+    };
+
+    static const std::vector<TimelineToolInfo>& timelineTools();
+
+    // Deletes a track (a video track with its sound track), confirmed first
+    // when it has clips. Not while recording, which fills a track.
+    void requestDeleteTrack(core::Id trackId);
+    void deleteTrack(core::Id trackId);
+    void deleteTrackPopup();
+    core::Id _confirmDeleteTrack = core::InvalidId;
+
     // ------------------------------------------------------------------------
     // GUIBase events
     // ------------------------------------------------------------------------

@@ -25,6 +25,14 @@
 //   Ctrl + Wheel                        zoom around the mouse
 //   Shift + Wheel                       scroll the tracks
 //
+// Tools (setTool()), for the left button on the clips:
+//   Select          the above
+//   Blade           cut the clip (and its links) where clicked; Shift: all
+//                   the tracks
+//   Slip            drag the media inside the clip, which stays in place
+//   Select Forward  select every clip from there on (Shift: on the track
+//                   only), then drag them
+//
 // Media dropped from the media bin ("QE_MEDIA" payload holding a core::Id)
 // are placed where they are dropped.
 class TimelineView
@@ -53,6 +61,13 @@ public:
 
         // Subtitles asked from the speech of a sound track.
         core::Id generateSubtitles = core::InvalidId;
+
+        // A track to delete (confirmed by the caller when it has clips).
+        core::Id deleteTrack = core::InvalidId;
+
+        // A track to add, from the context menus.
+        bool addTrack = false;
+        core::TrackType addTrackType = core::TrackType::Video;
 
         // Files of the file manager dropped on a track (see setFileDrop()),
         // to place one after the other from dropStart.
@@ -127,6 +142,17 @@ public:
     const Gap& gap() const { return _gap; }
     void clearGap() { _gap = Gap(); }
 
+    enum class Tool
+    {
+        Select,
+        Blade,
+        Slip,
+        SelectForward
+    };
+
+    Tool tool() const { return _tool; }
+    void setTool(Tool tool) { _tool = tool; }
+
     bool snapping() const { return _snapping; }
     void setSnapping(bool snapping) { _snapping = snapping; }
 
@@ -150,7 +176,8 @@ private:
         TrimEnd,
         FadeIn,         // Audio fade handles
         FadeOut,
-        Marquee         // A rectangle selecting the clips it touches
+        Marquee,        // A rectangle selecting the clips it touches
+        Slip            // The media moved inside the clips
     };
 
     // Marquee: where it started (time, and y in the scrolled rows), the
@@ -199,6 +226,10 @@ private:
 
     void beginDrag(core::Project& project, DragMode mode, const core::Clip& grabbed, const std::vector<core::Id>& selection);
 
+    // Left click with a tool other than Select. True when it edited the
+    // project (a cut); a drag may have begun.
+    bool toolPressed(core::Project& project, const core::Clip* hoveredClip, const Row* hoveredRow, const ImVec2& mouse, std::vector<core::Id>& selection);
+
     // Places the dragged clips for the given mouse position, keeping the
     // last valid placement when the new one would overlap other clips.
     void updateDrag(core::Project& project, float mouseX, float mouseY);
@@ -225,6 +256,7 @@ private:
     double _scrollSeconds = 0.0;
     float _scrollY = 0.f;
     bool _snapping = true;
+    Tool _tool = Tool::Select;
     Gap _gap;
     FileDrop _fileDrop;
     std::vector<LiveRecording> _liveRecordings;

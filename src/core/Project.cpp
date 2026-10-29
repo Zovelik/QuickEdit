@@ -1,6 +1,7 @@
 #include <core/Project.h>
 
 #include <algorithm>
+#include <utility>
 #include <fstream>
 #include <limits>
 #include <sstream>
@@ -359,6 +360,8 @@ Json clipToJson(const Clip& clip)
     json["gainDb"] = (double)clip.gainDb;
     json["frozen"] = clip.frozen;
 
+    if (clip.speed != 1.0) json["speed"] = clip.speed;
+
     if (clip.fadeIn > 0) json["fadeIn"] = clip.fadeIn;
     if (clip.fadeOut > 0) json["fadeOut"] = clip.fadeOut;
 
@@ -442,6 +445,7 @@ Clip clipFromJson(const Json& json)
     clip.linkGroup = (Id)json["link"].toInt();
     clip.gainDb = (float)json["gainDb"].toDouble(0.0);
     clip.frozen = json["frozen"].toBool();
+    clip.speed = std::clamp(json["speed"].toDouble(1.0), Project::MinSpeed, Project::MaxSpeed);
     clip.fadeIn = std::clamp<Time>(json["fadeIn"].toInt(), 0, clip.duration);
     clip.fadeOut = std::clamp<Time>(json["fadeOut"].toInt(), 0, clip.duration);
 
@@ -638,6 +642,67 @@ void Sequence::addTrack(TrackType type, Id id, Id soundId)
         track.name = "A" + std::to_string(audioTracks.size() + 1);
         audioTracks.push_back(track);
     }
+}
+
+
+bool Sequence::removeTrack(Id trackId)
+{
+    for (TrackType type : { TrackType::Video, TrackType::Sound, TrackType::Audio, TrackType::Subtitle }) {
+        std::vector<Track>& list = tracks(type);
+        const auto it = std::find_if(list.begin(), list.end(), [&](const Track& track) { return track.id == trackId; });
+
+        if (it == list.end()) {
+            continue;
+        }
+
+        const size_t index = (size_t)(it - list.begin());
+
+        if (type == TrackType::Video || type == TrackType::Sound) {
+            if (videoTracks.size() <= 1) {
+                return false;
+            }
+
+            if (index < videoTracks.size()) videoTracks.erase(videoTracks.begin() + (ptrdiff_t)index);
+            if (index < soundTracks.size()) soundTracks.erase(soundTracks.begin() + (ptrdiff_t)index);
+        }
+        else {
+            list.erase(it);
+        }
+
+        // Default names follow the places.
+        auto rename = [](std::vector<Track>& renamed, const std::string& prefix) {
+            for (size_t i = 0; i < renamed.size(); i++) {
+                std::string& name = renamed[i].name;
+                const bool isDefault = name.size() > prefix.size() && name.compare(0, prefix.size(), prefix) == 0 &&
+                    std::all_of(name.begin() + (ptrdiff_t)prefix.size(), name.end(), [](char c) { return c >= '0' && c <= '9'; });
+
+                if (isDefault) {
+                    name = prefix + std::to_string(i + 1);
+                }
+            }
+        };
+
+        rename(videoTracks, "V");
+        rename(soundTracks, "S");
+        rename(audioTracks, "A");
+        rename(subtitleTracks, "ST");
+
+        return true;
+    }
+
+    return false;
+}
+
+
+Track* Sequence::findTrack(Id trackId)
+{
+    for (TrackType type : { TrackType::Video, TrackType::Sound, TrackType::Audio, TrackType::Subtitle }) {
+        for (Track& track : tracks(type)) {
+            if (track.id == trackId) return &track;
+        }
+    }
+
+    return nullptr;
 }
 
 
@@ -1147,7 +1212,7 @@ void Project::splitAt(Time t, const std::vector<Id>& onlyClips)
             right.id = newId();
             right.start = t;
             right.duration = left.end() - t;
-            right.sourceIn = left.sourceIn + (t - left.start);
+            right.sourceIn = left.sourceAt(t - left.start);
             right.linkGroup = newLinkGroup(left.linkGroup);
 
             // The animation goes on where it was; the transition stays at the
@@ -1282,6 +1347,61 @@ const ShaderDef* Project::findShader(const std::string& id) const
 }
 
 
+bool Project::setClipSpeed(Id clipId, double speed)
+{
+    const Clip* grabbed = findClip(clipId);
+
+    if (!grabbed || grabbed->kind != ClipKind::Media || grabbed->frozen) {
+        return false;
+    }
+
+    speed = std::clamp(speed, MinSpeed, MaxSpeed);
+
+    const Id linkGroup = grabbed->linkGroup;
+    bool changed = false;
+
+    for (auto* list : { &_sequence.videoTracks, &_sequence.soundTracks, &_sequence.audioTracks }) {
+        for (Track& track : *list) {
+            if (track.locked) {
+                continue;
+            }
+
+            // Back to front: the clip and the ones after it are moved.
+            for (size_t i = track.clips.size(); i-- > 0;) {
+                Clip& clip = track.clips[i];
+
+                if (clip.id != clipId && (linkGroup == InvalidId || clip.linkGroup != linkGroup)) {
+                    continue;
+                }
+
+                if (clip.kind != ClipKind::Media || clip.frozen || clip.speed == speed) {
+                    continue;
+                }
+
+                // Same part of the media.
+                const Time sourceLength = clip.toSource(clip.duration);
+                clip.speed = speed;
+
+                const Time duration = std::max<Time>(1, clip.fromSource(sourceLength));
+                const Time delta = duration - clip.duration;
+
+                clip.duration = duration;
+                clip.fadeIn = std::min(clip.fadeIn, duration);
+                clip.fadeOut = std::min(clip.fadeOut, duration - clip.fadeIn);
+
+                for (size_t j = i + 1; j < track.clips.size(); j++) {
+                    track.clips[j].start += delta;
+                }
+
+                changed = true;
+            }
+        }
+    }
+
+    return changed;
+}
+
+
 Id Project::insertFreezeFrame(Id clipId, Time t, Time duration)
 {
     Clip* clip = findClip(clipId);
@@ -1292,7 +1412,7 @@ Id Project::insertFreezeFrame(Id clipId, Time t, Time duration)
         return InvalidId;
     }
 
-    const Time frozenSource = clip->frozen ? clip->sourceIn : clip->sourceIn + (t - clip->start);
+    const Time frozenSource = clip->sourceAt(t - clip->start);
     const Id mediaId = clip->mediaId;
     const Transform transform = clip->transform;
     const Id linkGroup = clip->linkGroup;
@@ -1462,6 +1582,18 @@ std::vector<const Sequence*> Project::sequences() const
 
     for (const Sequence& sequence : _otherSequences) {
         if (std::find(list.begin(), list.end(), &sequence) == list.end()) list.push_back(&sequence);
+    }
+
+    return list;
+}
+
+
+std::vector<Sequence*> Project::sequences()
+{
+    std::vector<Sequence*> list;
+
+    for (const Sequence* sequence : std::as_const(*this).sequences()) {
+        list.push_back(const_cast<Sequence*>(sequence));
     }
 
     return list;

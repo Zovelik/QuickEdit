@@ -108,6 +108,11 @@ protected:
         _titlebarClientMaxX = maxX;
     }
 
+    // Sets the ImGui window holding the title bar (the background window).
+    // Any other window of the main viewport over the title bar receives the
+    // clicks: a floating window moved there must stay movable.
+    void setTitlebarWindow(ImGuiID id) { _titlebarWindowId = id; }
+
     // Mutex guarding the submissions to the given queue. Both roles share the
     // same mutex when the device gave them the same VkQueue.
     std::mutex& queueMutex(Queue queue);
@@ -253,6 +258,13 @@ private:
     // See setTitlebarClientRange().
     float _titlebarClientMinX = 0.f;
     float _titlebarClientMaxX = 0.f;
+
+    // See setTitlebarWindow().
+    ImGuiID _titlebarWindowId = 0;
+
+    // True when an ImGui window other than the title bar one covers the
+    // given point of the main window (in window coordinates).
+    bool windowOverTitlebar(float x, float y) const;
 
 protected:
     // Title bar metrics, in pixels, for the current display scale.

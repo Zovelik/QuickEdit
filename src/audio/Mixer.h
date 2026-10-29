@@ -36,12 +36,21 @@ namespace audio
 
         // Effects of the clip, before those of its track.
         std::vector<std::shared_ptr<AudioEffect>> effects;
+
+        // Source frames per frame of the timeline.
+        double speed = 1.0;
     };
 
 
     struct MixTrack
     {
         std::vector<MixClip> clips;
+
+        // The tracks of the sequences nested on the video track of a sound
+        // track: each through its own effects, mixed with the clips before
+        // the effects of the track.
+        std::vector<MixTrack> subTracks;
+
         std::vector<std::shared_ptr<AudioEffect>> effects;
     };
 
@@ -59,7 +68,10 @@ namespace audio
     // Builds the graph of the audible tracks: muted tracks are skipped, and
     // when a track is solo only the solo tracks are heard. Clips whose audio
     // is not decoded yet are skipped. effectsOf, when set, gives the effects
-    // of a track.
+    // of a track or a clip. The sound of a nested sequence goes through the
+    // effects of its clips and tracks, then those of the parent track. A
+    // sequence nested more than once has its effects on its first use only:
+    // a plugin processes one stream.
     std::shared_ptr<const MixGraph> buildMixGraph(
         const core::Project& project,
         const std::function<std::shared_ptr<const media::AudioBuffer>(core::Id mediaId)>& audioOf,

@@ -10,6 +10,7 @@
 #include <SDL3/SDL_vulkan.h>
 #include <backends/imgui_impl_sdl3.h>
 #include <backends/imgui_impl_vulkan.h>
+#include <imgui_internal.h>
 
 #include <cstring>
 #include <sstream>
@@ -1166,6 +1167,38 @@ bool SDLCALL GUIBase::sdlEventWatch(void* userdata, SDL_Event* event)
 }
 
 
+bool GUIBase::windowOverTitlebar(float x, float y) const
+{
+    ImGuiContext* context = ImGui::GetCurrentContext();
+
+    if (!context || _titlebarWindowId == 0) {
+        return false;
+    }
+
+    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    const ImVec2 point(mainViewport->Pos.x + x, mainViewport->Pos.y + y);
+
+    // Windows are in display order, back to front. The title bar window is
+    // the background, so any other one under the point is in front of it.
+    for (int i = context->Windows.Size - 1; i >= 0; --i) {
+        const ImGuiWindow* window = context->Windows[i];
+
+        if (!window->WasActive || window->Hidden || window->Viewport != mainViewport ||
+            (window->Flags & (ImGuiWindowFlags_ChildWindow | ImGuiWindowFlags_Tooltip))) {
+            continue;
+        }
+
+        const ImGuiWindow* root = window->RootWindowDockTree ? window->RootWindowDockTree : window;
+
+        if (root->ID != _titlebarWindowId && window->Rect().Contains(point)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
 SDL_HitTestResult SDLCALL GUIBase::sdlHitTest(SDL_Window* win, const SDL_Point* area, void* data)
 {
     GUIBase* obj = (GUIBase*)data;
@@ -1180,12 +1213,13 @@ SDL_HitTestResult SDLCALL GUIBase::sdlHitTest(SDL_Window* win, const SDL_Point* 
     int x = area->x;
     int y = area->y;
 
-    // Title bar buttons and menus must always receive clicks, never resize/drag
+    // Title bar buttons and menus must always receive clicks, never resize/drag,
+    // as the floating windows moved over the title bar.
     if (y < obj->titlebarHeight()) {
         const bool inButtons = x >= (width - obj->totalButtonWidth());
         const bool inClient  = x >= obj->_titlebarClientMinX && x < obj->_titlebarClientMaxX;
 
-        if (inButtons || inClient) {
+        if (inButtons || inClient || obj->windowOverTitlebar((float)x, (float)y)) {
             return SDL_HITTEST_NORMAL;
         }
     }

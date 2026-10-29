@@ -161,6 +161,10 @@ std::string Inspector::draw(Project& project, const std::vector<Id>& selection, 
         ImGui::EndTable();
     }
 
+    if (media && clip->kind == ClipKind::Media && !clip->frozen && media->type != MediaType::Image) {
+        speedSection(project, *clip, edit);
+    }
+
     if (clip->kind == ClipKind::Text) {
         textSection(*clip, fonts, textSelection, edit);
     }
@@ -410,6 +414,50 @@ void Inspector::frameSection(Clip& clip, std::string& edit)
     if (ImGui::Button(ICON_MD_RESTART_ALT " Reset##frame")) {
         frame = Frame();
         edit = "Reset frame";
+    }
+}
+
+
+void Inspector::speedSection(Project& project, Clip& clip, std::string& edit)
+{
+    ImGui::SeparatorText(ICON_MD_SPEED " Speed");
+
+    // In percent; the linked clips (the sound of a video) follow.
+    float percent = (float)(clip.speed * 100.0);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+
+    if (ImGui::DragFloat("##speed", &percent, 0.5f, (float)(Project::MinSpeed * 100.0), (float)(Project::MaxSpeed * 100.0),
+            "%.0f %%", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic)) {
+        project.setClipSpeed(clip.id, (double)percent / 100.0);
+    }
+
+    ImGui::SetItemTooltip("Playback speed: the clip gets shorter or longer, the clips after it follow.\n"
+        "The sound plays faster or slower (higher or lower).");
+    finishedEdit(edit, "Change speed");
+
+    const float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+    constexpr double presets[] = { 0.25, 0.5, 1.0, 1.5, 2.0, 4.0 };
+    const float width = (ImGui::GetContentRegionAvail().x - spacing * (float)(std::size(presets) - 1)) / (float)std::size(presets);
+
+    for (size_t i = 0; i < std::size(presets); i++) {
+        if (i > 0) {
+            ImGui::SameLine(0.f, spacing);
+        }
+
+        const std::string label = (presets[i] == 1.0) ? std::string("1x") : (std::to_string((int)(presets[i] * 100.0)) + "%");
+        const bool current = std::abs(clip.speed - presets[i]) < 1e-6;
+
+        if (current) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        }
+
+        if (ImGui::Button(label.c_str(), ImVec2(width, 0.f)) && !current && project.setClipSpeed(clip.id, presets[i])) {
+            edit = "Change speed";
+        }
+
+        if (current) {
+            ImGui::PopStyleColor();
+        }
     }
 }
 
