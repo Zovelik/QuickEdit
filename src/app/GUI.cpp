@@ -1,5 +1,6 @@
 #include <app/GUI.h>
 #include <app/I18n.h>
+#include <app/Widgets.h>
 #include <core/Paths.h>
 #include <app/AppIcon.h>
 #include <config.h>
@@ -110,31 +111,6 @@ void toolbarSeparator()
 {
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
     ImGui::SameLine();
-}
-
-
-// Flat button of the toolbars of the panels, as tall as the other widgets
-// of the line (combos, sliders); square when it is an icon alone. The
-// selected one (a tool, a toggle) is highlighted. Stays on the same line.
-bool panelButton(const char* label, const char* tooltip, bool selected = false, bool enabled = true)
-{
-    // An icon is one character of the private use area: 3 bytes in UTF-8.
-    const char* end = ImGui::FindRenderedTextEnd(label);
-    const bool iconOnly = (end - label) == 3 && (unsigned char)label[0] == 0xEE;
-    const ImVec2 size(iconOnly ? ImGui::GetFrameHeight() : 0.f, ImGui::GetFrameHeight());
-
-    ImGui::PushStyleColor(ImGuiCol_Button, selected ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive) : ImVec4(0.f, 0.f, 0.f, 0.f));
-    ImGui::BeginDisabled(!enabled);
-    const bool pressed = ImGui::Button(tr(label), size);
-    ImGui::EndDisabled();
-    ImGui::PopStyleColor();
-
-    if (tooltip && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled)) {
-        ImGui::SetTooltip("%s", tr(tooltip));
-    }
-
-    ImGui::SameLine();
-    return pressed;
 }
 
 
@@ -587,6 +563,7 @@ void GUI::render(
 
     recorderWindow();
     screenRecorderWindow();
+    sceneRecorderWindow();
     subtitleGeneratorWindow();
     shaderEditorWindow();
 
@@ -847,6 +824,7 @@ void GUI::menuBar()
             }
             ImGui::MenuItem(tr(ICON_MD_MIC " Record Voice-Over..."), "R", &_showRecorder);
             ImGui::MenuItem(tr(ICON_MD_SCREEN_SHARE " Record Screen..."), "Shift+R", &_showScreenRecorder);
+            ImGui::MenuItem(tr(ICON_MD_DASHBOARD " Record a Scene..."), "Ctrl+Shift+R", &_showSceneRecorder);
             ImGui::Separator();
             if (ImGui::MenuItem(tr(ICON_MD_LIBRARY_ADD " Add Video Track"))) { addTrack(TrackType::Video); }
             if (ImGui::MenuItem(tr(ICON_MD_PLAYLIST_ADD " Add Audio Track"))) { addTrack(TrackType::Audio); }
@@ -1043,6 +1021,7 @@ void GUI::toolbar()
     if (toolbarButton(ICON_MD_MOVIE_CREATION, "Export Video...", "Ctrl+E", buttonSize)) { _requestExportPopup = true; }
     if (toolbarButton(ICON_MD_MIC, "Record Voice-Over...", "R", buttonSize, true, _showRecorder)) { _showRecorder = !_showRecorder; }
     if (toolbarButton(ICON_MD_SCREEN_SHARE, "Record Screen...", "Shift+R", buttonSize, true, _showScreenRecorder)) { _showScreenRecorder = !_showScreenRecorder; }
+    if (toolbarButton(ICON_MD_DASHBOARD, "Record a Scene...", "Ctrl+Shift+R", buttonSize, true, _showSceneRecorder)) { _showSceneRecorder = !_showSceneRecorder; }
 
     toolbarSeparator();
 
@@ -1099,6 +1078,7 @@ void GUI::shortcuts()
     if (ImGui::Shortcut(ImGuiKey_R, global))                 { _showRecorder = !_showRecorder; }
     if (ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_T, global)) { addSubtitle(); }
     if (ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_R, global)) { _showScreenRecorder = !_showScreenRecorder; }
+    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_R, global)) { _showSceneRecorder = !_showSceneRecorder; }
 
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Z, repeat)) { undo(); }
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Y, repeat) ||
@@ -2873,17 +2853,17 @@ void GUI::shaderEditorWindow()
     // Toolbar, flat as those of the other panels.
     ImGui::PushStyleVarX(ImGuiStyleVar_ItemSpacing, ImGui::GetStyle().ItemInnerSpacing.x);
 
-    if (panelButton(ICON_MD_SAVE " Save", "Saved, and used by the clips at once (Ctrl+S)", false, modified)) {
+    if (widgets::panelButton(ICON_MD_SAVE " Save", "Saved, and used by the clips at once (Ctrl+S)", false, modified)) {
         saveShader();
     }
 
-    if (panelButton(ICON_MD_OPEN_IN_NEW " Open in External Editor", nullptr)) {
+    if (widgets::panelButton(ICON_MD_OPEN_IN_NEW " Open in External Editor", nullptr)) {
         if (modified) saveShader();
         const std::u8string path = _shaderEditorPath.generic_u8string();
         SDL_OpenURL(("file:///" + std::string(path.begin(), path.end())).c_str());
     }
 
-    if (panelButton(ICON_MD_REFRESH " Reload", "Read the file again (after a change in another editor)")) {
+    if (widgets::panelButton(ICON_MD_REFRESH " Reload", "Read the file again (after a change in another editor)")) {
         _shaderEditorText = readText(_shaderEditorPath);
         _shaderEditorSaved = _shaderEditorText;
         setCodeEditorText(_shaderEditorText);
@@ -2891,7 +2871,7 @@ void GUI::shaderEditorWindow()
         reloadShaders(true);
     }
 
-    if (panelButton(ICON_MD_FOLDER_OPEN " Folder", "Open the folder of the shaders")) {
+    if (widgets::panelButton(ICON_MD_FOLDER_OPEN " Folder", "Open the folder of the shaders")) {
         openShaderFolder();
     }
 
@@ -4803,20 +4783,20 @@ void GUI::timelinePanel()
             char tooltip[256];
             std::snprintf(tooltip, sizeof(tooltip), "%s (%s)\n%s", tr(info.label), info.shortcut, tr(info.help));
 
-            if (panelButton(info.icon, tooltip, _timeline.tool() == info.tool)) {
+            if (widgets::panelButton(info.icon, tooltip, _timeline.tool() == info.tool)) {
                 _timeline.setTool(info.tool);
             }
         }
 
         panelSeparator();
 
-        if (panelButton(ICON_MD_VERTICAL_ALIGN_CENTER, "Snapping (N)", _timeline.snapping())) {
+        if (widgets::panelButton(ICON_MD_VERTICAL_ALIGN_CENTER, "Snapping (N)", _timeline.snapping())) {
             _timeline.setSnapping(!_timeline.snapping());
         }
 
         panelSeparator();
 
-        if (panelButton(ICON_MD_ZOOM_OUT, "Zoom Out (Ctrl+-, Ctrl+Wheel)")) {
+        if (widgets::panelButton(ICON_MD_ZOOM_OUT, "Zoom Out (Ctrl+-, Ctrl+Wheel)")) {
             _timeline.setZoom(_timeline.zoom() / 1.5f);
         }
 
@@ -4830,25 +4810,25 @@ void GUI::timelinePanel()
         ImGui::SetItemTooltip(tr("Zoom"));
         ImGui::SameLine();
 
-        if (panelButton(ICON_MD_ZOOM_IN, "Zoom In (Ctrl++, Ctrl+Wheel)")) {
+        if (widgets::panelButton(ICON_MD_ZOOM_IN, "Zoom In (Ctrl++, Ctrl+Wheel)")) {
             _timeline.setZoom(_timeline.zoom() * 1.5f);
         }
 
-        if (panelButton(ICON_MD_FIT_SCREEN, "Show the whole sequence (Ctrl+0)")) {
+        if (widgets::panelButton(ICON_MD_FIT_SCREEN, "Show the whole sequence (Ctrl+0)")) {
             _timeline.requestZoomToFit();
         }
 
         panelSeparator();
 
-        if (panelButton(ICON_MD_LIBRARY_ADD, "Add a video track (with its sound track)")) {
+        if (widgets::panelButton(ICON_MD_LIBRARY_ADD, "Add a video track (with its sound track)")) {
             addTrack(TrackType::Video);
         }
 
-        if (panelButton(ICON_MD_PLAYLIST_ADD, "Add an audio track")) {
+        if (widgets::panelButton(ICON_MD_PLAYLIST_ADD, "Add an audio track")) {
             addTrack(TrackType::Audio);
         }
 
-        if (panelButton(ICON_MD_SUBTITLES, "Add a subtitle track")) {
+        if (widgets::panelButton(ICON_MD_SUBTITLES, "Add a subtitle track")) {
             addTrack(TrackType::Subtitle);
         }
 

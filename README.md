@@ -25,6 +25,9 @@ Windows and Linux. C++20, SDL3, Dear ImGui, Vulkan, FFmpeg.
   such as WaveShell included), scrubbing, loudness normalization at export.
 - **Recording**: voice-over, screen, window or camera (format and frame rate
   of the camera), with the sound of the computer.
+- **Scenes**: several screens, windows and cameras recorded at once, placed
+  in the frame beforehand as in OBS; each one gets a file and a track of its
+  own, and stays movable. Scenes are saved for later.
 - **Subtitles**: SRT import and export, burnt in at export, or generated from
   the speech with whisper.cpp on the GPU.
 - **Export**: H.264, H.265 and AV1 to MP4, MOV or MKV, at any size and frame
@@ -45,6 +48,7 @@ Windows and Linux. C++20, SDL3, Dear ImGui, Vulkan, FFmpeg.
 | Shift+F              | Freeze frame                            |
 | Ctrl+D               | Add or remove a transition              |
 | R / Shift+R          | Record a voice-over / the screen        |
+| Ctrl+Shift+R         | Record a scene (several sources)        |
 | Ctrl+Z / Ctrl+Y      | Undo / redo                             |
 | Ctrl+Wheel, Ctrl+0   | Zoom the timeline, show the whole of it |
 

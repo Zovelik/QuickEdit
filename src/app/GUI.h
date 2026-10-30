@@ -5,6 +5,7 @@
 #include <app/Exporter.h>
 #include <app/GUIBase.h>
 #include <app/Inspector.h>
+#include <app/RecordingScene.h>
 #include <app/SubtitleGenerator.h>
 #include <app/KeyframeEditor.h>
 #include <app/ViewerTextEditor.h>
@@ -474,6 +475,48 @@ private:
     // Screen recording, in a window of its own; the microphone, through
     // _recorder, recorded beside it on request.
     void screenRecorderWindow();
+
+    // Recording scenes: several sources at once (app/SceneRecorder.cpp).
+    struct ScenePreview
+    {
+        capture::SourcePreview preview;
+        ImTextureData* texture = nullptr;
+        std::vector<uint8_t> pixels;
+        int frameWidth = 0;             // Of the pictures of the source, 0 until known
+        int frameHeight = 0;
+
+        ~ScenePreview();
+    };
+
+    struct SceneTake
+    {
+        std::unique_ptr<capture::ScreenRecorder> recorder;
+        std::filesystem::path path;
+        size_t sourceIndex = 0;
+        SceneSource source;
+    };
+
+    void sceneRecorderWindow();
+    void syncScenePreviews(bool show);
+    void startSceneRecording();
+    void stopSceneRecording();
+    RecordingScene* currentScene();
+
+    bool _showSceneRecorder = false;
+    std::vector<RecordingScene> _scenes;
+    bool _scenesLoaded = false;
+    int _currentScene = 0;
+    int _sceneSelected = -1;
+    std::string _sceneName;
+    std::vector<std::unique_ptr<ScenePreview>> _scenePreviews;     // One per source of the current scene
+    int _sceneDrag = 0;             // 1: moving, 2: resizing
+    ImVec2 _sceneDragStart;
+    SceneSource _sceneDragOriginal;
+    bool _sceneRecording = false;
+    core::Time _sceneStart = 0;
+    std::vector<SceneTake> _sceneTakes;
+    std::filesystem::path _sceneMicrophonePath;
+    std::string _sceneError;
 
     // Format and frame rate of the camera being the capture source.
     void cameraFormatOptions();

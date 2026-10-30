@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 
@@ -110,6 +111,10 @@ namespace capture
 
         // Why there is no picture, if so.
         std::string error() const;
+
+        // Size of the pictures of the source (0 until the first one): the
+        // preview shows them letterboxed.
+        std::pair<int, int> frameSize() const;
 
         // Shared with the thread of the capture.
         struct State;

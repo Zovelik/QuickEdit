@@ -108,6 +108,8 @@ set(QUICKEDIT_SRC
     app/GUI.cpp
     app/I18n.cpp
     app/Inspector.cpp
+    app/RecordingScene.cpp
+    app/SceneRecorder.cpp
     app/SubtitleGenerator.cpp
     app/KeyframeEditor.cpp
     app/ViewerTextEditor.cpp

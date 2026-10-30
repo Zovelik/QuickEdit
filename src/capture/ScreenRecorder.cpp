@@ -1494,6 +1494,8 @@ struct SourcePreview::State
     std::vector<uint8_t> rgba = std::vector<uint8_t>((size_t)Width * Height * 4, 0);
     bool fresh = false;
     std::string error;
+    int frameWidth = 0;
+    int frameHeight = 0;
 };
 
 
@@ -1519,6 +1521,8 @@ void previewLoop(std::shared_ptr<SourcePreview::State> state, CaptureSource sour
         std::scoped_lock lock(state->mutex);
         state->rgba.swap(rgba);
         state->fresh = true;
+        state->frameWidth = frame->width;
+        state->frameHeight = frame->height;
     };
 
     bool opened = false;
@@ -1654,6 +1658,17 @@ bool SourcePreview::take(std::vector<uint8_t>& rgba)
     rgba = _state->rgba;
 
     return true;
+}
+
+
+std::pair<int, int> SourcePreview::frameSize() const
+{
+    if (!_state) {
+        return { 0, 0 };
+    }
+
+    std::scoped_lock lock(_state->mutex);
+    return { _state->frameWidth, _state->frameHeight };
 }
 
 

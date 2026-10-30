@@ -132,6 +132,10 @@ Windows only for now.
   forward), context menus of clips and tracks.
 - `Inspector`, `KeyframeEditor`, `ViewerTextEditor` (text editing in the
   viewer), `SubtitleGenerator` (whisper.cpp), `EffectRack`, `Exporter`.
+- `RecordingScene`, `SceneRecorder.cpp`: scenes of several sources recorded
+  at once (one `ScreenRecorder` per source, the microphone added to the first
+  file), each placed on a video track of its own in its rectangle; scenes
+  saved in `scenes.json` of the settings folder.
 - `Widgets.h`: small widgets shared by the panels.
 - `I18n`: translations of the interface. `tr()` looks the English text up in
   the catalog of the language (`lang/<code>.json`), keeping the icons at the

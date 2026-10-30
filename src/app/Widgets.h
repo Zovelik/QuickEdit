@@ -3,6 +3,7 @@
 #include <app/I18n.h>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 
 // Small widgets shared by the panels, for a consistent look.
@@ -27,5 +28,29 @@ namespace widgets
         ImGui::PopStyleColor(2);
 
         return pressed && !selected;
+    }
+
+    // Flat button of the toolbars of the panels, as tall as the other widgets
+    // of the line (combos, sliders); square when it is an icon alone. The
+    // selected one (a tool, a toggle) is highlighted. Stays on the same line.
+    inline bool panelButton(const char* label, const char* tooltip, bool selected = false, bool enabled = true)
+    {
+        // An icon is one character of the private use area: 3 bytes in UTF-8.
+        const char* end = ImGui::FindRenderedTextEnd(label);
+        const bool iconOnly = (end - label) == 3 && (unsigned char)label[0] == 0xEE;
+        const ImVec2 size(iconOnly ? ImGui::GetFrameHeight() : 0.f, ImGui::GetFrameHeight());
+
+        ImGui::PushStyleColor(ImGuiCol_Button, selected ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive) : ImVec4(0.f, 0.f, 0.f, 0.f));
+        ImGui::BeginDisabled(!enabled);
+        const bool pressed = ImGui::Button(tr(label), size);
+        ImGui::EndDisabled();
+        ImGui::PopStyleColor();
+
+        if (tooltip && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("%s", tr(tooltip));
+        }
+
+        ImGui::SameLine();
+        return pressed;
     }
 }
