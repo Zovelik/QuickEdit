@@ -1342,6 +1342,33 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
     const float unit = ImGui::GetFontSize();
     const Sequence& sequence = project.sequence();
 
+    // Moving over other clips: what they lose, in red, over them.
+    struct Covered { float x0, x1, top, bottom; };
+    std::vector<Covered> covered;
+
+    auto dragged = [&](Id clipId) {
+        return std::any_of(_dragItems.begin(), _dragItems.end(), [&](const DragItem& item) { return item.original.id == clipId; });
+    };
+
+    if (_dragMode == DragMode::Move && _overwrite) {
+        for (const Row& row : _rows) {
+            const Track& track = tracksOfType(sequence, row.type)[row.trackIndex];
+
+            for (const Clip& moved : track.clips) {
+                if (!dragged(moved.id)) {
+                    continue;
+                }
+
+                for (const Clip& other : track.clips) {
+                    if (!dragged(other.id) && other.start < moved.end() && moved.start < other.end()) {
+                        covered.push_back({ timeToX(std::max(other.start, moved.start)), timeToX(std::min(other.end(), moved.end())),
+                            row.top + 2.f, row.top + row.height - 2.f });
+                    }
+                }
+            }
+        }
+    }
+
     for (const Row& row : _rows) {
         const Track& track = tracksOfType(sequence, row.type)[row.trackIndex];
 
@@ -1600,6 +1627,11 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
     if (_dragMode != DragMode::None && _dragMode != DragMode::Scrub && _snapLine >= 0) {
         const float x = timeToX(_snapLine);
         drawList->AddLine(ImVec2(x, _tracksTop), ImVec2(x, _tracksBottom), SnapLineColor, 1.f);
+    }
+
+    for (const Covered& part : covered) {
+        drawList->AddRectFilled(ImVec2(part.x0, part.top), ImVec2(part.x1, part.bottom), IM_COL32(230, 60, 50, 110), 3.f);
+        drawList->AddRect(ImVec2(part.x0, part.top), ImVec2(part.x1, part.bottom), IM_COL32(255, 90, 80, 230), 3.f, 0, 1.5f);
     }
 }
 
@@ -1941,6 +1973,10 @@ void TimelineView::updateDrag(Project& project, float mouseX, float mouseY)
 
     delta = (minDelta <= maxDelta) ? std::clamp(delta, minDelta, maxDelta) : 0;
 
+    // A move over other clips overwrites them when dropped (Alt: refused,
+    // as trims are).
+    _overwrite = _dragMode == DragMode::Move && !ImGui::GetIO().KeyAlt;
+
     // Track offset, for the clips of the type of the grabbed one.
     int trackDelta = _lastValidTrackDelta;
 
@@ -1997,7 +2033,7 @@ void TimelineView::updateDrag(Project& project, float mouseX, float mouseY)
                     break;
             }
 
-            if (!force) {
+            if (!force && !_overwrite) {
                 for (const Clip& other : tracks[index].clips) {
                     if (clip.start < other.end() && other.start < clip.end()) {
                         return false;
@@ -2040,6 +2076,25 @@ bool TimelineView::endDrag(Project& project)
 
     const bool changed = _lastValidDelta != 0 || _lastValidTrackDelta != 0;
 
+    // The clips covered by the moved ones: shortened, cut or removed.
+    if (changed && mode == DragMode::Move && _overwrite) {
+        std::vector<Id> moved;
+
+        for (const DragItem& item : _dragItems) {
+            moved.push_back(item.original.id);
+        }
+
+        for (Id clipId : moved) {
+            const Clip* clip = project.findClip(clipId);
+            const Track* track = clip ? project.findTrackOfClip(clipId) : nullptr;
+
+            if (clip && track) {
+                project.overwrite(track->id, clip->start, clip->end(), moved);
+            }
+        }
+    }
+
+    _overwrite = false;
     _dragItems.clear();
     _grabbedClip = InvalidId;
     _lastValidDelta = 0;

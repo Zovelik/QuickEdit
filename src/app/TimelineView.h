@@ -22,7 +22,9 @@
 //   Alt + click on a clip               select it alone
 //   Drag on an empty area               select the clips in a rectangle,
 //                                       with their linked clips
-//   Drag a clip                         move it, also to another track
+//   Drag a clip                         move it, also to another track; over
+//                                       other clips, it replaces what it
+//                                       covers once dropped (Alt: refused)
 //   Drag the edge of a clip             trim it
 //   Wheel                               scroll in time
 //   Ctrl + Wheel                        zoom around the mouse
@@ -277,6 +279,7 @@ private:
     FileDrop _fileDrop;
     std::vector<LiveRecording> _liveRecordings;
     core::Id _hoveredLinkGroup = core::InvalidId;   // Of the clip under the mouse
+    bool _overwrite = false;        // The move overwrites the clips it covers
     bool _zoomToFitRequested = false;
 
     // Layout of the current frame, in screen coordinates.

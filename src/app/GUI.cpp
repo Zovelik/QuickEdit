@@ -4981,6 +4981,7 @@ void GUI::timelinePanel()
         ImGui::SetItemTooltip(
             tr("Click on the ruler: move the playhead (drag to hear the sound)\n"
             "Click between clips: select the gap (Delete closes it)\n"
+            "Drag a clip over others: it replaces what it covers (Alt: not)\n"
             "Drag on an empty area: select the clips in a rectangle\n"
             "Right click: menus of the clips and of the tracks\n"
             "Wheel: scroll in time   Ctrl+Wheel: zoom   Shift+Wheel: scroll the tracks\n"

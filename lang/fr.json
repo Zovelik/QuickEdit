@@ -131,7 +131,6 @@
   "Choose a screen, a camera or a window...": "Choisir un écran, une caméra ou une fenêtre...",
   "Choose a track...": "Choisir une piste...",
   "Chroma Key": "Incrustation (chroma key)",
-  "Click on the ruler: move the playhead (drag to hear the sound)\nClick between clips: select the gap (Delete closes it)\nDrag on an empty area: select the clips in a rectangle\nRight click: menus of the clips and of the tracks\nWheel: scroll in time   Ctrl+Wheel: zoom   Shift+Wheel: scroll the tracks\nMiddle button: move around": "Clic sur la règle : déplacer la tête de lecture (glisser pour entendre le son)\nClic entre deux clips : sélectionner le vide (Suppr le referme)\nGlisser sur une zone vide : sélectionner les clips dans un rectangle\nClic droit : menus des clips et des pistes\nMolette : défiler dans le temps   Ctrl+Molette : zoom   Maj+Molette : défiler les pistes\nBouton du milieu : se déplacer",
   "Clip": "Clip",
   "Close": "Fermer",
   "Close Gap": "Refermer le vide",
@@ -580,5 +579,6 @@
   "Starting...": "Démarrage...",
   "Unmute": "Rétablir le son",
   "Unmute clips": "Rétablir le son des clips",
-  "Writing the files": "Écriture des fichiers"
+  "Writing the files": "Écriture des fichiers",
+  "Click on the ruler: move the playhead (drag to hear the sound)\nClick between clips: select the gap (Delete closes it)\nDrag a clip over others: it replaces what it covers (Alt: not)\nDrag on an empty area: select the clips in a rectangle\nRight click: menus of the clips and of the tracks\nWheel: scroll in time   Ctrl+Wheel: zoom   Shift+Wheel: scroll the tracks\nMiddle button: move around": "Clic sur la règle : déplacer la tête de lecture (glisser pour entendre le son)\nClic entre deux clips : sélectionner le vide (Suppr le referme)\nGlisser un clip sur d’autres : il remplace ce qu’il recouvre (Alt : non)\nGlisser sur une zone vide : sélectionner les clips dans un rectangle\nClic droit : menus des clips et des pistes\nMolette : défiler dans le temps   Ctrl+Molette : zoom   Maj+Molette : défiler les pistes\nBouton du milieu : se déplacer"
 }

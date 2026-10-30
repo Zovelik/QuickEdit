@@ -1305,45 +1305,106 @@ void Project::splitAt(Time t, const std::vector<Id>& onlyClips)
                 continue;
             }
 
-            Clip& left = track.clips[index];
-            Clip right = left;
-
-            right.id = newId();
-            right.start = t;
-            right.duration = left.end() - t;
-            right.sourceIn = left.sourceAt(t - left.start);
-            right.linkGroup = newLinkGroup(left.linkGroup);
-
-            // The animation goes on where it was; the transition stays at the
-            // start of the left part.
-            right.transform.shiftKeys(-(t - left.start));
-            right.transitionIn = Transition();
-
-            // Its effects: instances of their own; their keys follow.
-            for (EffectSlot& slot : right.effects) {
-                slot.id = newId();
-            }
-
-            for (VideoEffect& effect : right.videoEffects) {
-                effect.id = newId();
-
-                for (AnimatedValue& value : effect.parameters) {
-                    value.shiftKeys(-(t - left.start));
-                }
-            }
-
-            // The fades stay at the outer edges.
-            right.fadeIn = 0;
-            left.fadeOut = 0;
-            right.fadeOut = std::min(right.fadeOut, right.duration);
-            left.fadeIn = std::min(left.fadeIn, t - left.start);
-
-            left.duration = t - left.start;
+            Clip right = cutClip(track.clips[index], t);
+            right.linkGroup = newLinkGroup(right.linkGroup);
 
             track.clips.push_back(right);
             track.sortClips();
         }
     }
+}
+
+
+Clip Project::cutClip(Clip& left, Time t)
+{
+    Clip right = left;
+
+    right.id = newId();
+    right.start = t;
+    right.duration = left.end() - t;
+    right.sourceIn = left.sourceAt(t - left.start);
+
+    // The animation goes on where it was; the transition stays at the
+    // start of the left part.
+    right.transform.shiftKeys(-(t - left.start));
+    right.transitionIn = Transition();
+
+    // Its effects: instances of their own; their keys follow.
+    for (EffectSlot& slot : right.effects) {
+        slot.id = newId();
+    }
+
+    for (VideoEffect& effect : right.videoEffects) {
+        effect.id = newId();
+
+        for (AnimatedValue& value : effect.parameters) {
+            value.shiftKeys(-(t - left.start));
+        }
+    }
+
+    // The fades stay at the outer edges.
+    right.fadeIn = 0;
+    left.fadeOut = 0;
+    right.fadeOut = std::min(right.fadeOut, right.duration);
+    left.fadeIn = std::min(left.fadeIn, t - left.start);
+
+    left.duration = t - left.start;
+    return right;
+}
+
+
+void Project::overwrite(Id trackId, Time from, Time to, const std::vector<Id>& keep)
+{
+    Track* track = findTrack(trackId);
+
+    if (!track || to <= from) {
+        return;
+    }
+
+    std::vector<Clip> clips;
+
+    for (Clip& clip : track->clips) {
+        const bool kept = std::find(keep.begin(), keep.end(), clip.id) != keep.end();
+
+        if (kept || clip.end() <= from || clip.start >= to) {
+            clips.push_back(clip);
+            continue;
+        }
+
+        // Inside: gone.
+        if (clip.start >= from && clip.end() <= to) {
+            continue;
+        }
+
+        // Across both edges: the parts before and after.
+        if (clip.start < from && clip.end() > to) {
+            Clip right = cutClip(clip, to);
+            Clip middle = cutClip(clip, from);
+            (void)middle;
+            clips.push_back(clip);
+            clips.push_back(right);
+            continue;
+        }
+
+        // Across the start of the range: the part before.
+        if (clip.start < from) {
+            cutClip(clip, from);
+            clips.push_back(clip);
+            continue;
+        }
+
+        // Across its end: the part after, which keeps the clip's id.
+        Clip right = cutClip(clip, to);
+        right.id = clip.id;
+
+        for (size_t i = 0; i < right.effects.size(); i++) right.effects[i].id = clip.effects[i].id;
+        for (size_t i = 0; i < right.videoEffects.size(); i++) right.videoEffects[i].id = clip.videoEffects[i].id;
+
+        clips.push_back(right);
+    }
+
+    track->clips = std::move(clips);
+    track->sortClips();
 }
 
 

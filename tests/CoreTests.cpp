@@ -354,6 +354,47 @@ void testSubtitles()
 }
 
 
+void testOverwrite()
+{
+    Project project;
+    Sequence& sequence = project.sequence();
+    const Id music = project.importMedia("C:/media/music.wav");
+    project.findMedia(music)->duration = 60 * TicksPerSecond;
+    project.findMedia(music)->probed = true;
+
+    const Id a1 = sequence.audioTracks[0].id;
+    const Id first = project.addClip(music, a1, 0);
+    CHECK(first != InvalidId);
+    Track& track = sequence.audioTracks[0];
+    track.clips[0].duration = 10 * TicksPerSecond;
+
+    // Over the middle: cut in two, the part after from the right source.
+    project.overwrite(a1, 4 * TicksPerSecond, 6 * TicksPerSecond);
+    CHECK(track.clips.size() == 2);
+    CHECK(track.clips[0].id == first);
+    CHECK(track.clips[0].end() == 4 * TicksPerSecond);
+    CHECK(track.clips[1].start == 6 * TicksPerSecond);
+    CHECK(track.clips[1].sourceIn == 6 * TicksPerSecond);
+    CHECK(track.clips[1].end() == 10 * TicksPerSecond);
+
+    // Across an edge of each, and a kept clip untouched.
+    const Id second = track.clips[1].id;
+    project.overwrite(a1, 3 * TicksPerSecond, 7 * TicksPerSecond, { second });
+    CHECK(track.clips[0].end() == 3 * TicksPerSecond);
+    CHECK(track.clips[1].start == 6 * TicksPerSecond);
+
+    project.overwrite(a1, 3 * TicksPerSecond, 7 * TicksPerSecond);
+    CHECK(track.clips.size() == 2);
+    CHECK(track.clips[1].id == second);
+    CHECK(track.clips[1].start == 7 * TicksPerSecond);
+    CHECK(track.clips[1].sourceIn == 7 * TicksPerSecond);
+
+    // All covered: gone.
+    project.overwrite(a1, 0, 20 * TicksPerSecond);
+    CHECK(track.clips.empty());
+}
+
+
 void testRippleDelete()
 {
     Project project;
@@ -860,6 +901,7 @@ int main()
     testProjectEdits();
     testSaveLoadAndHistory();
     testRippleDelete();
+    testOverwrite();
     testMediaFolders();
     testSequences();
     testSubtitles();

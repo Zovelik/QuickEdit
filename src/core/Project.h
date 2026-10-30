@@ -498,6 +498,12 @@ namespace core
         // selected clips (and their links) when the selection is not empty.
         void splitAt(Time t, const std::vector<Id>& onlyClips = {});
 
+        // Frees [from, to) on a track for a clip placed over others, except
+        // the clips kept: the clips inside go, the ones across an edge are
+        // shortened, one across both is cut in two (its parts keep its
+        // link group). Its linked clips on other tracks are left alone.
+        void overwrite(Id trackId, Time from, Time to, const std::vector<Id>& keep = {});
+
         // Places a text on a video track. Returns its id, InvalidId when there
         // is no room at start.
         // On a video track, or a subtitle track (a line of subtitles).
@@ -531,6 +537,10 @@ namespace core
         void load(const std::filesystem::path& filepath);
 
     private:
+        // The part of a clip from t on, as a new clip (new ids for it and
+        // its effects, the same link group); the clip keeps what is before.
+        Clip cutClip(Clip& left, Time t);
+
         Id _nextId = 1;
 
         std::vector<MediaItem> _media;
