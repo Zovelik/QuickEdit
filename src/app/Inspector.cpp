@@ -551,6 +551,10 @@ void Inspector::speedSection(Project& project, Clip& clip, std::string& edit)
 
 void Inspector::videoEffectsSection(Project& project, std::vector<VideoEffect>& effects, Time localTime, std::string& edit)
 {
+    // The effects of a clip and of its track are shown together: IDs of
+    // their own.
+    ImGui::PushID(&effects);
+
     int removed = -1;
     int moveUp = -1;
 
@@ -651,6 +655,8 @@ void Inspector::videoEffectsSection(Project& project, std::vector<VideoEffect>& 
 
         ImGui::EndCombo();
     }
+
+    ImGui::PopID();
 }
 
 
@@ -919,7 +925,7 @@ void Inspector::transitionSection(Project& project, Clip& clip, std::string& edi
             ImGui::Separator();
 
             if (ImGui::Selectable(tr(ICON_MD_ADD " New Transition Shader..."))) {
-                if (const ShaderDef* shader = newShader(ShaderKind::Transition)) {
+                if (const std::optional<ShaderDef> shader = newShader(ShaderKind::Transition)) {
                     clip.transitionIn.type = TransitionType::Shader;
                     clip.transitionIn.shader = shader->id;
                     project.storeShader(*shader);

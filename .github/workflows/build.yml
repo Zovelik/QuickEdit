@@ -42,11 +42,40 @@ jobs:
         with:
           cmakeVersion: "4.3.1"
 
-      - name: Install Vulkan SDK
-        uses: humbletim/install-vulkan-sdk@v1.2
+      # The official Vulkan SDK: headers, loader, glslc and shaderc (the
+      # compiler of the shaders of the user), which Ubuntu 22.04 lacks.
+      - name: Cache Vulkan SDK
+        id: vulkan-cache
+        uses: actions/cache@v4
         with:
-          version: ${{ env.VULKAN_SDK_VERSION }}
-          cache: true
+          path: ${{ runner.os == 'Windows' && 'C:\VulkanSDK' || '~/vulkan-sdk' }}
+          key: vulkan-sdk-${{ runner.os }}-${{ env.VULKAN_SDK_VERSION }}
+
+      - name: Install Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = "C:\VulkanSDK\${{ env.VULKAN_SDK_VERSION }}"
+          if (-not (Test-Path "$root\Include\vulkan\vulkan.h")) {
+            $installer = "vulkansdk-windows-X64-${{ env.VULKAN_SDK_VERSION }}.exe"
+            Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_SDK_VERSION }}/windows/$installer" -OutFile $installer
+            Start-Process -Wait -FilePath ".\$installer" -ArgumentList "--root", $root, "--accept-licenses", "--default-answer", "--confirm-command", "install"
+          }
+          "VULKAN_SDK=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$root\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Install Vulkan SDK (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          root="$HOME/vulkan-sdk/${{ env.VULKAN_SDK_VERSION }}"
+          if [ ! -f "$root/x86_64/include/vulkan/vulkan.h" ]; then
+            mkdir -p "$HOME/vulkan-sdk"
+            wget -q "https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_SDK_VERSION }}/linux/vulkansdk-linux-x86_64-${{ env.VULKAN_SDK_VERSION }}.tar.xz" -O vulkan-sdk.tar.xz
+            tar -xf vulkan-sdk.tar.xz -C "$HOME/vulkan-sdk"
+          fi
+          echo "VULKAN_SDK=$root/x86_64" >> "$GITHUB_ENV"
+          echo "$root/x86_64/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$root/x86_64/lib:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
 
       # DEPENDENCIES
 
@@ -56,7 +85,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential pkg-config ninja-build \
-            libshaderc-dev \
             libasound2-dev libpulse-dev libaudio-dev libjack-dev libsndio-dev libpipewire-0.3-dev \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev \
             libxtst-dev libxkbcommon-dev libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev \

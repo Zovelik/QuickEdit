@@ -264,7 +264,7 @@ GUI::GUI(const std::filesystem::path& projectPath, double startSeconds, Id selec
     _inspector.openShaderFolder = [this]() { openShaderFolder(); };
     _inspector.editShader = [this](const std::string& id) { editShader(id); };
     _inspector.newShader = [this](ShaderKind kind) { return newShader(kind); };
-    reloadShaders(false);
+    applyShaderReload();
 
     createVideo();
 
@@ -809,7 +809,7 @@ void GUI::menuBar()
                 ImGui::Separator();
 
                 if (ImGui::MenuItem(tr(ICON_MD_ADD " New Generator Shader..."))) {
-                    if (const ShaderDef* shader = newShader(ShaderKind::Generator)) addGenerator(*shader);
+                    if (const std::optional<ShaderDef> shader = newShader(ShaderKind::Generator)) addGenerator(*shader);
                 }
 
                 if (ImGui::MenuItem(tr(ICON_MD_ADD " New Transition Shader..."))) { newShader(ShaderKind::Transition); }
@@ -2355,6 +2355,15 @@ std::filesystem::path GUI::shaderFolder() const
 
 void GUI::reloadShaders(bool commitChanges)
 {
+    _shaderReloadPending = true;
+    _shaderReloadCommit = _shaderReloadCommit || commitChanges;
+}
+
+
+void GUI::applyShaderReload()
+{
+    const bool commitChanges = std::exchange(_shaderReloadCommit, false);
+    _shaderReloadPending = false;
     _userShaders = loadShaderFolder(shaderFolder());
 
     // The copies in the project follow their files.
@@ -2476,7 +2485,7 @@ std::string readText(const std::filesystem::path& path)
 } // namespace
 
 
-const ShaderDef* GUI::newShader(ShaderKind kind)
+std::optional<ShaderDef> GUI::newShader(ShaderKind kind)
 {
     const std::filesystem::path folder = shaderFolder();
     std::error_code ec;
@@ -2494,17 +2503,18 @@ const ShaderDef* GUI::newShader(ShaderKind kind)
 
     if (!(std::ofstream(path, std::ios::binary) << (kind == ShaderKind::Generator ? GeneratorExample : TransitionExample))) {
         SDL_Log("Could not write %s", path.string().c_str());
-        return nullptr;
+        return std::nullopt;
     }
 
     reloadShaders(false);
     editShader("file:" + name);
 
-    for (const ShaderDef& shader : _userShaders) {
-        if (shader.id == "file:" + name) return &shader;
+    // A copy: the list of the shaders changes at the next frame.
+    for (const ShaderDef& shader : loadShaderFolder(folder)) {
+        if (shader.id == "file:" + name) return shader;
     }
 
-    return nullptr;
+    return std::nullopt;
 }
 
 
@@ -6281,6 +6291,10 @@ void SDLCALL GUI::onFileImport(void* userdata, const char* const* filelist, int 
 
 void GUI::eventBeforeFrame()
 {
+    if (_shaderReloadPending) {
+        applyShaderReload();
+    }
+
     // Test drag: about 4 s over the window, then dropped.
     if (_testDrag.active) {
         if (_testDragStart == 0) {

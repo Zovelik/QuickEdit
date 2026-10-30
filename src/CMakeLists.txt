@@ -198,7 +198,9 @@ if (WIN32)
 
     install(FILES ${SHADERC_DLL} DESTINATION .)
 else()
-    find_library(SHADERC_LIBRARY NAMES shaderc_shared shaderc REQUIRED)
+    # The Vulkan SDK first (its tarball has it), else the system.
+    get_filename_component(VULKAN_SDK_LIB_DIR "${Vulkan_LIBRARY}" DIRECTORY)
+    find_library(SHADERC_LIBRARY NAMES shaderc_shared shaderc HINTS "${VULKAN_SDK_LIB_DIR}" "$ENV{VULKAN_SDK}/lib" REQUIRED)
     target_link_libraries(QuickEdit PRIVATE ${SHADERC_LIBRARY})
 endif()
 

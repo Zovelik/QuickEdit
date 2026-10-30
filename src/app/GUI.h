@@ -293,7 +293,13 @@ private:
     // at the playhead.
     std::vector<core::ShaderDef> _userShaders;
     std::filesystem::path shaderFolder() const;
+    // Reads the shaders of the user again, at the start of the next frame:
+    // the list stays the same during a frame, the windows and the layers of
+    // the frame pointing into it.
     void reloadShaders(bool commitChanges);
+    void applyShaderReload();
+    bool _shaderReloadPending = false;
+    bool _shaderReloadCommit = false;
     void openShaderFolder();
     void addGenerator(const core::ShaderDef& shader);
 
@@ -314,7 +320,7 @@ private:
     void markShaderErrors();
     double _shaderEditorChecked = 0.;       // Last typed, or compiled
     bool _shaderEditorDirty = false;        // Typed since
-    const core::ShaderDef* newShader(core::ShaderKind kind);
+    std::optional<core::ShaderDef> newShader(core::ShaderKind kind);
     void editShader(const std::string& shaderId);
     void saveShader();
     void checkEditedShader();
