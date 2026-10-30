@@ -180,7 +180,8 @@ private:
         FadeIn,         // Audio fade handles
         FadeOut,
         Marquee,        // A rectangle selecting the clips it touches
-        Slip            // The media moved inside the clips
+        Slip,           // The media moved inside the clips
+        ResizeTrack     // The bottom edge of a track header dragged
     };
 
     // Marquee: where it started (time, and y in the scrolled rows), the
@@ -189,6 +190,10 @@ private:
     float _marqueeY = 0.f;
     float _marqueeX = 0.f;
     std::vector<core::Id> _marqueeBase;
+
+    // Track being resized: its height when the drag started.
+    core::Id _resizedTrack = core::InvalidId;
+    float _resizeStartHeight = 0.f;
 
     // Track of the context menu of the track headers.
     core::Id _contextTrack = core::InvalidId;

@@ -779,9 +779,17 @@ void testSpeedAndTracks()
     CHECK(fitScale(FitMode::Native, 1920.f, 1080.f, 1280.f, 720.f) == 1.f);
 
     sequence.videoTracks[0].clips[0].fit = FitMode::Native;
+    sequence.videoTracks[0].clips[0].filter = ScaleFilter::Nearest;
+    sequence.videoTracks[0].clips[0].blend = BlendMode::Screen;
+    sequence.videoTracks[0].blend = BlendMode::Multiply;
+    sequence.videoTracks[0].height = 4.5f;
     Project native;
     native.fromJson(project.toJson({}), {});
     CHECK(native.sequence().videoTracks[0].clips[0].fit == FitMode::Native);
+    CHECK(native.sequence().videoTracks[0].clips[0].filter == ScaleFilter::Nearest);
+    CHECK(native.sequence().videoTracks[0].clips[0].blend == BlendMode::Screen);
+    CHECK(native.sequence().videoTracks[0].blend == BlendMode::Multiply);
+    CHECK(native.sequence().videoTracks[0].height == 4.5f);
 
     // Tracks: a video track goes with its sound track; one stays.
     const size_t videos = sequence.videoTracks.size();

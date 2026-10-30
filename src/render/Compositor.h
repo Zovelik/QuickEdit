@@ -51,8 +51,10 @@ public:
         // Texts: false to show all the letters, as while editing.
         bool animateLetters = true;
 
-        // Video effects of the track of the clip, after the clip's own.
+        // Video effects of the track of the clip, after the clip's own, and
+        // its blending (when the clip has none of its own).
         const std::vector<core::VideoEffect>* trackEffects = nullptr;
+        core::BlendMode trackBlend = core::BlendMode::Normal;
 
         // Generator clips: their shader.
         const core::ShaderDef* generator = nullptr;
@@ -125,7 +127,7 @@ private:
 
     void createPipelines(const GPU::PipelineCache& pipelineCache);
     VkPipeline createPipeline(const GPU::PipelineCache& pipelineCache, VkPipelineLayout layout,
-        const uint32_t* vertexCode, size_t vertexSize, const uint32_t* fragmentCode, size_t fragmentSize, bool blending = true);
+        const uint32_t* vertexCode, size_t vertexSize, const uint32_t* fragmentCode, size_t fragmentSize, bool blending = true, int blendMode = 0);
 
     // The picture of a layer through its effects (the picture itself
     // without any), in the shader read only layout.
@@ -173,11 +175,15 @@ private:
     bool _display;
 
     VkSampler _sampler = VK_NULL_HANDLE;
+    VkSampler _nearestSampler = VK_NULL_HANDLE;     // ScaleFilter::Nearest
     VkDescriptorSetLayout _layerSetLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout _textSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout _layerPipelineLayout = VK_NULL_HANDLE;
     VkPipelineLayout _textPipelineLayout = VK_NULL_HANDLE;
     VkPipeline _layerPipeline = VK_NULL_HANDLE;
+
+    // One per blend mode (index: core::BlendMode); Normal is _layerPipeline.
+    std::array<VkPipeline, (size_t)core::BlendMode::Count> _blendPipelines = {};
     VkPipeline _textPipeline = VK_NULL_HANDLE;
     VkPipelineLayout _effectPipelineLayout = VK_NULL_HANDLE;
     std::map<core::VideoEffectType, VkPipeline> _effectPipelines;

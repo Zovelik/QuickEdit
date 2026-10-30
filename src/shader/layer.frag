@@ -17,6 +17,27 @@ layout(push_constant) uniform Parameters
 layout(location = 0) in vec2 inLocal;
 layout(location = 0) out vec4 outColor;
 
+// The blending of the pipeline (core::BlendMode): Normal mixes the straight
+// color by its alpha; the others need the color premultiplied, Darken over
+// white where transparent (see Compositor::createPipeline()).
+layout(constant_id = 0) const int blendMode = 0;
+
+const int BlendNormal = 0;
+const int BlendDarken = 5;
+
+vec4 blended(vec4 color)
+{
+    if (blendMode == BlendNormal) {
+        return color;
+    }
+
+    if (blendMode == BlendDarken) {
+        return vec4(mix(vec3(1.0), color.rgb, color.a), color.a);
+    }
+
+    return vec4(color.rgb * color.a, color.a);
+}
+
 
 // Signed distance to a rectangle of half size h with corners of radius r.
 float roundedBox(vec2 p, vec2 h, float r)
@@ -40,7 +61,7 @@ void main()
         const float softness = max(parameters.shape.z, 0.5);
         const float coverage = 1.0 - smoothstep(-softness, softness, d);
 
-        outColor = vec4(parameters.extra.rgb, parameters.extra.a * coverage * parameters.color.a);
+        outColor = blended(vec4(parameters.extra.rgb, parameters.extra.a * coverage * parameters.color.a));
         return;
     }
 
@@ -54,12 +75,12 @@ void main()
     const vec4 picture = texture(layerTexture, uv);
 
     if (border <= 0.0) {
-        outColor = vec4(picture.rgb, picture.a * inside * parameters.color.a);
+        outColor = blended(vec4(picture.rgb, picture.a * inside * parameters.color.a));
         return;
     }
 
     const float outside = clamp(0.5 - (d - border) / pixel, 0.0, 1.0);
     const vec4 color = mix(parameters.extra, picture, inside);
 
-    outColor = vec4(color.rgb, color.a * outside * parameters.color.a);
+    outColor = blended(vec4(color.rgb, color.a * outside * parameters.color.a));
 }

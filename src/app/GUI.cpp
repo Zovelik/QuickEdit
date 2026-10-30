@@ -392,6 +392,7 @@ void GUI::cmdCompose(VkCommandBuffer commandBuffer)
             Compositor::Layer layer = { &clip, request.localTime, nullptr, 0, 0,
                 request.opacity, request.offsetX, request.offsetY, request.scale, request.wipe };
             layer.trackEffects = &level.videoTracks[request.track].videoEffects;
+                layer.trackBlend = level.videoTracks[request.track].blend;
             layer.transitionRole = request.transitionRole;
             layer.transitionProgress = request.transitionProgress;
             layer.transitionShader = request.transition ? _project.findShader(request.transition->shader) : nullptr;
@@ -5405,11 +5406,52 @@ void GUI::effectsTab()
     ImGui::TextDisabled(video ? tr("On each clip of the track, after its own.") : tr("Applied in order, to the whole track."));
 
     if (video) {
+        // Blending of the clips of the track with the tracks below.
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", tr("Blend"));
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+
+        if (ImGui::BeginCombo("##trackBlend", tr(blendModeName(track->blend)))) {
+            for (int mode = 0; mode < (int)BlendMode::Count; mode++) {
+                if (ImGui::Selectable(tr(blendModeName((BlendMode)mode)), (int)track->blend == mode)) {
+                    track->blend = (BlendMode)mode;
+                    edit = "Change blending";
+                }
+            }
+
+            ImGui::EndCombo();
+        }
+
         // Keyframes of track effects: in the time of the sequence.
         _inspector.videoEffectsSection(_project, track->videoEffects, _playhead, edit);
     }
     else {
         audioEffectChain(track->effects, "track");
+    }
+
+    // A video track: the sound of the clip and its sound track too, so that
+    // the effects of a video are all in one place.
+    if (video) {
+        const size_t index = (size_t)(track - sequence.videoTracks.data());
+        Track* soundTrack = (index < sequence.soundTracks.size()) ? &sequence.soundTracks[index] : nullptr;
+        Clip* sound = nullptr;
+
+        if (soundTrack && clip && clip->linkGroup != InvalidId) {
+            for (Clip& c : soundTrack->clips) {
+                if (c.linkGroup == clip->linkGroup) sound = &c;
+            }
+        }
+
+        if (sound) {
+            ImGui::SeparatorText(tr(ICON_MD_AUDIOTRACK " Sound of the Clip"));
+            audioEffectChain(sound->effects, "soundClip");
+        }
+
+        if (soundTrack) {
+            ImGui::SeparatorText((std::string(tr(ICON_MD_TUNE " Sound Track ")) + soundTrack->name).c_str());
+            audioEffectChain(soundTrack->effects, "soundTrack");
+        }
     }
 
     if (!edit.empty()) {

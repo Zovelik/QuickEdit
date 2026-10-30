@@ -328,6 +328,50 @@ void Inspector::transformSection(Clip& clip, Time localTime, std::string& edit)
         }
     }
 
+    // Sampling: smooth, or sharp pixels (a screen capture enlarged).
+    if (clip.kind == ClipKind::Media || clip.kind == ClipKind::Sequence) {
+        propertyLabel("Sampling");
+
+        const float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+        const float width = (ImGui::GetContentRegionAvail().x - spacing) / 2.f;
+
+        if (widgets::optionButton("Smooth", clip.filter == ScaleFilter::Bilinear, ImVec2(width, 0.f))) {
+            clip.filter = ScaleFilter::Bilinear;
+            edit = "Change sampling";
+        }
+
+        ImGui::SetItemTooltip("%s", tr("Bilinear: smooth when the picture is scaled"));
+        ImGui::SameLine(0.f, spacing);
+
+        if (widgets::optionButton("Sharp Pixels", clip.filter == ScaleFilter::Nearest, ImVec2(width, 0.f))) {
+            clip.filter = ScaleFilter::Nearest;
+            edit = "Change sampling";
+        }
+
+        ImGui::SetItemTooltip("%s", tr("Nearest: each pixel stays a sharp square (screen captures, pixel art)"));
+    }
+
+    // Blending with the pictures below.
+    if (clip.kind != ClipKind::Text) {
+        propertyLabel("Blend");
+        ImGui::SetNextItemWidth(-FLT_MIN);
+
+        if (ImGui::BeginCombo("##blend", tr(clip.blend == BlendMode::Normal ? "Track's" : blendModeName(clip.blend)))) {
+            for (int mode = 0; mode < (int)BlendMode::Count; mode++) {
+                const char* name = (mode == 0) ? tr("Track's") : tr(blendModeName((BlendMode)mode));
+
+                if (ImGui::Selectable(name, (int)clip.blend == mode)) {
+                    clip.blend = (BlendMode)mode;
+                    edit = "Change blending";
+                }
+            }
+
+            ImGui::EndCombo();
+        }
+
+        ImGui::SetItemTooltip("%s", tr("How the clip mixes with the pictures below. Track's: the mode of its track (Normal by default)"));
+    }
+
     animatedRow("Position X", t.x, localTime, 1.f, -100000.f, 100000.f, "%.0f px", 1.f, edit);
     animatedRow("Position Y", t.y, localTime, 1.f, -100000.f, 100000.f, "%.0f px", 1.f, edit);
     animatedRow("Scale", t.scale, localTime, 0.5f, 0.f, 10000.f, "%.1f %%", 100.f, edit);

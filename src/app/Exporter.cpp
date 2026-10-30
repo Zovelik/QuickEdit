@@ -577,6 +577,7 @@ void Exporter::exportVideo()
                 Compositor::Layer layer = { &clip, request.localTime, nullptr, 0, 0,
                     request.opacity, request.offsetX, request.offsetY, request.scale, request.wipe };
                 layer.trackEffects = &level.videoTracks[request.track].videoEffects;
+                layer.trackBlend = level.videoTracks[request.track].blend;
                 layer.transitionRole = request.transitionRole;
                 layer.transitionProgress = request.transitionProgress;
                 layer.transitionShader = request.transition ? _project.findShader(request.transition->shader) : nullptr;

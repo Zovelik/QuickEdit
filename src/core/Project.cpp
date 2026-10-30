@@ -362,6 +362,8 @@ Json clipToJson(const Clip& clip)
 
     if (clip.speed != 1.0) json["speed"] = clip.speed;
     if (clip.fit != FitMode::Fit) json["fit"] = clip.fit == FitMode::Fill ? "fill" : "native";
+    if (clip.filter != ScaleFilter::Bilinear) json["filter"] = "nearest";
+    if (clip.blend != BlendMode::Normal) json["blend"] = blendModeName(clip.blend);
 
     if (clip.fadeIn > 0) json["fadeIn"] = clip.fadeIn;
     if (clip.fadeOut > 0) json["fadeOut"] = clip.fadeOut;
@@ -450,6 +452,8 @@ Clip clipFromJson(const Json& json)
 
     const std::string fit = json["fit"].toString();
     clip.fit = (fit == "fill") ? FitMode::Fill : (fit == "native") ? FitMode::Native : FitMode::Fit;
+    clip.filter = (json["filter"].toString() == "nearest") ? ScaleFilter::Nearest : ScaleFilter::Bilinear;
+    clip.blend = blendModeFromName(json["blend"].toString());
     clip.fadeIn = std::clamp<Time>(json["fadeIn"].toInt(), 0, clip.duration);
     clip.fadeOut = std::clamp<Time>(json["fadeOut"].toInt(), 0, clip.duration);
 
@@ -509,6 +513,9 @@ Json trackToJson(const Track& track)
     json["solo"] = track.solo;
     json["locked"] = track.locked;
 
+    if (track.height > 0.f) json["height"] = (double)track.height;
+    if (track.blend != BlendMode::Normal) json["blend"] = blendModeName(track.blend);
+
     Json clips = Json::array();
 
     for (const Clip& clip : track.clips) {
@@ -538,6 +545,8 @@ Track trackFromJson(const Json& json, TrackType type)
     track.muted = json["muted"].toBool();
     track.solo = json["solo"].toBool();
     track.locked = json["locked"].toBool();
+    track.height = (float)json["height"].toDouble(0.0);
+    track.blend = blendModeFromName(json["blend"].toString());
 
     for (const Json& clip : json["clips"].items()) {
         track.clips.push_back(clipFromJson(clip));
@@ -670,6 +679,29 @@ float fitScale(FitMode mode, float frameWidth, float frameHeight, float pictureW
         case FitMode::Native: return 1.f;
         default:              return std::min(frameWidth / pictureWidth, frameHeight / pictureHeight);
     }
+}
+
+
+const char* blendModeName(BlendMode mode)
+{
+    switch (mode) {
+        case BlendMode::Add:      return "Add";
+        case BlendMode::Screen:   return "Screen";
+        case BlendMode::Multiply: return "Multiply";
+        case BlendMode::Lighten:  return "Lighten";
+        case BlendMode::Darken:   return "Darken";
+        default:                  return "Normal";
+    }
+}
+
+
+BlendMode blendModeFromName(const std::string& name)
+{
+    for (int i = 0; i < (int)BlendMode::Count; i++) {
+        if (name == blendModeName((BlendMode)i)) return (BlendMode)i;
+    }
+
+    return BlendMode::Normal;
 }
 
 

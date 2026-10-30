@@ -199,10 +199,17 @@ void TimelineView::layoutRows(const Sequence& sequence, float top)
     _groupHeaders.clear();
     float y = top - _scrollY;
 
+    // The height chosen for a track, else the default of its type.
+    auto heightOf = [&](TrackType type, int index, float defaultHeight) {
+        const float height = tracksOfType(sequence, type)[index].height;
+        return (height > 0.f) ? height * unit : defaultHeight;
+    };
+
     // Top video track first: they are composited bottom to top.
     for (int i = (int)sequence.videoTracks.size() - 1; i >= 0; i--) {
-        _rows.push_back({ TrackType::Video, i, y, videoHeight });
-        y += videoHeight;
+        const float height = heightOf(TrackType::Video, i, videoHeight);
+        _rows.push_back({ TrackType::Video, i, y, height });
+        y += height;
     }
 
     y += gap;
@@ -213,8 +220,9 @@ void TimelineView::layoutRows(const Sequence& sequence, float top)
 
     if (!sequence.soundTracksFolded) {
         for (int i = 0; i < (int)sequence.soundTracks.size(); i++) {
-            _rows.push_back({ TrackType::Sound, i, y, audioHeight });
-            y += audioHeight;
+            const float height = heightOf(TrackType::Sound, i, audioHeight);
+            _rows.push_back({ TrackType::Sound, i, y, height });
+            y += height;
         }
     }
 
@@ -225,8 +233,9 @@ void TimelineView::layoutRows(const Sequence& sequence, float top)
     y += headerHeight;
 
     for (int i = 0; i < (int)sequence.audioTracks.size(); i++) {
-        _rows.push_back({ TrackType::Audio, i, y, audioHeight });
-        y += audioHeight;
+        const float height = heightOf(TrackType::Audio, i, audioHeight);
+        _rows.push_back({ TrackType::Audio, i, y, height });
+        y += height;
     }
 
     // Subtitles, when there are some.
@@ -437,6 +446,47 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
     if (_dragMode == DragMode::FadeIn || _dragMode == DragMode::FadeOut ||
         (_dragMode == DragMode::None && (hoveredMode == DragMode::FadeIn || hoveredMode == DragMode::FadeOut))) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+
+    // The bottom edge of a track header: drag to change the height of the
+    // track (double click: back to the default one).
+    const Row* edgeRow = nullptr;
+
+    if (hovered && _dragMode == DragMode::None && mouse.x < _timelineLeft) {
+        for (const Row& row : _rows) {
+            if (row.type != TrackType::Subtitle && std::abs(mouse.y - (row.top + row.height)) < 0.25f * unit) {
+                edgeRow = &row;
+            }
+        }
+    }
+
+    if (edgeRow || _dragMode == DragMode::ResizeTrack) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    }
+
+    if (edgeRow && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        tracksOfType(sequence, edgeRow->type)[edgeRow->trackIndex].height = 0.f;
+        result.edited = true;
+        result.label = "Resize track";
+    }
+    else if (edgeRow && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        _dragMode = DragMode::ResizeTrack;
+        _resizedTrack = tracksOfType(sequence, edgeRow->type)[edgeRow->trackIndex].id;
+        _resizeStartHeight = edgeRow->height / unit;
+        _dragStartY = mouse.y;
+    }
+
+    if (_dragMode == DragMode::ResizeTrack) {
+        if (Track* track = project.findTrack(_resizedTrack)) {
+            track->height = std::clamp(_resizeStartHeight + (mouse.y - _dragStartY) / unit, 1.6f, 12.f);
+        }
+
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            _dragMode = DragMode::None;
+            _resizedTrack = InvalidId;
+            result.edited = true;
+            result.label = "Resize track";
+        }
     }
 
     // A click handled by a tool: no selection of a gap after it.
@@ -704,7 +754,7 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
     }
 
     if (_dragMode != DragMode::None && _dragMode != DragMode::Marquee && _dragMode != DragMode::Slip &&
-        !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        _dragMode != DragMode::ResizeTrack && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         const DragMode mode = _dragMode;
 
         if (endDrag(project)) {

@@ -44,6 +44,7 @@ PATTERNS = [
     r'case Easing::\w+:\s*return\s*(' + STR + r')',
     r'(?:toolbarButton|panelButton)\(\s*ICON_MD_\w+(?:\s*' + STR + r')?\s*,\s*(' + STR + r')',
     r'panelButton\(\s*ICON_MD_\w+\s*(' + STR + r')',
+    r'optionButton\(\s*(' + STR + r')',
 ]
 
 
@@ -98,8 +99,10 @@ def texts():
     keys.update(c_string(m.group(1)) for m in re.finditer(r'\{\s*VideoEffectType::\w+,\s*' + STR + r',\s*(' + STR + r')', effects))
     keys.update(c_string(m.group(1)) for m in re.finditer(r'\{\s*(' + STR + r'),\s*-?[\d.]+f', effects))
 
-    for fit in ('Fit', 'Fill', 'Native'):
-        keys.add(fit)
+    project = read(os.path.join(ROOT, 'src', 'core', 'Project.cpp'))
+    for function in ('const char* fitModeName', 'const char* blendModeName'):
+        i = project.index(function)
+        keys.update(c_string(m.group(1)) for m in re.finditer(r'return\s*(' + STR + r');', project[i:project.index('\n}', i)]))
 
     return sorted(k for k in keys if k and is_text(k))
 

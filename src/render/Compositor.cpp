@@ -225,12 +225,17 @@ Compositor::~Compositor()
     vkDestroyPipelineLayout(device, _transitionPipelineLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, _transitionSetLayout, nullptr);
     vkDestroyPipeline(device, _layerPipeline, nullptr);
+
+    for (int mode = 1; mode < (int)BlendMode::Count; mode++) {
+        vkDestroyPipeline(device, _blendPipelines[mode], nullptr);
+    }
     vkDestroyPipeline(device, _textPipeline, nullptr);
     vkDestroyPipelineLayout(device, _layerPipelineLayout, nullptr);
     vkDestroyPipelineLayout(device, _textPipelineLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, _layerSetLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, _textSetLayout, nullptr);
     vkDestroySampler(device, _sampler, nullptr);
+    vkDestroySampler(device, _nearestSampler, nullptr);
 }
 
 
@@ -247,6 +252,10 @@ void Compositor::createPipelines(const GPU::PipelineCache& pipelineCache)
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 
     VK_THROW_IF_FAILED(vkCreateSampler(device, &samplerInfo, nullptr, &_sampler));
+
+    samplerInfo.magFilter = VK_FILTER_NEAREST;
+    samplerInfo.minFilter = VK_FILTER_NEAREST;
+    VK_THROW_IF_FAILED(vkCreateSampler(device, &samplerInfo, nullptr, &_nearestSampler));
 
     // Layers: the picture.
     {
@@ -267,6 +276,12 @@ void Compositor::createPipelines(const GPU::PipelineCache& pipelineCache)
         VK_THROW_IF_FAILED(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &_layerPipelineLayout));
 
         _layerPipeline = createPipeline(pipelineCache, _layerPipelineLayout, layer_vert, layer_vert_size, layer_frag, layer_frag_size);
+        _blendPipelines[0] = _layerPipeline;
+
+        for (int mode = 1; mode < (int)BlendMode::Count; mode++) {
+            _blendPipelines[mode] = createPipeline(pipelineCache, _layerPipelineLayout, layer_vert, layer_vert_size,
+                layer_frag, layer_frag_size, true, mode);
+        }
     }
 
     // Texts: the atlas and the glyph instances.
@@ -357,7 +372,7 @@ void Compositor::createPipelines(const GPU::PipelineCache& pipelineCache)
 
 
 VkPipeline Compositor::createPipeline(const GPU::PipelineCache& pipelineCache, VkPipelineLayout layout,
-    const uint32_t* vertexCode, size_t vertexSize, const uint32_t* fragmentCode, size_t fragmentSize, bool blending)
+    const uint32_t* vertexCode, size_t vertexSize, const uint32_t* fragmentCode, size_t fragmentSize, bool blending, int blendMode)
 {
     VkDevice device = _device.device();
 
@@ -382,6 +397,14 @@ VkPipeline Compositor::createPipeline(const GPU::PipelineCache& pipelineCache, V
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     stages[1].module = fragmentModule;
     stages[1].pName = "main";
+
+    // The blend mode, as the specialization constant 0 of the layer shader.
+    const VkSpecializationMapEntry blendEntry = { 0, 0, sizeof(int) };
+    VkSpecializationInfo specialization = { 1, &blendEntry, sizeof(int), &blendMode };
+
+    if (blendMode != 0) {
+        stages[1].pSpecializationInfo = &specialization;
+    }
 
     // Quads from the vertex index: no vertex input.
     VkPipelineVertexInputStateCreateInfo vertexInput = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
@@ -410,6 +433,33 @@ VkPipeline Compositor::createPipeline(const GPU::PipelineCache& pipelineCache, V
     blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+
+    // The other modes, from the premultiplied color P = c a of the shader:
+    // Add d + P, Screen d + P (1 - d), Multiply d (1 - a) + P d,
+    // Lighten max(d, P), Darken min(d, c a + 1 - a).
+    switch ((BlendMode)blendMode) {
+        case BlendMode::Add:
+            blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            break;
+        case BlendMode::Screen:
+            blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+            blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            break;
+        case BlendMode::Multiply:
+            blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_DST_COLOR;
+            blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            break;
+        case BlendMode::Lighten:
+            blendAttachment.colorBlendOp = VK_BLEND_OP_MAX;
+            break;
+        case BlendMode::Darken:
+            blendAttachment.colorBlendOp = VK_BLEND_OP_MIN;
+            break;
+        default:
+            break;
+    }
+
     blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 
     VkPipelineColorBlendStateCreateInfo blend = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
@@ -974,7 +1024,12 @@ void Compositor::cmdDrawLayer(VkCommandBuffer commandBuffer, const Layer& layer,
             return;
         }
 
-        const VkDescriptorImageInfo imageInfo = { _sampler, source->imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        // Sampling and blending of the clip (its track's when Normal).
+        const VkSampler sampler = (layer.clip->filter == ScaleFilter::Nearest) ? _nearestSampler : _sampler;
+        const BlendMode blend = (layer.clip->blend != BlendMode::Normal) ? layer.clip->blend : layer.trackBlend;
+        const VkPipeline pipeline = _blendPipelines[std::min((size_t)blend, _blendPipelines.size() - 1)];
+
+        const VkDescriptorImageInfo imageInfo = { sampler, source->imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 
         VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
         write.dstSet = set;
@@ -984,7 +1039,6 @@ void Compositor::cmdDrawLayer(VkCommandBuffer commandBuffer, const Layer& layer,
         write.pImageInfo = &imageInfo;
         vkUpdateDescriptorSets(_device.device(), 1, &write, 0, nullptr);
 
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _layerPipeline);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _layerPipelineLayout, 0, 1, &set, 0, nullptr);
 
         // A quad over the given rectangle of the layer, grown by margin
@@ -1015,6 +1069,8 @@ void Compositor::cmdDrawLayer(VkCommandBuffer commandBuffer, const Layer& layer,
             parameters.shape[2] = std::max(0.f, frame.shadowSoftness);
             parameters.shape[3] = shadow ? 1.f : 0.f;
 
+            // The shadow stays a normal shadow, whatever the blending.
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shadow ? _layerPipeline : pipeline);
             vkCmdPushConstants(commandBuffer, _layerPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(parameters), &parameters);
             vkCmdDraw(commandBuffer, 4, 1, 0, 0);
         };

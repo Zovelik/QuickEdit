@@ -132,6 +132,30 @@ namespace core
 
     const char* fitModeName(FitMode mode);
 
+
+    // How a picture is mixed with the pictures below it.
+    enum class BlendMode
+    {
+        Normal,
+        Add,
+        Screen,
+        Multiply,
+        Lighten,
+        Darken,
+        Count
+    };
+
+    const char* blendModeName(BlendMode mode);
+    BlendMode blendModeFromName(const std::string& name);
+
+
+    // Sampling of a picture drawn at another size.
+    enum class ScaleFilter
+    {
+        Bilinear,   // Smooth
+        Nearest     // Sharp pixels (screen captures at whole scales)
+    };
+
     // Sequence pixels per pixel of a picture of the given size, in a frame
     // of the given size.
     float fitScale(FitMode mode, float frameWidth, float frameHeight, float pictureWidth, float pictureHeight);
@@ -211,8 +235,12 @@ namespace core
         // Video clips: transition from the previous clip.
         Transition transitionIn;
 
-        // Video and image clips: size in the frame, crop, border and shadow.
+        // Video and image clips: size in the frame, sampling, mixing with
+        // the pictures below (Normal: the one of the track), crop, border
+        // and shadow.
         FitMode fit = FitMode::Fit;
+        ScaleFilter filter = ScaleFilter::Bilinear;
+        BlendMode blend = BlendMode::Normal;
         Frame frame;
 
         // Effects of the clip, before those of its track: on its picture
@@ -261,6 +289,13 @@ namespace core
         bool muted = false;     // Video: hidden. Audio: muted.
         bool solo = false;      // Audio only
         bool locked = false;
+
+        // Height in the timeline, in font sizes; 0 for the default one.
+        float height = 0.f;
+
+        // Video tracks: mixing of their clips with the tracks below (a clip
+        // can have its own).
+        BlendMode blend = BlendMode::Normal;
 
         // Clips sorted by start time, never overlapping.
         std::vector<Clip> clips;
