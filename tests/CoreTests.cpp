@@ -392,6 +392,14 @@ void testOverwrite()
     // All covered: gone.
     project.overwrite(a1, 0, 20 * TicksPerSecond);
     CHECK(track.clips.empty());
+
+    // A media dropped over a clip: the clip makes room for all of it.
+    CHECK(project.addClip(music, a1, 0) != InvalidId);
+    CHECK(project.addClip(music, a1, 30 * TicksPerSecond) == InvalidId);
+    CHECK(project.addClip(music, a1, 30 * TicksPerSecond, true) != InvalidId);
+    CHECK(track.clips.size() == 2);
+    CHECK(track.clips[0].end() == 30 * TicksPerSecond);
+    CHECK(track.clips[1].duration == 60 * TicksPerSecond);
 }
 
 

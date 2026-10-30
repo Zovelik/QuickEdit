@@ -495,7 +495,13 @@ namespace core
         // Places the given media on a track at time start, with its audio on
         // the first audio track when the media has some. Returns the id of
         // the video (or audio) clip, InvalidId when there is no room.
-        Id addClip(Id mediaId, Id trackId, Time start);
+        // overwrite: the clips in the way are shortened, cut or removed
+        // (see overwrite()) rather than the new clip shortened to fit.
+        Id addClip(Id mediaId, Id trackId, Time start, bool overwrite = false);
+
+        // The tracks a clip of a media dropped on a track goes on: its video
+        // track and its sound track (InvalidId for none of either).
+        std::pair<Id, Id> clipTracks(Id mediaId, Id trackId);
 
         // Removes the clips, and their linked clips when withLinks (a
         // selection already holds them, unless picked alone).

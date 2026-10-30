@@ -247,7 +247,7 @@ void TimelineView::layoutRows(const Project& project, float top)
 
         for (int stream = 0; stream < count; stream++) {
             const bool shown = std::any_of(track.clips.begin(), track.clips.end(), [&](const Clip& clip) {
-                return streamsOf(project, clip) > stream && !clip.streamRemoved(stream);
+                return streamsOf(project, clip) > stream && !clip.streamRemoved(stream) && streamsLeft(project, clip, false) > 1;
             });
 
             if (shown) {
@@ -902,17 +902,27 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
             const Sequence* nested = project.findSequence(sequenceId);
             const Time start = std::max<Time>(0, snapToFrame(snapTime(project, xToTime(mouse.x), false), sequence.frameRate));
             const bool allowed = nested && !project.sequenceContains(sequenceId, sequence.id);
+            const Time end = start + (nested && nested->duration() > 0 ? nested->duration() : 5 * TicksPerSecond);
+            const Id trackId = tracksOfType(sequence, hoveredRow->type)[hoveredRow->trackIndex].id;
 
             drawList->PushClipRect(ImVec2(_timelineLeft, _tracksTop), ImVec2(_timelineRight, _tracksBottom), true);
+
+            if (allowed && !io.KeyAlt) {
+                drawCovered(drawList, project, { trackId }, start, end);
+            }
+
             drawList->AddRect(
                 ImVec2(timeToX(start), hoveredRow->top + 2.f),
-                ImVec2(timeToX(start + (nested && nested->duration() > 0 ? nested->duration() : 5 * TicksPerSecond)), hoveredRow->top + hoveredRow->height - 2.f),
+                ImVec2(timeToX(end), hoveredRow->top + hoveredRow->height - 2.f),
                 allowed ? IM_COL32(255, 255, 255, 180) : IM_COL32(230, 70, 60, 200), 3.f, 0, 2.f);
             drawList->PopClipRect();
 
             if (sequencePayload->IsDelivery() && allowed) {
-                const Track& track = tracksOfType(sequence, hoveredRow->type)[hoveredRow->trackIndex];
-                const Id clipId = project.addSequenceClip(sequenceId, track.id, start);
+                if (!io.KeyAlt) {
+                    project.overwrite(trackId, start, end);
+                }
+
+                const Id clipId = project.addSequenceClip(sequenceId, trackId, start);
 
                 if (clipId != InvalidId) {
                     selection = { clipId };
@@ -929,9 +939,15 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
             const Time start = std::max<Time>(0, snapToFrame(snapTime(project, xToTime(mouse.x), false), sequence.frameRate));
             const MediaItem* media = project.findMedia(mediaId);
 
-            // Preview of the clip
+            // Preview of the clip, and what it would overwrite.
             if (media) {
                 drawList->PushClipRect(ImVec2(_timelineLeft, _tracksTop), ImVec2(_timelineRight, _tracksBottom), true);
+
+                if (!io.KeyAlt) {
+                    const auto [videoId, audioId] = project.clipTracks(mediaId, tracksOfType(sequence, hoveredRow->type)[hoveredRow->trackIndex].id);
+                    drawCovered(drawList, project, { videoId, audioId }, start, start + media->duration);
+                }
+
                 drawList->AddRect(
                     ImVec2(timeToX(start), hoveredRow->top + 2.f),
                     ImVec2(timeToX(start + media->duration), hoveredRow->top + hoveredRow->height - 2.f),
@@ -941,7 +957,7 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
 
             if (payload->IsDelivery()) {
                 const Track& track = tracksOfType(sequence, hoveredRow->type)[hoveredRow->trackIndex];
-                const Id clipId = project.addClip(mediaId, track.id, start);
+                const Id clipId = project.addClip(mediaId, track.id, start, !io.KeyAlt);
 
                 if (clipId != InvalidId) {
                     selection.clear();
@@ -1331,7 +1347,7 @@ bool TimelineView::drawTrackHeaders(ImDrawList* drawList, Project& project, std:
 
             // The audio streams of its clips, under it.
             const bool streams = std::any_of(track.clips.begin(), track.clips.end(), [&](const Clip& clip) {
-                return streamsLeft(project, clip, false) > 0;
+                return streamsLeft(project, clip, false) > 1;
             });
 
             if (streams) {
@@ -1375,6 +1391,27 @@ bool TimelineView::drawTrackHeaders(ImDrawList* drawList, Project& project, std:
 }
 
 
+void TimelineView::drawCovered(ImDrawList* drawList, const Project& project, std::initializer_list<Id> trackIds, Time start, Time end) const
+{
+    for (const Row& row : _rows) {
+        const Track& track = tracksOfType(project.sequence(), row.type)[row.trackIndex];
+
+        if (std::find(trackIds.begin(), trackIds.end(), track.id) == trackIds.end()) {
+            continue;
+        }
+
+        for (const Clip& clip : track.clips) {
+            if (clip.start < end && start < clip.end()) {
+                const ImVec2 min(timeToX(std::max(clip.start, start)), row.top + 2.f);
+                const ImVec2 max(timeToX(std::min(clip.end(), end)), row.top + row.height - 2.f);
+                drawList->AddRectFilled(min, max, IM_COL32(230, 60, 50, 110), 3.f);
+                drawList->AddRect(min, max, IM_COL32(255, 90, 80, 230), 3.f, 0, 1.5f);
+            }
+        }
+    }
+}
+
+
 void TimelineView::drawStreamRows(ImDrawList* drawList, const Project& project, const std::vector<Id>& selection) const
 {
     for (const StreamRow& row : _streamRows) {
@@ -1385,7 +1422,7 @@ void TimelineView::drawStreamRows(ImDrawList* drawList, const Project& project, 
 
         // The stream of each clip, aligned with it.
         for (const Clip& clip : track.clips) {
-            if (streamsOf(project, clip) <= row.stream || clip.streamRemoved(row.stream)) {
+            if (streamsOf(project, clip) <= row.stream || clip.streamRemoved(row.stream) || streamsLeft(project, clip, false) < 2) {
                 continue;
             }
 
@@ -1450,7 +1487,7 @@ bool TimelineView::drawStreamHeaders(ImDrawList* drawList, Project& project, std
         std::string name;
 
         for (Clip& clip : track.clips) {
-            if (streamsOf(project, clip) > row.stream && !clip.streamRemoved(row.stream)) {
+            if (streamsOf(project, clip) > row.stream && !clip.streamRemoved(row.stream) && streamsLeft(project, clip, false) > 1) {
                 clips.push_back(&clip);
 
                 if (name.empty()) {

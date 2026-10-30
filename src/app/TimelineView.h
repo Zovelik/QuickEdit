@@ -245,6 +245,10 @@ private:
     void drawRuler(ImDrawList* drawList, const core::Sequence& sequence, const ImVec2& min, const ImVec2& max) const;
     bool drawTrackHeaders(ImDrawList* drawList, core::Project& project, std::string& label, core::Id& effectsOfTrack);
     void drawStreamRows(ImDrawList* drawList, const core::Project& project, const std::vector<core::Id>& selection) const;
+
+    // In red, the parts of the clips of these tracks over [start, end): what
+    // a clip dropped there overwrites.
+    void drawCovered(ImDrawList* drawList, const core::Project& project, std::initializer_list<core::Id> trackIds, core::Time start, core::Time end) const;
     bool drawStreamHeaders(ImDrawList* drawList, core::Project& project, std::string& label);
     void drawClips(ImDrawList* drawList, const core::Project& project, const std::vector<core::Id>& selection) const;
 

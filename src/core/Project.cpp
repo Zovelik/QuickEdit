@@ -1060,13 +1060,13 @@ bool Project::freeRangeAt(const Track& track, Time t, Id ignoreClip, Time& freeS
 }
 
 
-Id Project::addClip(Id mediaId, Id trackId, Time start)
+std::pair<Id, Id> Project::clipTracks(Id mediaId, Id trackId)
 {
     const MediaItem* media = findMedia(mediaId);
     Track* target = findTrack(trackId);
 
-    if (!media || !target || target->locked || start < 0) {
-        return InvalidId;
+    if (!media || !target || target->locked) {
+        return { InvalidId, InvalidId };
     }
 
     const bool wantsVideo = media->type != MediaType::Audio;
@@ -1109,8 +1109,33 @@ Id Project::addClip(Id mediaId, Id trackId, Time start)
     if (videoTrack && videoTrack->locked) videoTrack = nullptr;
     if (audioTrack && audioTrack->locked) audioTrack = nullptr;
 
+    return { videoTrack ? videoTrack->id : InvalidId, audioTrack ? audioTrack->id : InvalidId };
+}
+
+
+Id Project::addClip(Id mediaId, Id trackId, Time start, bool overwriting)
+{
+    const MediaItem* media = findMedia(mediaId);
+
+    if (!media || start < 0) {
+        return InvalidId;
+    }
+
+    const auto [videoId, audioId] = clipTracks(mediaId, trackId);
+    Track* videoTrack = (videoId != InvalidId) ? findTrack(videoId) : nullptr;
+    Track* audioTrack = (audioId != InvalidId) ? findTrack(audioId) : nullptr;
+
     if (!videoTrack && !audioTrack) {
         return InvalidId;
+    }
+
+    // Room made over the whole media.
+    if (overwriting) {
+        for (Track* track : { videoTrack, audioTrack }) {
+            if (track) {
+                overwrite(track->id, start, start + media->duration);
+            }
+        }
     }
 
     // The clips are shortened to fit before the next clip of either track.
