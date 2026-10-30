@@ -156,96 +156,23 @@ void GUI::sceneRecorderWindow()
         _recorder.open(_inputDevice, _recorderError);
     }
 
-    ImGui::SetNextWindowSize(ImVec2(40.f * ImGui::GetFontSize(), 44.f * ImGui::GetFontSize()), ImGuiCond_FirstUseEver);
+    const float fontSize = ImGui::GetFontSize();
+    ImGui::SetNextWindowSize(ImVec2(64.f * fontSize, 34.f * fontSize), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(30.f * fontSize, 24.f * fontSize), ImVec2(FLT_MAX, FLT_MAX));
 
-    if (!ImGui::Begin(tr(ICON_MD_DASHBOARD " Record a Scene###sceneRecorder"), &_showSceneRecorder, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
+    if (!ImGui::Begin(tr(ICON_MD_DASHBOARD " Record a Scene###sceneRecorder2"), &_showSceneRecorder, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
         syncScenePreviews(false);
         ImGui::End();
         return;
     }
 
     const bool recording = _sceneRecording;
+    const Sequence& sequence = _project.sequence();
+    const ImGuiStyle& style = ImGui::GetStyle();
     bool changed = false;
 
-    // Scenes: choose, add, rename, remove.
-    ImGui::BeginDisabled(recording);
-    ImGui::PushStyleVarX(ImGuiStyleVar_ItemSpacing, ImGui::GetStyle().ItemInnerSpacing.x);
-
     RecordingScene* scene = currentScene();
-    const float buttons = 3.f * (ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x);
-    ImGui::SetNextItemWidth(-buttons);
-
-    if (ImGui::BeginCombo("##scene", scene ? scene->name.c_str() : "")) {
-        for (int i = 0; i < (int)_scenes.size(); i++) {
-            ImGui::PushID(i);
-
-            if (ImGui::Selectable(_scenes[(size_t)i].name.c_str(), i == _currentScene)) {
-                _currentScene = i;
-                _sceneSelected = -1;
-                _scenePreviews.clear();
-            }
-
-            ImGui::PopID();
-        }
-
-        ImGui::EndCombo();
-    }
-
-    ImGui::SameLine();
-
-    if (ImGui::Button(ICON_MD_ADD "##newScene", ImVec2(ImGui::GetFrameHeight(), 0.f))) {
-        _scenes.push_back({ std::string(tr("Scene")) + " " + std::to_string(_scenes.size() + 1), {} });
-        _currentScene = (int)_scenes.size() - 1;
-        _sceneSelected = -1;
-        _scenePreviews.clear();
-        changed = true;
-    }
-
-    ImGui::SetItemTooltip("%s", tr("New scene"));
-    ImGui::SameLine();
-
-    if (ImGui::Button(ICON_MD_EDIT "##renameScene", ImVec2(ImGui::GetFrameHeight(), 0.f)) && scene) {
-        _sceneName = scene->name;
-        ImGui::OpenPopup("##renameScenePopup");
-    }
-
-    ImGui::SetItemTooltip("%s", tr("Rename the scene"));
-
-    if (ImGui::BeginPopup("##renameScenePopup")) {
-        if (ImGui::IsWindowAppearing()) {
-            ImGui::SetKeyboardFocusHere();
-        }
-
-        if (ImGui::InputText("##name", &_sceneName, ImGuiInputTextFlags_EnterReturnsTrue) && scene && !_sceneName.empty()) {
-            scene->name = _sceneName;
-            changed = true;
-            ImGui::CloseCurrentPopup();
-        }
-
-        ImGui::EndPopup();
-    }
-
-    ImGui::SameLine();
-
-    if (ImGui::Button(ICON_MD_DELETE "##deleteScene", ImVec2(ImGui::GetFrameHeight(), 0.f)) && scene) {
-        _scenes.erase(_scenes.begin() + _currentScene);
-
-        if (_scenes.empty()) {
-            _scenes.push_back({ tr("Scene 1"), {} });
-        }
-
-        _currentScene = 0;
-        _sceneSelected = -1;
-        _scenePreviews.clear();
-        changed = true;
-    }
-
-    ImGui::SetItemTooltip("%s", tr("Delete the scene"));
-    ImGui::PopStyleVar();
-    ImGui::EndDisabled();
-
-    scene = currentScene();
 
     if (!scene) {
         ImGui::End();
@@ -254,12 +181,39 @@ void GUI::sceneRecorderWindow()
 
     syncScenePreviews(true);
 
-    // The frame of the sequence, the sources in it.
-    const Sequence& sequence = _project.sequence();
-    const float aspect = (float)sequence.height / (float)std::max(1u, sequence.width);
+    // A rectangle keeps the shape of the pictures of its source, known once
+    // they come (a guess until then).
+    for (size_t i = 0; i < scene->sources.size() && i < _scenePreviews.size(); i++) {
+        SceneSource& source = scene->sources[i];
+        const ScenePreview& preview = *_scenePreviews[i];
+
+        if (preview.frameWidth > 0 && !(_sceneDrag != 0 && (int)i == _sceneSelected)) {
+            const float height = source.width * shapeOf(preview.frameWidth, preview.frameHeight, sequence);
+
+            if (std::abs(height - source.height) > 1e-4f) {
+                source.height = height;
+                changed = true;
+            }
+        }
+    }
+
+    // As in OBS: the frame on top, the panels below it side by side (two
+    // rows of two when the window is narrow, scrolling), the record bar at
+    // the bottom.
     const ImVec2 avail = ImGui::GetContentRegionAvail();
-    const float canvasWidth = std::min(avail.x, std::max(8.f, 0.55f * avail.y) / aspect);
+    const float footer = ImGui::GetFrameHeight() + 2.f * style.ItemSpacing.y + 1.f;
+    const int panelColumns = (avail.x > 60.f * fontSize) ? 4 : 2;
+    const float panelHeight = std::min(10.f * ImGui::GetFrameHeightWithSpacing(), 0.55f * (avail.y - footer));
+    const ImVec2 frameArea(avail.x, std::max(4.f * fontSize, avail.y - footer - panelHeight - style.ItemSpacing.y));
+
+    // --- The frame of the sequence, the sources in it ---------------------
+    ImGui::BeginChild("##sceneFrame", frameArea, ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+    const float aspect = (float)sequence.height / (float)std::max(1u, sequence.width);
+    const ImVec2 room = ImGui::GetContentRegionAvail();
+    const float canvasWidth = std::max(8.f, std::min(room.x, room.y / aspect));
     const ImVec2 canvasSize(canvasWidth, canvasWidth * aspect);
+    ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 0.5f * (room.x - canvasSize.x), ImGui::GetCursorPosY() + 0.5f * (room.y - canvasSize.y)));
     const ImVec2 canvasMin = ImGui::GetCursorScreenPos();
     const ImVec2 canvasMax(canvasMin.x + canvasSize.x, canvasMin.y + canvasSize.y);
 
@@ -275,7 +229,7 @@ void GUI::sceneRecorderWindow()
             ImVec2(canvasMin.x + (source.x + source.width) * canvasSize.x, canvasMin.y + (source.y + source.height) * canvasSize.y));
     };
 
-    const float handle = 0.45f * ImGui::GetFontSize();
+    const float handle = 0.45f * fontSize;
 
     for (size_t i = 0; i < scene->sources.size(); i++) {
         const SceneSource& source = scene->sources[i];
@@ -305,6 +259,13 @@ void GUI::sceneRecorderWindow()
         if (selected && !recording) {
             drawList->AddRectFilled(ImVec2(rect.Max.x - handle, rect.Max.y - handle), ImVec2(rect.Max.x + handle, rect.Max.y + handle), IM_COL32(255, 122, 0, 255));
         }
+    }
+
+    if (scene->sources.empty()) {
+        const char* hint = tr("Add a source to the scene");
+        const ImVec2 size = ImGui::CalcTextSize(hint);
+        drawList->AddText(ImVec2(canvasMin.x + 0.5f * (canvasSize.x - size.x), canvasMin.y + 0.5f * (canvasSize.y - size.y)),
+            ImGui::GetColorU32(ImGuiCol_TextDisabled), hint);
     }
 
     drawList->PopClipRect();
@@ -368,9 +329,102 @@ void GUI::sceneRecorderWindow()
         ImGui::SetItemTooltip("%s", tr("Drag a source to move it, its corner to resize it."));
     }
 
-    // The sources, the top one first.
+    ImGui::EndChild();
+
+    // --- Panels -----------------------------------------------------------
+    ImGui::BeginChild("##scenePanels", ImVec2(avail.x, panelHeight));
+
+    if (!ImGui::BeginTable("##panels", panelColumns, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX)) {
+        ImGui::EndChild();
+        ImGui::End();
+        return;
+    }
+
     ImGui::BeginDisabled(recording);
-    ImGui::PushStyleVarX(ImGuiStyleVar_ItemSpacing, ImGui::GetStyle().ItemInnerSpacing.x);
+
+    // Scenes: choose, add, rename, remove.
+    ImGui::TableNextColumn();
+    ImGui::SeparatorText(tr("Scene"));
+    ImGui::PushStyleVarX(ImGuiStyleVar_ItemSpacing, style.ItemInnerSpacing.x);
+
+    const float sceneButtons = 3.f * (ImGui::GetFrameHeight() + style.ItemInnerSpacing.x);
+    ImGui::SetNextItemWidth(-sceneButtons);
+
+    if (ImGui::BeginCombo("##scene", scene->name.c_str())) {
+        for (int i = 0; i < (int)_scenes.size(); i++) {
+            ImGui::PushID(i);
+
+            if (ImGui::Selectable(_scenes[(size_t)i].name.c_str(), i == _currentScene)) {
+                _currentScene = i;
+                _sceneSelected = -1;
+                _scenePreviews.clear();
+            }
+
+            ImGui::PopID();
+        }
+
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine();
+
+    if (ImGui::Button(ICON_MD_ADD "##newScene", ImVec2(ImGui::GetFrameHeight(), 0.f))) {
+        _scenes.push_back({ std::string(tr("Scene")) + " " + std::to_string(_scenes.size() + 1), {} });
+        _currentScene = (int)_scenes.size() - 1;
+        _sceneSelected = -1;
+        _scenePreviews.clear();
+        changed = true;
+    }
+
+    ImGui::SetItemTooltip("%s", tr("New scene"));
+    ImGui::SameLine();
+
+    if (ImGui::Button(ICON_MD_EDIT "##renameScene", ImVec2(ImGui::GetFrameHeight(), 0.f))) {
+        _sceneName = scene->name;
+        ImGui::OpenPopup("##renameScenePopup");
+    }
+
+    ImGui::SetItemTooltip("%s", tr("Rename the scene"));
+
+    if (ImGui::BeginPopup("##renameScenePopup")) {
+        if (ImGui::IsWindowAppearing()) {
+            ImGui::SetKeyboardFocusHere();
+        }
+
+        if (ImGui::InputText("##name", &_sceneName, ImGuiInputTextFlags_EnterReturnsTrue) && !_sceneName.empty()) {
+            scene->name = _sceneName;
+            changed = true;
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+
+    ImGui::SameLine();
+
+    if (ImGui::Button(ICON_MD_DELETE "##deleteScene", ImVec2(ImGui::GetFrameHeight(), 0.f))) {
+        _scenes.erase(_scenes.begin() + _currentScene);
+
+        if (_scenes.empty()) {
+            _scenes.push_back({ tr("Scene 1"), {} });
+        }
+
+        _currentScene = 0;
+        _sceneSelected = -1;
+        _scenePreviews.clear();
+        changed = true;
+    }
+
+    ImGui::SetItemTooltip("%s", tr("Delete the scene"));
+    ImGui::PopStyleVar();
+
+    // The scene may have changed above: the previews follow next frame.
+    scene = currentScene();
+
+    // Sources: add, the list (the top one first).
+    ImGui::SeparatorText(tr("Sources"));
+    ImGui::PushStyleVarX(ImGuiStyleVar_ItemSpacing, style.ItemInnerSpacing.x);
+    ImGui::SetNextItemWidth(-ImGui::GetFrameHeight() - style.ItemInnerSpacing.x);
 
     if (ImGui::BeginCombo("##addSource", tr(ICON_MD_ADD " Add a Source..."), ImGuiComboFlags_HeightLarge)) {
         const char* titles[] = { tr("Screens"), tr("Windows"), tr("Cameras") };
@@ -386,7 +440,8 @@ void GUI::sceneRecorderWindow()
             ImGui::PushID(available.device.c_str());
 
             if (ImGui::Selectable(available.name.c_str())) {
-                // A quarter of the frame, cascading, until its shape is known.
+                // The whole frame for the first one, then smaller ones,
+                // cascading. Their shape follows their pictures.
                 SceneSource source;
                 source.source = available;
                 source.width = scene->sources.empty() ? 1.f : 0.4f;
@@ -409,82 +464,162 @@ void GUI::sceneRecorderWindow()
 
     if (ImGui::Button(ICON_MD_REFRESH "##sceneSources", ImVec2(ImGui::GetFrameHeight(), 0.f))) {
         _captureSourcesListed = false;
+        _cameraFormats.clear();
     }
 
     ImGui::SetItemTooltip("%s", tr("Look for screens and windows again"));
     ImGui::PopStyleVar();
 
-    for (int i = (int)scene->sources.size() - 1; i >= 0; i--) {
-        const SceneSource& source = scene->sources[(size_t)i];
-        const char* icon = source.source.kind == capture::CaptureSource::Kind::Monitor ? ICON_MD_MONITOR
-            : source.source.kind == capture::CaptureSource::Kind::Camera ? ICON_MD_VIDEOCAM : ICON_MD_WEB_ASSET;
-        const std::string label = std::string(icon) + " " + source.source.name + (source.available ? "" : std::string("  (") + tr("Not found") + ")");
+    const float listHeight = std::clamp(ImGui::GetContentRegionAvail().y - style.ItemSpacing.y,
+        3.f * ImGui::GetTextLineHeightWithSpacing(), 8.f * ImGui::GetTextLineHeightWithSpacing());
 
-        ImGui::PushID(i);
+    if (ImGui::BeginListBox("##sceneSourceList", ImVec2(-FLT_MIN, listHeight))) {
+        for (int i = (int)scene->sources.size() - 1; i >= 0; i--) {
+            const SceneSource& source = scene->sources[(size_t)i];
+            const char* icon = source.source.kind == capture::CaptureSource::Kind::Monitor ? ICON_MD_MONITOR
+                : source.source.kind == capture::CaptureSource::Kind::Camera ? ICON_MD_VIDEOCAM : ICON_MD_WEB_ASSET;
+            const std::string label = std::string(icon) + " " + source.source.name + (source.available ? "" : std::string("  (") + tr("Not found") + ")");
 
-        if (ImGui::Selectable(label.c_str(), i == _sceneSelected)) {
-            _sceneSelected = i;
+            ImGui::PushID(i);
+
+            if (ImGui::Selectable(label.c_str(), i == _sceneSelected)) {
+                _sceneSelected = i;
+            }
+
+            ImGui::PopID();
         }
 
-        ImGui::PopID();
+        ImGui::EndListBox();
     }
 
-    // The selected source: order, size, removal.
-    if (_sceneSelected >= 0 && _sceneSelected < (int)scene->sources.size()) {
-        const size_t index = (size_t)_sceneSelected;
-        SceneSource& source = scene->sources[index];
-        const ScenePreview* preview = (index < _scenePreviews.size()) ? _scenePreviews[index].get() : nullptr;
-        const int frameWidth = preview ? preview->frameWidth : 0;
-        const int frameHeight = preview ? preview->frameHeight : 0;
-        const float shape = shapeOf(frameWidth, frameHeight, sequence);
+    // The selected source: order, size, removal, then its format.
+    ImGui::TableNextColumn();
+    ImGui::SeparatorText(tr("Source"));
+    const bool hasSelection = _sceneSelected >= 0 && _sceneSelected < (int)scene->sources.size();
+    const size_t index = hasSelection ? (size_t)_sceneSelected : 0;
+    const ScenePreview* selectedPreview = (hasSelection && index < _scenePreviews.size()) ? _scenePreviews[index].get() : nullptr;
+    const int frameWidth = selectedPreview ? selectedPreview->frameWidth : 0;
+    const int frameHeight = selectedPreview ? selectedPreview->frameHeight : 0;
+    const float shape = shapeOf(frameWidth, frameHeight, sequence);
 
-        ImGui::PushStyleVarX(ImGuiStyleVar_ItemSpacing, ImGui::GetStyle().ItemInnerSpacing.x);
+    ImGui::PushStyleVarX(ImGuiStyleVar_ItemSpacing, style.ItemInnerSpacing.x);
 
-        if (widgets::panelButton(ICON_MD_ARROW_UPWARD, tr("Above the next source"), false, index + 1 < scene->sources.size())) {
-            std::swap(scene->sources[index], scene->sources[index + 1]);
+    if (widgets::panelButton(ICON_MD_ARROW_UPWARD, tr("Above the next source"), false, hasSelection && index + 1 < scene->sources.size())) {
+        std::swap(scene->sources[index], scene->sources[index + 1]);
+
+        if (index + 1 < _scenePreviews.size()) {
             std::swap(_scenePreviews[index], _scenePreviews[index + 1]);
-            _sceneSelected++;
-            changed = true;
         }
 
-        if (widgets::panelButton(ICON_MD_ARROW_DOWNWARD, tr("Below the previous source"), false, index > 0)) {
-            std::swap(scene->sources[index], scene->sources[index - 1]);
-            std::swap(_scenePreviews[index], _scenePreviews[index - 1]);
-            _sceneSelected--;
-            changed = true;
-        }
-
-        if (widgets::panelButton(ICON_MD_FIT_SCREEN, tr("Fit the frame"))) {
-            source.width = std::min(1.f, 1.f / shape);
-            source.height = source.width * shape;
-            source.x = 0.5f * (1.f - source.width);
-            source.y = 0.5f * (1.f - source.height);
-            changed = true;
-        }
-
-        if (widgets::panelButton(ICON_MD_PHOTO_SIZE_SELECT_ACTUAL, tr("Native size: one pixel of the source per pixel of the sequence"), false, frameWidth > 0)) {
-            source.width = (float)frameWidth / (float)std::max(1u, sequence.width);
-            source.height = source.width * shape;
-            changed = true;
-        }
-
-        if (widgets::panelButton(ICON_MD_DELETE, tr("Remove the source"))) {
-            scene->sources.erase(scene->sources.begin() + _sceneSelected);
-            _scenePreviews.erase(_scenePreviews.begin() + _sceneSelected);
-            _sceneSelected = -1;
-            changed = true;
-        }
-
-        ImGui::NewLine();
-        ImGui::PopStyleVar();
+        _sceneSelected++;
+        changed = true;
     }
 
-    // Options, shared with the screen recorder.
+    if (widgets::panelButton(ICON_MD_ARROW_DOWNWARD, tr("Below the previous source"), false, hasSelection && index > 0)) {
+        std::swap(scene->sources[index], scene->sources[index - 1]);
+
+        if (index < _scenePreviews.size()) {
+            std::swap(_scenePreviews[index], _scenePreviews[index - 1]);
+        }
+
+        _sceneSelected--;
+        changed = true;
+    }
+
+    if (widgets::panelButton(ICON_MD_FIT_SCREEN, tr("Fit the frame"), false, hasSelection)) {
+        SceneSource& source = scene->sources[index];
+        source.width = std::min(1.f, 1.f / shape);
+        source.height = source.width * shape;
+        source.x = 0.5f * (1.f - source.width);
+        source.y = 0.5f * (1.f - source.height);
+        changed = true;
+    }
+
+    if (widgets::panelButton(ICON_MD_PHOTO_SIZE_SELECT_ACTUAL, tr("Native size: one pixel of the source per pixel of the sequence"), false, hasSelection && frameWidth > 0)) {
+        SceneSource& source = scene->sources[index];
+        source.width = (float)frameWidth / (float)std::max(1u, sequence.width);
+        source.height = source.width * shape;
+        changed = true;
+    }
+
+    if (widgets::panelButton(ICON_MD_DELETE, tr("Remove the source"), false, hasSelection)) {
+        scene->sources.erase(scene->sources.begin() + _sceneSelected);
+
+        if (index < _scenePreviews.size()) {
+            _scenePreviews.erase(_scenePreviews.begin() + _sceneSelected);
+        }
+
+        _sceneSelected = -1;
+        changed = true;
+    }
+
+    ImGui::PopStyleVar();
+
+    // Size of the pictures of the selected source, at the right of its
+    // buttons.
+    if (hasSelection && frameWidth > 0) {
+        char size[32];
+        std::snprintf(size, sizeof(size), "%d x %d", frameWidth, frameHeight);
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(size).x));
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", size);
+    }
+    else {
+        ImGui::NewLine();
+    }
+
+    if (hasSelection) {
+        SceneSource& source = scene->sources[index];
+
+        if (source.source.kind == capture::CaptureSource::Kind::Camera && source.available) {
+            ImGui::PushID("selectedCamera");
+
+            if (cameraFormatOptions(source.source, true)) {
+                changed = true;
+            }
+
+            ImGui::PopID();
+        }
+        else {
+            ImGui::PushTextWrapPos(0.f);
+            ImGui::TextDisabled("%s", source.available ? tr("Recorded with the video settings of the scene.")
+                                                       : tr("This source is not there any more: it is not recorded."));
+            ImGui::PopTextWrapPos();
+        }
+    }
+    else {
+        ImGui::TextDisabled("%s", tr("Select a source to set it."));
+    }
+
+    // Video: of the screens and windows (the cameras have their format).
+    ImGui::TableNextColumn();
+    ImGui::SeparatorText(tr("Video"));
+
+    const Rational& sequenceRate = sequence.frameRate;
+    char sequenceLabel[48];
+    std::snprintf(sequenceLabel, sizeof(sequenceLabel), tr("Sequence (%g)"), (double)sequenceRate.num / (double)sequenceRate.den);
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(tr("Frame rate"));
+    ImGui::SetItemTooltip("%s", tr("Of the screens and windows: the cameras have their own"));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+
+    if (ImGui::BeginCombo("##sceneFrameRate", (_captureFrameRate == 0) ? sequenceLabel : std::to_string(_captureFrameRate).c_str())) {
+        if (ImGui::Selectable(sequenceLabel, _captureFrameRate == 0)) _captureFrameRate = 0;
+        if (ImGui::Selectable("30", _captureFrameRate == 30)) _captureFrameRate = 30;
+        if (ImGui::Selectable("60", _captureFrameRate == 60)) _captureFrameRate = 60;
+        ImGui::EndCombo();
+    }
+
     ImGui::Checkbox(tr("Mouse cursor"), &_captureCursor);
-    ImGui::SameLine();
     ImGui::Checkbox(tr("Hide QuickEdit from the recording"), &_hideFromCapture);
+
+    // Sound: the computer's with the first source, the microphone apart.
+    ImGui::TableNextColumn();
+    ImGui::SeparatorText(tr("Sound"));
     ImGui::Checkbox(tr("Computer sound"), &_captureSound);
-    ImGui::SameLine();
     ImGui::Checkbox(tr("Microphone"), &_captureMicrophone);
     ImGui::SetItemTooltip(tr("Recorded on an audio track of its own."));
     ImGui::EndDisabled();
@@ -494,10 +629,20 @@ void GUI::sceneRecorderWindow()
         levelMeter("##sceneMicrophone", _recorder.takePeak(), _microphoneMeter);
     }
 
-    ImGui::Spacing();
+    if (!_sceneError.empty()) {
+        ImGui::Spacing();
+        ImGui::PushTextWrapPos(0.f);
+        ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " %s", _sceneError.c_str());
+        ImGui::PopTextWrapPos();
+    }
 
-    // Record / Stop
-    const float width = 8.f * ImGui::GetFontSize();
+    ImGui::EndTable();
+    ImGui::EndChild();
+
+    // --- Record bar -------------------------------------------------------
+    ImGui::Separator();
+
+    const float width = 8.f * fontSize;
     const bool busy = _screenRecording || (_recorder.recording() && !_sceneRecording);
     const bool any = std::any_of(scene->sources.begin(), scene->sources.end(), [](const SceneSource& s) { return s.available; });
 
@@ -513,6 +658,7 @@ void GUI::sceneRecorderWindow()
 
         ImGui::PopStyleColor(3);
         ImGui::EndDisabled();
+        ImGui::SetItemTooltip("%s", tr("Each source is recorded in a file of its own, and placed on a video track of its own."));
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled(tr("At the playhead, %s"), formatTimecode(_playhead, sequence.frameRate).c_str());
@@ -535,14 +681,6 @@ void GUI::sceneRecorderWindow()
         ImGui::SameLine();
         ImGui::Text(tr("Recording  %s"), formatTimecode(secondsToTime(seconds), sequence.frameRate).c_str());
     }
-
-    if (!_sceneError.empty()) {
-        ImGui::PushTextWrapPos(0.f);
-        ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " %s", _sceneError.c_str());
-        ImGui::PopTextWrapPos();
-    }
-
-    ImGui::TextDisabled("%s", tr("Each source is recorded in a file of its own, and placed on a video track of its own."));
 
     if (changed) {
         saveScenes(_scenes);
@@ -583,10 +721,12 @@ void GUI::startSceneRecording()
             continue;
         }
 
+        // The frame rate chosen for the screens and windows (the one of the
+        // sequence by default); a camera has its own.
         capture::ScreenRecordSettings settings;
         settings.source = source.source;
-        settings.frameRateNum = (int)sequence.frameRate.num;
-        settings.frameRateDen = (int)sequence.frameRate.den;
+        settings.frameRateNum = (_captureFrameRate > 0) ? _captureFrameRate : (int)sequence.frameRate.num;
+        settings.frameRateDen = (_captureFrameRate > 0) ? 1 : (int)sequence.frameRate.den;
         settings.cursor = _captureCursor;
         settings.systemAudio = first && _captureSound;
 

@@ -558,5 +558,12 @@
   "Zooms slowly into the picture over the whole clip (Ken Burns).": "Zoome lentement dans l'image sur toute la durée du clip (Ken Burns).",
   "clips: the changes apply to all of them.": "clips : les changements s'appliquent à tous.",
   "the Recordings folder next to the project": "le dossier Recordings à côté du projet",
-  "Recorded on an audio track of its own.": "Enregistré sur sa propre piste audio."
+  "Recorded on an audio track of its own.": "Enregistré sur sa propre piste audio.",
+  "Add a source to the scene": "Ajoutez une source à la scène",
+  "Of the screens and windows: the cameras have their own": "Des écrans et des fenêtres : les caméras ont la leur",
+  "Recorded with the video settings of the scene.": "Enregistrée avec les réglages vidéo de la scène.",
+  "Select a source to set it.": "Sélectionnez une source pour la régler.",
+  "Source": "Source",
+  "Sources": "Sources",
+  "This source is not there any more: it is not recorded.": "Cette source n'est plus là : elle n'est pas enregistrée."
 }

@@ -4020,12 +4020,13 @@ void GUI::screenRecorderWindow()
 
     if (ImGui::Button(ICON_MD_REFRESH "##sources", ImVec2(ImGui::GetFrameHeight(), 0.f))) {
         _captureSourcesListed = false;
+        _cameraFormats.clear();
     }
 
     ImGui::SetItemTooltip(tr("Look for screens and windows again"));
 
     if (isCamera) {
-        cameraFormatOptions();
+        cameraFormatOptions(_captureSource, false);
     }
 
     sourcePreview();
@@ -4126,42 +4127,48 @@ void GUI::screenRecorderWindow()
 }
 
 
-void GUI::cameraFormatOptions()
+bool GUI::cameraFormatOptions(capture::CaptureSource& source, bool stacked)
 {
     // The formats of the camera, read once per camera.
-    if (_cameraFormatsDevice != _captureSource.device) {
-        _cameraFormatsDevice = _captureSource.device;
-        _cameraFormats = capture::listCameraFormats(_captureSource);
+    auto found = _cameraFormats.find(source.device);
+
+    if (found == _cameraFormats.end()) {
+        found = _cameraFormats.emplace(source.device, capture::listCameraFormats(source)).first;
     }
 
-    capture::CameraFormat& chosen = _captureSource.format;
-    const float labelWidth = ImGui::CalcTextSize(tr("Frame rate")).x + ImGui::GetStyle().ItemSpacing.x;
+    const std::vector<capture::CameraFormat>& formats = found->second;
+    capture::CameraFormat& chosen = source.format;
+    bool changed = false;
+
+    const float labelWidth = std::max(ImGui::CalcTextSize(tr("Format")).x, ImGui::CalcTextSize(tr("Frame rate")).x) + ImGui::GetStyle().ItemSpacing.x;
     const float half = 0.5f * (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x);
 
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(tr("Format"));
     ImGui::SameLine(labelWidth);
-    ImGui::SetNextItemWidth(half - labelWidth);
+    ImGui::SetNextItemWidth(stacked ? -FLT_MIN : half - labelWidth);
 
     if (ImGui::BeginCombo("##cameraFormat", chosen.label().c_str(), ImGuiComboFlags_HeightLarge)) {
         if (ImGui::Selectable(tr("Automatic"), chosen.automatic())) {
             chosen = capture::CameraFormat();
-            _captureSource.frameRate = 0.0;
+            source.frameRate = 0.0;
+            changed = true;
         }
 
         ImGui::SetItemTooltip(tr("The largest size the camera gives in MJPEG, up to 1080p"));
 
-        for (const capture::CameraFormat& format : _cameraFormats) {
+        for (const capture::CameraFormat& format : formats) {
             ImGui::PushID(&format);
 
             if (ImGui::Selectable(format.label().c_str(), format.sameMode(chosen))) {
                 chosen = format;
+                changed = true;
 
                 // The rate chosen before when offered, else the highest.
                 const auto& rates = format.frameRates;
 
-                if (std::find(rates.begin(), rates.end(), _captureSource.frameRate) == rates.end()) {
-                    _captureSource.frameRate = rates.empty() ? 0.0 : rates.front();
+                if (std::find(rates.begin(), rates.end(), source.frameRate) == rates.end()) {
+                    source.frameRate = rates.empty() ? 0.0 : rates.front();
                 }
             }
 
@@ -4171,22 +4178,30 @@ void GUI::cameraFormatOptions()
         ImGui::EndCombo();
     }
 
-    if (_cameraFormats.empty()) {
+    if (formats.empty()) {
         ImGui::SetItemTooltip(tr("The formats of this camera are not known: it gives its default one"));
     }
 
     // Frame rate, of the chosen format.
-    ImGui::SameLine();
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(tr("Frame rate"));
-    ImGui::SameLine();
+    if (stacked) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(tr("Frame rate"));
+        ImGui::SameLine(labelWidth);
+    }
+    else {
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(tr("Frame rate"));
+        ImGui::SameLine();
+    }
+
     ImGui::SetNextItemWidth(-FLT_MIN);
 
     char rateLabel[32] = "";
     std::snprintf(rateLabel, sizeof(rateLabel), "%s", tr("Automatic"));
 
-    if (_captureSource.frameRate > 0.0) {
-        std::snprintf(rateLabel, sizeof(rateLabel), "%g fps", _captureSource.frameRate);
+    if (source.frameRate > 0.0) {
+        std::snprintf(rateLabel, sizeof(rateLabel), "%g fps", source.frameRate);
     }
 
     ImGui::BeginDisabled(chosen.automatic() || chosen.frameRates.empty());
@@ -4196,8 +4211,9 @@ void GUI::cameraFormatOptions()
             char label[32];
             std::snprintf(label, sizeof(label), "%g fps", rate);
 
-            if (ImGui::Selectable(label, rate == _captureSource.frameRate)) {
-                _captureSource.frameRate = rate;
+            if (ImGui::Selectable(label, rate == source.frameRate)) {
+                source.frameRate = rate;
+                changed = true;
             }
         }
 
@@ -4205,6 +4221,8 @@ void GUI::cameraFormatOptions()
     }
 
     ImGui::EndDisabled();
+
+    return changed;
 }
 
 

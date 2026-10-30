@@ -519,13 +519,13 @@ private:
     std::filesystem::path _sceneMicrophonePath;
     std::string _sceneError;
 
-    // Format and frame rate of the camera being the capture source.
-    void cameraFormatOptions();
+    // Format and frame rate of a camera, side by side or one under the
+    // other. True when changed.
+    bool cameraFormatOptions(capture::CaptureSource& source, bool stacked);
 
     // The playhead was moved on the ruler during playback.
     bool _resumeAfterScrub = false;
-    std::vector<capture::CameraFormat> _cameraFormats;
-    std::string _cameraFormatsDevice;
+    std::map<std::string, std::vector<capture::CameraFormat>> _cameraFormats;   // By device, read once
     void startScreenRecording();
     void stopScreenRecording();
     capture::ScreenRecorder _screenRecorder;
