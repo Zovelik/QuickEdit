@@ -495,12 +495,14 @@ private:
         std::filesystem::path path;
         size_t sourceIndex = 0;
         SceneSource source;
+        core::Id trackId = core::InvalidId;     // Video track it goes on
     };
 
     void sceneRecorderWindow();
     void syncScenePreviews(bool show);
     void startSceneRecording();
     void stopSceneRecording();
+    double sceneSeconds() const;            // Length of the scene being recorded
     RecordingScene* currentScene();
 
     bool _showSceneRecorder = false;
@@ -517,6 +519,7 @@ private:
     core::Time _sceneStart = 0;
     std::vector<SceneTake> _sceneTakes;
     std::filesystem::path _sceneMicrophonePath;
+    std::vector<core::Id> _sceneNewTracks;      // Added for the recording
     std::string _sceneError;
 
     // Format and frame rate of a camera, side by side or one under the

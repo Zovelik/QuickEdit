@@ -2090,7 +2090,8 @@ void GUI::viewerInteraction(const ImVec2& frameMin, const ImVec2& frameSize)
 
         if (picked != InvalidId) {
             if (std::find(_selection.begin(), _selection.end(), picked) == _selection.end()) {
-                _selection = { picked };
+                _selection.clear();
+                TimelineView::addWithLinks(_project, picked, _selection);
             }
 
             const Clip* clip = _project.findClip(picked);
@@ -4706,7 +4707,7 @@ void GUI::requestDeleteTrack(Id trackId)
     Sequence& sequence = _project.sequence();
     const Track* track = sequence.findTrack(trackId);
 
-    if (!track || _recorder.recording() || _screenRecording) {
+    if (!track || _recorder.recording() || _screenRecording || _sceneRecording) {
         return;
     }
 
@@ -4869,7 +4870,7 @@ void GUI::timelinePanel()
             "Middle button: move around"));
         ImGui::PopStyleVar();
 
-        if (_recorder.recording() && !_screenRecording) {
+        if (_recorder.recording() && !_screenRecording && !_sceneRecording) {
             updateLiveWaveform();
 
             TimelineView::LiveRecording live;
@@ -4894,6 +4895,17 @@ void GUI::timelinePanel()
                 live.trackId = _screenMicrophoneTrack;
                 live.length = mulDivFloor(_recorder.recordedFrames(), TicksPerSecond, audio::Recorder::SampleRate);
                 live.waveform = _liveWaveform;
+                _timeline.addLiveRecording(std::move(live));
+            }
+        }
+
+        // Scene recording: each source on its track.
+        if (_sceneRecording) {
+            for (const SceneTake& take : _sceneTakes) {
+                TimelineView::LiveRecording live;
+                live.trackId = take.trackId;
+                live.start = _sceneStart;
+                live.length = secondsToTime(take.recorder->seconds());
                 _timeline.addLiveRecording(std::move(live));
             }
         }
@@ -4950,8 +4962,10 @@ void GUI::timelinePanel()
             _selection.clear();
         }
 
-        if (_playing || _recorder.recording() || _screenRecording) {
-            _timeline.followPlayhead(_screenRecording ? _screenStart + secondsToTime(_screenRecorder.seconds()) : _playhead);
+        if (_playing || _recorder.recording() || _screenRecording || _sceneRecording) {
+            _timeline.followPlayhead(_screenRecording ? _screenStart + secondsToTime(_screenRecorder.seconds())
+                : _sceneRecording ? _sceneStart + secondsToTime(sceneSeconds())
+                : _playhead);
         }
     }
 
@@ -6363,7 +6377,7 @@ void GUI::updatePlayback()
 {
     // Recording without playing the sequence: the playhead follows the
     // recording.
-    if (_recorder.recording() && !_screenRecording && !_playing) {
+    if (_recorder.recording() && !_screenRecording && !_sceneRecording && !_playing) {
         _playhead = _recordStart + mulDivFloor(_recorder.recordedFrames(), TicksPerSecond, audio::Recorder::SampleRate);
         return;
     }

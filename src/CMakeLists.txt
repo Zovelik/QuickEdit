@@ -209,7 +209,14 @@ endif()
 if (WIN32)
     # SetWindowSubclass (app/BorderlessWindow.cpp), the windows to capture
     # and the formats of the cameras (capture/ScreenRecorder.cpp)
-    target_link_libraries(QuickEdit PRIVATE comctl32 dwmapi strmiids ole32 oleaut32)
+    target_link_libraries(QuickEdit PRIVATE comctl32 dwmapi strmiids ole32 oleaut32 dbghelp)
+endif()
+
+# Symbols of the release builds too (QuickEdit.pdb, not installed): the
+# crash dumps are read with them.
+if (MSVC)
+    target_compile_options(QuickEdit PRIVATE $<$<CONFIG:Release>:/Zi>)
+    target_link_options(QuickEdit PRIVATE "$<$<CONFIG:Release>:/DEBUG;/OPT:REF;/OPT:ICF>")
 endif()
 
 # Licenses of the libraries in the packages.

@@ -143,6 +143,9 @@ A new language is a new catalog, with its name in `"_language"`.
 - Recordings: a `Recordings` folder next to the project, or
   `Documents/QuickEdit/Recordings` for a project not saved yet.
 - Shaders of the user: `Documents/QuickEdit/Shaders`.
+- Crash dumps (Windows): a `crashes` folder in the settings folder. They are
+  read with the symbols of the same build (`QuickEdit.pdb`, kept as the
+  `QuickEdit-symbols` artifact of the GitHub Actions run).
 
 ## Documentation
 

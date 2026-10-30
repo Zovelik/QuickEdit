@@ -406,6 +406,7 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
     const Row* hoveredRow = (mouse.y >= _tracksTop && mouse.y < _tracksBottom) ? rowAt(mouse.y) : nullptr;
     const Clip* hoveredClip = nullptr;
     DragMode hoveredMode = DragMode::None;
+    _hoveredLinkGroup = InvalidId;
 
     if (hovered && hoveredRow && mouse.x >= _timelineLeft) {
         const Track& track = tracksOfType(sequence, hoveredRow->type)[hoveredRow->trackIndex];
@@ -416,6 +417,11 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
 
             if (mouse.x >= x0 - edgeWidth * 0.5f && mouse.x < x1 + edgeWidth * 0.5f) {
                 hoveredClip = &clip;
+
+                // Its linked clips are outlined (at the next frame).
+                if (_dragMode == DragMode::None) {
+                    _hoveredLinkGroup = clip.linkGroup;
+                }
 
                 // Edges are only grabbed on clips wide enough to keep a body.
                 const bool wide = (x1 - x0) > 3.f * edgeWidth;
@@ -541,7 +547,9 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
             }
             else if (io.KeyCtrl) {
                 if (isSelected(selection, hoveredClip->id)) {
-                    std::erase(selection, hoveredClip->id);
+                    std::vector<Id> linked;
+                    addWithLinks(project, hoveredClip->id, linked);
+                    std::erase_if(selection, [&](Id id) { return isSelected(linked, id); });
                 }
                 else {
                     addWithLinks(project, hoveredClip->id, selection);
@@ -725,7 +733,7 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
 
                 for (const Clip& clip : tracksOfType(sequence, row.type)[row.trackIndex].clips) {
                     if (clip.start < t1 && clip.end() > t0 && !isSelected(selection, clip.id)) {
-                        selection.push_back(clip.id);
+                        addWithLinks(project, clip.id, selection);
                     }
                 }
             }
@@ -998,7 +1006,28 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
             result.label = "Remove sound";
         }
 
-        if (ImGui::MenuItem(tr(ICON_MD_LINK_OFF " Unlink"))) {
+        // Linked clips are selected and moved together.
+        const bool anyLinked = std::any_of(selection.begin(), selection.end(), [&](Id id) {
+            const Clip* clip = project.findClip(id);
+            return clip && clip->linkGroup != InvalidId;
+        });
+
+        if (ImGui::MenuItem(tr(ICON_MD_LINK " Link"), nullptr, false, selection.size() > 1)) {
+            const Id group = project.newId();
+
+            for (Id clipId : selection) {
+                if (Clip* clip = project.findClip(clipId)) {
+                    clip->linkGroup = group;
+                }
+            }
+
+            result.edited = true;
+            result.label = "Link clips";
+        }
+
+        ImGui::SetItemTooltip("%s", tr("The selected clips are then selected and moved together"));
+
+        if (ImGui::MenuItem(tr(ICON_MD_LINK_OFF " Unlink"), nullptr, false, anyLinked)) {
             for (Id clipId : selection) {
                 if (Clip* clip = project.findClip(clipId)) {
                     clip->linkGroup = InvalidId;
@@ -1008,6 +1037,8 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
             result.edited = true;
             result.label = "Unlink clips";
         }
+
+        ImGui::SetItemTooltip("%s", tr("Each clip is then selected and moved alone"));
 
         ImGui::Separator();
 
@@ -1257,6 +1288,7 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
 
             const bool selected = isSelected(selection, clip.id);
             const bool video = row.type == TrackType::Video;
+            const bool linkHovered = clip.linkGroup != InvalidId && clip.linkGroup == _hoveredLinkGroup;
 
             ImU32 color = video
                 ? (selected ? VideoClipSelectedColor : VideoClipColor)
@@ -1355,7 +1387,10 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
                 }
             }
 
-            drawList->AddRect(min, max, selected ? IM_COL32(255, 255, 255, 220) : IM_COL32(0, 0, 0, 120), 3.f, 0, selected ? 2.f : 1.f);
+            // Selected: a white outline. Linked to the clip under the mouse:
+            // a faint one.
+            const ImU32 outline = selected ? IM_COL32(255, 255, 255, 220) : (linkHovered ? IM_COL32(255, 255, 255, 110) : IM_COL32(0, 0, 0, 120));
+            drawList->AddRect(min, max, outline, 3.f, 0, (selected || linkHovered) ? 2.f : 1.f);
 
             // Name, kept visible when the clip starts before the view.
             const MediaItem* media = project.findMedia(clip.mediaId);

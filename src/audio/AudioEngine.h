@@ -57,7 +57,7 @@ namespace audio
         void setSampleRate(uint32_t sampleRate);
 
         SDL_AudioStream* _stream = nullptr;
-        uint32_t _sampleRate = 48000;
+        std::atomic<uint32_t> _sampleRate = 48000;     // Read by the audio thread
 
         std::atomic<std::shared_ptr<const MixGraph>> _graph;
         std::atomic<bool> _playing = false;
@@ -72,7 +72,7 @@ namespace audio
         std::atomic<int64_t> _scrubFrame = 0;
         std::atomic<int64_t> _scrubLeft = 0;
         std::atomic<int64_t> _scrubPlayed = 0;      // Frames since the sound started, for its fade in
-        int64_t _scrubLength = 0;
+        std::atomic<int64_t> _scrubLength = 0;
         core::Time _lastScrub = -1;
 
         // Mixing buffer of the audio thread.

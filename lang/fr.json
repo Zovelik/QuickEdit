@@ -565,5 +565,9 @@
   "Select a source to set it.": "Sélectionnez une source pour la régler.",
   "Source": "Source",
   "Sources": "Sources",
-  "This source is not there any more: it is not recorded.": "Cette source n'est plus là : elle n'est pas enregistrée."
+  "This source is not there any more: it is not recorded.": "Cette source n'est plus là : elle n'est pas enregistrée.",
+  "Each clip is then selected and moved alone": "Chaque clip est alors sélectionné et déplacé seul",
+  "Link": "Lier",
+  "Link clips": "Lier les clips",
+  "The selected clips are then selected and moved together": "Les clips sélectionnés sont alors sélectionnés et déplacés ensemble"
 }

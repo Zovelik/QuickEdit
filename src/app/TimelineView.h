@@ -19,6 +19,9 @@
 // Mouse:
 //   Click on the ruler / drag           move the playhead
 //   Click on a clip (Ctrl to add)       select it, with its linked clips
+//   Alt + click on a clip               select it alone
+//   Drag on an empty area               select the clips in a rectangle,
+//                                       with their linked clips
 //   Drag a clip                         move it, also to another track
 //   Drag the edge of a clip             trim it
 //   Wheel                               scroll in time
@@ -268,6 +271,7 @@ private:
     Gap _gap;
     FileDrop _fileDrop;
     std::vector<LiveRecording> _liveRecordings;
+    core::Id _hoveredLinkGroup = core::InvalidId;   // Of the clip under the mouse
     bool _zoomToFitRequested = false;
 
     // Layout of the current frame, in screen coordinates.

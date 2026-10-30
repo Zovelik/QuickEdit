@@ -769,6 +769,32 @@ void GUI::startSceneRecording()
     _sceneRecording = true;
     _sceneMicrophonePath.clear();
 
+    // A video track per source, free from the start (with its sound track):
+    // the lower ones for the first sources, new ones on top when needed.
+    // Chosen now, so that the recording shows on them while it lasts.
+    Sequence& tracksOf = _project.sequence();
+    const Time start = _sceneStart;
+
+    auto freeFrom = [&](const Track& track) {
+        return !track.locked && std::none_of(track.clips.begin(), track.clips.end(), [&](const Clip& clip) { return clip.end() > start; });
+    };
+
+    size_t next = 0;
+    _sceneNewTracks.clear();
+
+    for (size_t i = 0; i < tracksOf.videoTracks.size() && next < _sceneTakes.size(); i++) {
+        if (freeFrom(tracksOf.videoTracks[i]) && (i >= tracksOf.soundTracks.size() || freeFrom(tracksOf.soundTracks[i]))) {
+            _sceneTakes[next++].trackId = tracksOf.videoTracks[i].id;
+        }
+    }
+
+    while (next < _sceneTakes.size()) {
+        const Id track = _project.newId();
+        tracksOf.addTrack(TrackType::Video, track, _project.newId());
+        _sceneNewTracks.push_back(track);
+        _sceneTakes[next++].trackId = track;
+    }
+
     // The microphone, added to the file of the first source at the end.
     if (_captureMicrophone) {
         if (!_recorder.isOpen()) {
@@ -781,6 +807,18 @@ void GUI::startSceneRecording()
             _sceneMicrophonePath = microphonePath;
         }
     }
+}
+
+
+double GUI::sceneSeconds() const
+{
+    double seconds = 0.0;
+
+    for (const SceneTake& take : _sceneTakes) {
+        seconds = std::max(seconds, take.recorder->seconds());
+    }
+
+    return seconds;
 }
 
 
@@ -812,8 +850,17 @@ void GUI::stopSceneRecording()
     if (seconds <= 0.0 || takes.empty()) {
         for (SceneTake& take : takes) std::filesystem::remove(take.path, ec);
         if (!_sceneMicrophonePath.empty()) std::filesystem::remove(_sceneMicrophonePath, ec);
+
+        // The tracks added for it go too.
+        for (Id track : _sceneNewTracks) {
+            _project.sequence().removeTrack(track);
+        }
+
+        _sceneNewTracks.clear();
         return;
     }
+
+    _sceneNewTracks.clear();
 
     // The microphone in the file of the first source.
     if (microphoneFrames > 0) {
@@ -827,28 +874,9 @@ void GUI::stopSceneRecording()
         }
     }
 
-    // A video track per source, free from the start (with its sound track):
-    // the lower ones for the first sources, new ones on top when needed.
+    // On the tracks chosen at the start.
     Sequence& sequence = _project.sequence();
     const Time start = _sceneStart;
-
-    auto freeFrom = [&](const Track& track) {
-        return !track.locked && std::none_of(track.clips.begin(), track.clips.end(), [&](const Clip& clip) { return clip.end() > start; });
-    };
-
-    std::vector<Id> tracks;
-
-    for (size_t i = 0; i < sequence.videoTracks.size() && tracks.size() < takes.size(); i++) {
-        if (freeFrom(sequence.videoTracks[i]) && (i >= sequence.soundTracks.size() || freeFrom(sequence.soundTracks[i]))) {
-            tracks.push_back(sequence.videoTracks[i].id);
-        }
-    }
-
-    while (tracks.size() < takes.size()) {
-        const Id track = _project.newId();
-        sequence.addTrack(TrackType::Video, track, _project.newId());
-        tracks.push_back(track);
-    }
 
     _selection.clear();
     Time end = start;
@@ -866,7 +894,7 @@ void GUI::stopSceneRecording()
             }
         }
 
-        const Id clipId = _project.addClip(mediaId, tracks[i], start);
+        const Id clipId = _project.addClip(mediaId, take.trackId, start);
         Clip* clip = _project.findClip(clipId);
         const MediaItem* item = _project.findMedia(mediaId);
 

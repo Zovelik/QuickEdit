@@ -61,6 +61,11 @@ jobs:
             Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_SDK_VERSION }}/windows/$installer" -OutFile $installer
             Start-Process -Wait -FilePath ".\$installer" -ArgumentList "--root", $root, "--accept-licenses", "--default-answer", "--confirm-command", "install"
           }
+          # The installer does not fail by itself: checked here.
+          if (-not (Test-Path "$root\Include\vulkan\vulkan.h") -or -not (Test-Path "$root\Lib\vulkan-1.lib")) {
+            Get-ChildItem $root -ErrorAction SilentlyContinue
+            throw "The Vulkan SDK was not installed in $root"
+          }
           "VULKAN_SDK=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "$root\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
@@ -73,6 +78,7 @@ jobs:
             wget -q "https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_SDK_VERSION }}/linux/vulkansdk-linux-x86_64-${{ env.VULKAN_SDK_VERSION }}.tar.xz" -O vulkan-sdk.tar.xz
             tar -xf vulkan-sdk.tar.xz -C "$HOME/vulkan-sdk"
           fi
+          test -f "$root/x86_64/include/vulkan/vulkan.h" || { ls -R "$HOME/vulkan-sdk" | head -50; echo "The Vulkan SDK is not in $root"; exit 1; }
           echo "VULKAN_SDK=$root/x86_64" >> "$GITHUB_ENV"
           echo "$root/x86_64/bin" >> "$GITHUB_PATH"
           echo "LD_LIBRARY_PATH=$root/x86_64/lib:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
@@ -165,6 +171,14 @@ jobs:
             build/*.exe
             build/*.zip
             build/*.AppImage
+
+      # The symbols of the Windows build, to read the crash dumps.
+      - name: Keep the symbols
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: QuickEdit-symbols
+          path: build/**/QuickEdit.pdb
 
       - name: Attach to the release
         if: github.event_name == 'release'

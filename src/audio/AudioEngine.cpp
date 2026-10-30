@@ -107,7 +107,12 @@ void AudioEngine::play(Time from)
 
 void AudioEngine::stop()
 {
-    _playing = false;
+    // Stopped already: the device is left alone. Dragging the playhead
+    // stops at each frame, and pausing and resuming some devices (Bluetooth
+    // ones) that often is not safe.
+    if (!_playing.exchange(false)) {
+        return;
+    }
 
     if (_stream) {
         SDL_PauseAudioStreamDevice(_stream);
@@ -126,16 +131,21 @@ void AudioEngine::scrub(Time t)
 
     // A piece still playing goes on from the new time, without a new fade
     // in: moving the playhead sounds continuous.
-    _scrubLength = std::max<int64_t>(1, (int64_t)(ScrubSeconds * _sampleRate));
-    _scrubFrame = mulDivFloor(t, _sampleRate, TicksPerSecond);
+    const uint32_t sampleRate = _sampleRate;
+    const bool idle = _scrubLeft.load() <= 0;
+    _scrubLength = std::max<int64_t>(1, (int64_t)(ScrubSeconds * sampleRate));
+    _scrubFrame = mulDivFloor(t, sampleRate, TicksPerSecond);
 
-    if (_scrubLeft.load() <= 0) {
+    if (idle) {
         _scrubPlayed = 0;
     }
 
-    _scrubLeft = _scrubLength;
+    _scrubLeft = _scrubLength.load();
 
-    SDL_ResumeAudioStreamDevice(_stream);
+    // The device runs while a piece plays: resumed only when idle.
+    if (idle) {
+        SDL_ResumeAudioStreamDevice(_stream);
+    }
 }
 
 

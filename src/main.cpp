@@ -4,11 +4,13 @@
 #ifdef WIN32
 #include <windows.h>
 #include <shellapi.h>
+#include <dbghelp.h>
 #endif
 
 #include <filesystem>
 
 #include <app/GUI.h>
+#include <core/Paths.h>
 #include <config.h>
 
 extern "C" {
@@ -62,6 +64,34 @@ void startLog()
 void startLog() {}
 #endif
 
+#ifdef WIN32
+// A crash writes a minidump into the crashes folder of the settings, with
+// the stacks of the threads: where it happened, with the symbols of the
+// build (QuickEdit.pdb).
+LONG WINAPI writeCrashDump(EXCEPTION_POINTERS* exception)
+{
+    std::error_code ec;
+    const std::filesystem::path folder = core::configDirectory() / "crashes";
+    std::filesystem::create_directories(folder, ec);
+
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    wchar_t name[64];
+    swprintf(name, 64, L"QuickEdit-%04u%02u%02u-%02u%02u%02u.dmp", now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond);
+
+    const HANDLE file = CreateFileW((folder / name).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+
+    if (file != INVALID_HANDLE_VALUE) {
+        MINIDUMP_EXCEPTION_INFORMATION information = { GetCurrentThreadId(), exception, FALSE };
+        const MINIDUMP_TYPE type = (MINIDUMP_TYPE)(MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules);
+        MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file, type, &information, nullptr, nullptr);
+        CloseHandle(file);
+    }
+
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
+
 } // namespace
 
 #ifdef WIN32
@@ -81,6 +111,10 @@ int main(int argc, char* argv[])
     //                       [--export video.mp4 [--codec h264|h265|av1] [--height h] [--fps n] [--lufs target]]
     //                       [--drop file x y] [--record seconds]
     //                       [--quit-after seconds] [--record-screen seconds [--source index]]
+#ifdef WIN32
+    SetUnhandledExceptionFilter(writeCrashDump);
+#endif
+
     std::filesystem::path projectPath;
     std::filesystem::path exportPath;
     std::string codec = "h264";
