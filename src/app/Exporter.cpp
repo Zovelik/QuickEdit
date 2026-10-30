@@ -1,5 +1,6 @@
 #include <app/Exporter.h>
 
+#include <audio/Loudness.h>
 #include <audio/Mixer.h>
 #include <core/Layers.h>
 #include <core/Subtitles.h>
@@ -25,7 +26,10 @@ extern "C" {
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
 
 
@@ -191,6 +195,13 @@ std::string Exporter::encoder() const
 {
     std::scoped_lock lock(_mutex);
     return _encoder;
+}
+
+
+std::string Exporter::loudnessReport() const
+{
+    std::scoped_lock lock(_mutex);
+    return _loudnessReport;
 }
 
 
@@ -415,6 +426,70 @@ void Exporter::exportVideo()
     int64_t audioPosition = 0;
     const int64_t audioEnd = mulDivFloor(duration, sequence.sampleRate, TicksPerSecond);
 
+    // Loudness normalization: the whole mix first, measured and kept in a
+    // file (the effects process it once), then read back with the gain.
+    std::filesystem::path mixPath;
+    std::ifstream mixFile;
+    float mixGain = 1.f;
+
+    if (encoding.audio && _settings.normalizeLoudness) {
+        mixPath = std::filesystem::temp_directory_path() / ("QuickEdit mix " + std::to_string(SDL_GetTicksNS()) + ".raw");
+        std::ofstream out(mixPath, std::ios::binary);
+        audio::LoudnessMeter meter(sequence.sampleRate);
+        constexpr int64_t Chunk = 4096;
+
+        for (int64_t position = 0; position < audioEnd && !_cancel; position += Chunk) {
+            const int64_t count = std::min(Chunk, audioEnd - position);
+            mixBuffer.resize((size_t)count * 2);
+            audio::mix(*mixGraph, position, count, mixBuffer.data());
+            meter.add(mixBuffer.data(), count);
+            out.write((const char*)mixBuffer.data(), (std::streamsize)(mixBuffer.size() * sizeof(float)));
+        }
+
+        out.close();
+
+        if (!out) {
+            std::filesystem::remove(mixPath);
+            throw std::runtime_error("Could not write the sound to measure its loudness (disk full?)");
+        }
+
+        const double lufs = meter.integratedLufs();
+        const double gainDb = audio::normalizationGainDb(lufs, meter.peak(), _settings.targetLufs);
+        mixGain = (float)std::pow(10.0, gainDb / 20.0);
+        mixFile.open(mixPath, std::ios::binary);
+
+        char report[160];
+
+        if (lufs < audio::LoudnessMeter::Silence) {
+            std::snprintf(report, sizeof(report), "Silent sound: left as it is.");
+        }
+        else {
+            std::snprintf(report, sizeof(report), "Sound: %.1f LUFS, %+.1f dB applied (%.1f LUFS)%s.", lufs, gainDb, lufs + gainDb,
+                lufs + gainDb < _settings.targetLufs - 0.1 ? ", held back by the peaks" : "");
+        }
+
+        SDL_Log("Export: %s", report);
+        std::scoped_lock lock(_mutex);
+        _loudnessReport = report;
+    }
+
+    // The file of the mix goes with the export.
+    struct RemoveFile
+    {
+        std::ifstream& file;
+        std::filesystem::path path;
+
+        ~RemoveFile()
+        {
+            file.close();
+
+            if (!path.empty()) {
+                std::error_code error;
+                std::filesystem::remove(path, error);
+            }
+        }
+    } removeMix{ mixFile, mixPath };
+
     auto encodeAudioUntil = [&](int64_t until) {
         if (!encoding.audio) {
             return;
@@ -432,7 +507,17 @@ void Exporter::exportVideo()
             }
 
             mixBuffer.resize((size_t)count * 2);
-            audio::mix(*mixGraph, audioPosition, count, mixBuffer.data());
+
+            if (mixFile.is_open()) {
+                mixFile.read((char*)mixBuffer.data(), (std::streamsize)(mixBuffer.size() * sizeof(float)));
+
+                for (float& sample : mixBuffer) {
+                    sample = std::clamp(sample * mixGain, -1.f, 1.f);
+                }
+            }
+            else {
+                audio::mix(*mixGraph, audioPosition, count, mixBuffer.data());
+            }
 
             av_frame_unref(audioFrame);
             audioFrame->nb_samples = count;

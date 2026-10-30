@@ -14,6 +14,7 @@
 #include <core/Subtitles.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <ctime>
@@ -4618,8 +4619,10 @@ bool GUI::startExport()
 }
 
 
-void GUI::exportAndQuit(const std::filesystem::path& path, ExportSettings::Codec codec, uint32_t height, int frameRate)
+void GUI::exportAndQuit(const std::filesystem::path& path, ExportSettings::Codec codec, uint32_t height, int frameRate, float lufs)
 {
+    _exportSettings.normalizeLoudness = lufs < 0.f;
+    _exportSettings.targetLufs = (lufs < 0.f) ? lufs : _exportSettings.targetLufs;
     _exportSettings.path = path;
     _exportSettings.codec = codec;
     _exportSettings.height = height;
@@ -4873,6 +4876,10 @@ void GUI::exportPopup()
             if (exporter.succeeded()) {
                 ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.5f, 1.f), ICON_MD_CHECK_CIRCLE " %s exported", target.c_str());
                 ImGui::TextDisabled("Encoder: %s", exporter.encoder().c_str());
+
+                if (const std::string loudness = exporter.loudnessReport(); !loudness.empty()) {
+                    ImGui::TextDisabled("%s", loudness.c_str());
+                }
             }
             else if (exporter.cancelled()) {
                 ImGui::TextUnformatted("Export cancelled.");
@@ -4937,6 +4944,54 @@ void GUI::exportPopup()
     ImGui::TextDisabled("Audio");
     ImGui::SameLine(labelWidth);
     ImGui::Checkbox("AAC, 192 kbit/s", &_exportSettings.audio);
+
+    // Loudness: the usual targets, or any.
+    ImGui::BeginDisabled(!_exportSettings.audio);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("Loudness");
+    ImGui::SameLine(labelWidth);
+    ImGui::Checkbox("Normalize to##loudness", &_exportSettings.normalizeLoudness);
+    ImGui::SetItemTooltip("The whole sound is measured first (EBU R128), then brought to this loudness,\n"
+        "its peaks kept under -1 dB.");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!_exportSettings.normalizeLoudness);
+
+    struct LoudnessTarget
+    {
+        float lufs;
+        const char* label;
+    };
+
+    const LoudnessTarget targets[] = {
+        { -14.f, "-14 LUFS  (YouTube, Spotify)" },
+        { -16.f, "-16 LUFS  (podcasts, Apple)" },
+        { -23.f, "-23 LUFS  (broadcast, EBU R128)" },
+    };
+
+    char targetLabel[48];
+    std::snprintf(targetLabel, sizeof(targetLabel), "%.1f LUFS", _exportSettings.targetLufs);
+
+    for (const LoudnessTarget& target : targets) {
+        if (target.lufs == _exportSettings.targetLufs) std::snprintf(targetLabel, sizeof(targetLabel), "%s", target.label);
+    }
+
+    ImGui::SetNextItemWidth(-FLT_MIN);
+
+    if (ImGui::BeginCombo("##targetLufs", targetLabel)) {
+        for (const LoudnessTarget& target : targets) {
+            if (ImGui::Selectable(target.label, target.lufs == _exportSettings.targetLufs)) {
+                _exportSettings.targetLufs = target.lufs;
+            }
+        }
+
+        ImGui::Separator();
+        ImGui::SetNextItemWidth(8.f * ImGui::GetFontSize());
+        ImGui::DragFloat("Other##otherLufs", &_exportSettings.targetLufs, 0.1f, -40.f, -5.f, "%.1f LUFS", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::EndCombo();
+    }
+
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
 
     // Subtitles: in the picture, and in a file beside it.
     if (!subtitleCues(_project.sequence()).empty()) {
@@ -5179,10 +5234,9 @@ void GUI::audioEffectChain(std::vector<EffectSlot>& slots, const char* id)
 {
     ImGui::PushID(id);
 
-    // The plugins installed, listed once (their files only, not loaded).
-    if (!_pluginFilesListed) {
-        _pluginFiles = audio::findVst3Plugins();
-        _pluginFilesListed = true;
+    // The effects installed, looked for once in the background.
+    if (!_pluginScanner.started()) {
+        _pluginScanner.start();
     }
 
     Id removed = InvalidId;
@@ -5266,17 +5320,53 @@ void GUI::audioEffectChain(std::vector<EffectSlot>& slots, const char* id)
     ImGui::Separator();
     ImGui::SetNextItemWidth(-FLT_MIN);
 
-    if (ImGui::BeginCombo("##add", ICON_MD_ADD " Add an effect...", ImGuiComboFlags_HeightLarge)) {
-        if (_pluginFiles.empty()) {
-            ImGui::TextDisabled("No VST3 plugin found in the standard folders.");
+    if (ImGui::BeginCombo("##add", ICON_MD_ADD " Add an effect...", ImGuiComboFlags_HeightLargest)) {
+        const std::vector<audio::PluginClass> plugins = _pluginScanner.classes();
+
+        if (_pluginScanner.scanning()) {
+            const std::string current = _pluginScanner.current();
+            ImGui::TextDisabled(ICON_MD_HOURGLASS_TOP " Looking for plugins... %s", current.c_str());
+        }
+        else if (plugins.empty()) {
+            ImGui::TextDisabled("No VST3 effect found in the standard folders.");
         }
 
-        for (const audio::PluginFile& file : _pluginFiles) {
-            if (ImGui::Selectable(file.name.c_str())) {
+        // Filter, on the name and the vendor.
+        if (ImGui::IsWindowAppearing()) {
+            ImGui::SetKeyboardFocusHere();
+        }
+
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##filter", ICON_MD_SEARCH " Search", _pluginFilter, sizeof(_pluginFilter));
+
+        auto lower = [](std::string text) {
+            std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+            return text;
+        };
+
+        const std::string filter = lower(_pluginFilter);
+
+        for (const audio::PluginClass& plugin : plugins) {
+            if (!filter.empty() && lower(plugin.name + " " + plugin.vendor).find(filter) == std::string::npos) {
+                continue;
+            }
+
+            ImGui::PushID((plugin.path + plugin.classId).c_str());
+            const bool chosen = ImGui::Selectable(plugin.name.c_str());
+
+            if (!plugin.vendor.empty()) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", plugin.vendor.c_str());
+            }
+
+            ImGui::PopID();
+
+            if (chosen) {
                 EffectSlot slot;
                 slot.id = _project.newId();
-                slot.path = file.path;
-                slot.name = file.name;
+                slot.path = plugin.path;
+                slot.classId = plugin.classId;
+                slot.name = plugin.name;
 
                 // Effects stay in the project, their states with them.
                 _effects.saveStates(_project);
@@ -5288,14 +5378,19 @@ void GUI::audioEffectChain(std::vector<EffectSlot>& slots, const char* id)
                     plugin->openEditor();
                 }
                 else if (!_effects.error(slot.id).empty()) {
-                    setErrorMessage(file.name + ": " + _effects.error(slot.id));
+                    setErrorMessage(slot.name + ": " + _effects.error(slot.id));
                 }
             }
         }
 
-        if (ImGui::Selectable(ICON_MD_REFRESH " Look for plugins again")) {
-            _pluginFilesListed = false;
+        ImGui::Separator();
+        ImGui::BeginDisabled(_pluginScanner.scanning());
+
+        if (ImGui::Selectable(ICON_MD_REFRESH " Look for plugins again", false, ImGuiSelectableFlags_DontClosePopups)) {
+            _pluginScanner.start(true);
         }
+
+        ImGui::EndDisabled();
 
         ImGui::EndCombo();
     }

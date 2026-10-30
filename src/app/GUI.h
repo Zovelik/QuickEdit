@@ -41,7 +41,7 @@ public:
 
     // Exports the project to path as soon as its media are analyzed, then
     // quits (command line --export).
-    void exportAndQuit(const std::filesystem::path& path, ExportSettings::Codec codec, uint32_t height = 0, int frameRate = 0);
+    void exportAndQuit(const std::filesystem::path& path, ExportSettings::Codec codec, uint32_t height = 0, int frameRate = 0, float lufs = 0.f);
 
     // Edits the selected text clip in the viewer (command line --edit).
     void editSelectedText() { if (!_selection.empty()) beginTextEditing(_selection.front()); }
@@ -488,8 +488,9 @@ private:
     // VST3 effects of the audio tracks, see effectsWindow().
     EffectRack _effects;
     core::Id _effectsTrack = core::InvalidId;
-    std::vector<audio::PluginFile> _pluginFiles;
-    bool _pluginFilesListed = false;
+    // The audio effects installed, and the filter of their list.
+    audio::PluginScanner _pluginScanner;
+    char _pluginFilter[64] = "";
 
     // Video decoding and display, see createVideo(). Declared in this order:
     // the frames reference the device.

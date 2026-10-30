@@ -12,10 +12,16 @@
 #include "pluginterfaces/vst/ivstmessage.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
 
+#include <core/Json.h>
+#include <core/Paths.h>
+
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <map>
+#include <sstream>
 
 
 using namespace Steinberg;
@@ -196,6 +202,231 @@ std::vector<PluginFile> findVst3Plugins()
     std::sort(plugins.begin(), plugins.end(), [](const PluginFile& a, const PluginFile& b) { return a.name < b.name; });
 
     return plugins;
+}
+
+
+std::vector<PluginClass> listPluginClasses(const std::string& path, std::string& error)
+{
+    std::vector<PluginClass> classes;
+    VST3::Hosting::Module::Ptr module = VST3::Hosting::Module::create(path, error);
+
+    if (!module) {
+        return classes;
+    }
+
+    for (const VST3::Hosting::ClassInfo& info : module->getFactory().classInfos()) {
+        // The effects, not the instruments.
+        const std::string subCategories = info.subCategoriesString();
+
+        if (info.category() != kVstAudioEffectClass || subCategories.find("Instrument") != std::string::npos) {
+            continue;
+        }
+
+        classes.push_back({ path, info.ID().toString(), info.name(), info.vendor(), subCategories });
+    }
+
+    if (classes.empty()) {
+        error = "No audio effect in this plugin";
+    }
+
+    return classes;
+}
+
+
+namespace {
+
+// Date and size of a plugin file, or of the files of a bundle: a change
+// means it was updated.
+std::string fileStamp(const std::filesystem::path& path)
+{
+    std::error_code error;
+    int64_t newest = 0;
+    uintmax_t size = 0;
+
+    auto add = [&](const std::filesystem::path& file) {
+        const auto time = std::filesystem::last_write_time(file, error);
+
+        if (!error) {
+            newest = std::max<int64_t>(newest, (int64_t)time.time_since_epoch().count());
+        }
+
+        const uintmax_t fileSize = std::filesystem::file_size(file, error);
+        size += error ? 0 : fileSize;
+    };
+
+    if (std::filesystem::is_directory(path, error)) {
+        for (auto it = std::filesystem::recursive_directory_iterator(path, error);
+             !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error)) {
+            if (it->is_regular_file(error)) {
+                add(it->path());
+            }
+        }
+    }
+    else {
+        add(path);
+    }
+
+    return std::to_string(newest) + ":" + std::to_string(size);
+}
+
+
+std::filesystem::path pluginCachePath()
+{
+    return core::configDirectory() / "vst3-plugins.json";
+}
+
+} // namespace
+
+
+PluginScanner::~PluginScanner()
+{
+    _stop = true;
+
+    if (_thread.joinable()) {
+        _thread.join();
+    }
+}
+
+
+void PluginScanner::start(bool rescan)
+{
+    if (_scanning.load()) {
+        return;
+    }
+
+    if (_thread.joinable()) {
+        _thread.join();
+    }
+
+    _scanning = true;
+    _thread = std::thread(&PluginScanner::run, this, rescan);
+}
+
+
+std::vector<PluginClass> PluginScanner::classes() const
+{
+    std::scoped_lock lock(_mutex);
+    return _classes;
+}
+
+
+std::string PluginScanner::current() const
+{
+    std::scoped_lock lock(_mutex);
+    return _current;
+}
+
+
+void PluginScanner::run(bool rescan)
+{
+    // The cache: per file, its stamp and its effects.
+    struct Entry
+    {
+        std::string stamp;
+        std::vector<PluginClass> classes;
+    };
+
+    std::map<std::string, Entry> cache;
+
+    if (!rescan) {
+        try {
+            std::ifstream file(pluginCachePath(), std::ios::binary);
+            std::stringstream text;
+            text << file.rdbuf();
+
+            const core::Json json = core::Json::parse(text.str());
+            const core::Json& files = json["files"];
+
+            for (size_t i = 0; i < files.size(); i++) {
+                Entry& entry = cache[files[i]["path"].toString()];
+                entry.stamp = files[i]["stamp"].toString();
+
+                const core::Json& classes = files[i]["classes"];
+
+                for (size_t j = 0; j < classes.size(); j++) {
+                    entry.classes.push_back({ files[i]["path"].toString(), classes[j]["id"].toString(), classes[j]["name"].toString(),
+                        classes[j]["vendor"].toString(), classes[j]["subCategories"].toString() });
+                }
+            }
+        }
+        catch (const std::exception&) {
+            cache.clear();
+        }
+    }
+
+    std::vector<PluginClass> found;
+    core::Json files = core::Json::array();
+
+    for (const PluginFile& file : findVst3Plugins()) {
+        if (_stop.load()) {
+            break;
+        }
+
+        const std::filesystem::path path = std::filesystem::u8path(file.path);
+        const std::string stamp = fileStamp(path);
+        auto cached = cache.find(file.path);
+
+        if (cached == cache.end() || cached->second.stamp != stamp) {
+            {
+                std::scoped_lock lock(_mutex);
+                _current = file.name;
+            }
+
+            Entry entry;
+            entry.stamp = stamp;
+
+            // A plugin may throw while loading: it is left out.
+            try {
+                std::string error;
+                entry.classes = listPluginClasses(file.path, error);
+
+                if (entry.classes.empty()) {
+                    SDL_Log("Plugin %s: %s", file.path.c_str(), error.c_str());
+                }
+            }
+            catch (...) {
+                SDL_Log("Plugin %s: could not be loaded", file.path.c_str());
+            }
+
+            cached = cache.insert_or_assign(file.path, std::move(entry)).first;
+        }
+
+        core::Json json = core::Json::object();
+        json["path"] = file.path;
+        json["stamp"] = stamp;
+        json["classes"] = core::Json::array();
+
+        for (const PluginClass& info : cached->second.classes) {
+            core::Json item = core::Json::object();
+            item["id"] = info.classId;
+            item["name"] = info.name;
+            item["vendor"] = info.vendor;
+            item["subCategories"] = info.subCategories;
+            json["classes"].push_back(item);
+            found.push_back(info);
+        }
+
+        files.push_back(json);
+    }
+
+    std::sort(found.begin(), found.end(), [](const PluginClass& a, const PluginClass& b) { return a.name < b.name; });
+
+    if (!_stop.load()) {
+        core::Json json = core::Json::object();
+        json["files"] = files;
+
+        std::ofstream file(pluginCachePath(), std::ios::binary);
+        file << json.dump();
+    }
+
+    {
+        std::scoped_lock lock(_mutex);
+        _classes = std::move(found);
+        _current.clear();
+    }
+
+    SDL_Log("Plugins: %d effects", (int)_classes.size());
+    _scanning = false;
 }
 
 

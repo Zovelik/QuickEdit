@@ -60,6 +60,7 @@ add_library(QuickEditCore STATIC
     core/History.cpp
     core/Json.cpp
     core/Layers.cpp
+    core/Paths.cpp
     core/Project.cpp
     core/Shaders.cpp
     core/Subtitles.cpp
@@ -74,6 +75,7 @@ target_include_directories(QuickEditCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Media analysis and decoding (FFmpeg) and audio mixing, without UI.
 
 add_library(QuickEditMedia STATIC
+    audio/Loudness.cpp
     audio/Mixer.cpp
 
     media/HwDevice.cpp

@@ -34,6 +34,11 @@ struct ExportSettings
     float bitrateMbps = 16.f;
     bool audio = true;
 
+    // Brings the loudness of the sound to targetLufs (its peaks under
+    // -1 dBFS): the whole mix is measured first (EBU R128).
+    bool normalizeLoudness = false;
+    float targetLufs = -14.f;
+
     // Height of the video, the width following the shape of the sequence;
     // 0 for the size of the sequence. The placements stay relative to the
     // frame.
@@ -99,6 +104,9 @@ public:
     std::string error() const;
     std::string encoder() const;
 
+    // Loudness measured and gain applied, once normalized ("" otherwise).
+    std::string loudnessReport() const;
+
     const ExportSettings& settings() const { return _settings; }
 
 private:
@@ -119,6 +127,7 @@ private:
     mutable std::mutex _mutex;
     std::string _error;
     std::string _encoder;
+    std::string _loudnessReport;
 
     std::thread _thread;
 };

@@ -2,9 +2,11 @@
 
 #include <SDL3/SDL.h>
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 
@@ -19,6 +21,60 @@ namespace audio
 
     // The .vst3 files of the standard folders, without loading them.
     std::vector<PluginFile> findVst3Plugins();
+
+
+    // An audio effect of a plugin file. A file may hold several (a shell,
+    // such as the WaveShell of Waves, holds all the plugins of the brand).
+    struct PluginClass
+    {
+        std::string path;           // Of the file, UTF-8
+        std::string classId;        // Hexadecimal
+        std::string name;
+        std::string vendor;
+        std::string subCategories;  // "Fx|Delay"...
+    };
+
+    // The audio effects of a plugin file, by loading its module. Empty with
+    // error set when it cannot be loaded.
+    std::vector<PluginClass> listPluginClasses(const std::string& path, std::string& error);
+
+
+    // The audio effects of all the installed plugins, found on a thread of
+    // its own. The files seen before (same date and size) come from a cache
+    // in the settings folder, so that only new or updated ones are loaded.
+    class PluginScanner
+    {
+    public:
+        PluginScanner() = default;
+        ~PluginScanner();
+
+        PluginScanner(const PluginScanner&) = delete;
+        PluginScanner& operator=(const PluginScanner&) = delete;
+
+        // Looks for the plugins, unless already doing so. rescan: loads
+        // every file again.
+        void start(bool rescan = false);
+
+        bool started() const { return _thread.joinable(); }
+        bool scanning() const { return _scanning.load(); }
+
+        // The effects found by the last scan, sorted by name.
+        std::vector<PluginClass> classes() const;
+
+        // The file being loaded, while scanning.
+        std::string current() const;
+
+    private:
+        void run(bool rescan);
+
+        std::thread _thread;
+        std::atomic<bool> _scanning = false;
+        std::atomic<bool> _stop = false;
+
+        mutable std::mutex _mutex;
+        std::vector<PluginClass> _classes;
+        std::string _current;
+    };
 
 
     // An instance of a VST3 audio effect, processing stereo.

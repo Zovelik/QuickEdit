@@ -3,6 +3,7 @@
 //
 // Run: ctest, or bin/QuickEditCoreTests.exe
 
+#include <audio/Loudness.h>
 #include <audio/Mixer.h>
 #include <media/MediaFile.h>
 
@@ -711,6 +712,34 @@ void testDecodeAndMix()
 }
 
 
+void testLoudness()
+{
+    // A 1 kHz sine at -20 dBFS on both channels reads about -20 LUFS (the
+    // K-weighting is close to 0 dB there).
+    audio::LoudnessMeter meter(48000);
+    std::vector<float> samples(2 * 48000 * 5);
+
+    for (size_t i = 0; i < samples.size() / 2; i++) {
+        samples[2 * i] = samples[2 * i + 1] = 0.1f * std::sin(2.f * 3.14159265f * 1000.f * (float)i / 48000.f);
+    }
+
+    meter.add(samples.data(), (int64_t)samples.size() / 2);
+    CHECK(std::abs(meter.integratedLufs() - (-20.0)) < 0.3);
+    CHECK(std::abs(meter.peak() - 0.1f) < 0.001f);
+
+    // To -14 LUFS: +6 dB, the peak staying under -1 dBFS.
+    CHECK(std::abs(audio::normalizationGainDb(-20.0, 0.1f, -14.0) - 6.0) < 1e-9);
+    CHECK(std::abs(audio::normalizationGainDb(-20.0, 0.5f, -14.0) - (-1.0 - 20.0 * std::log10(0.5))) < 1e-6);
+
+    // Silence: below the gate, nothing applied.
+    audio::LoudnessMeter silent(48000);
+    std::vector<float> zeros(2 * 48000, 0.f);
+    silent.add(zeros.data(), 48000);
+    CHECK(silent.integratedLufs() < audio::LoudnessMeter::Silence);
+    CHECK(audio::normalizationGainDb(silent.integratedLufs(), 0.f, -14.0) == 0.0);
+}
+
+
 void testSpeedAndTracks()
 {
     Project project;
@@ -791,6 +820,7 @@ int main()
     testTransitions();
     testTextEditing();
     testSpeedAndTracks();
+    testLoudness();
 
     try {
         testDecodeAndMix();

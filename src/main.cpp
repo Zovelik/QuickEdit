@@ -78,7 +78,7 @@ int main(int argc, char* argv[])
     // and optionally the time to show and a clip to select (for tests):
     // QuickEdit project.qep [--time seconds] [--select clipId]
     //                       [--edit] [--effect-editor slotId]
-    //                       [--export video.mp4 [--codec h264|h265|av1] [--height h] [--fps n]]
+    //                       [--export video.mp4 [--codec h264|h265|av1] [--height h] [--fps n] [--lufs target]]
     //                       [--drop file x y] [--record seconds]
     //                       [--quit-after seconds] [--record-screen seconds [--source index]]
     std::filesystem::path projectPath;
@@ -92,6 +92,7 @@ int main(int argc, char* argv[])
     double recordSeconds = 0.0;
     double quitAfter = 0.0;
     uint32_t exportHeight = 0;
+    float exportLufs = 0.f;
     int exportFps = 0;
     double recordScreen = 0.0;
     bool play = false;
@@ -128,6 +129,9 @@ int main(int argc, char* argv[])
             }
             else if (std::wstring(argv[i]) == L"--record-screen" && i + 1 < argc) {
                 recordScreen = std::wcstod(argv[++i], nullptr);
+            }
+            else if (std::wstring(argv[i]) == L"--lufs" && i + 1 < argc) {
+                exportLufs = (float)std::wcstod(argv[++i], nullptr);
             }
             else if (std::wstring(argv[i]) == L"--height" && i + 1 < argc) {
                 exportHeight = (uint32_t)std::wcstoul(argv[++i], nullptr, 10);
@@ -201,6 +205,9 @@ int main(int argc, char* argv[])
         }
         else if (std::string(argv[i]) == "--record-screen" && i + 1 < argc) {
             recordScreen = std::strtod(argv[++i], nullptr);
+        }
+        else if (std::string(argv[i]) == "--lufs" && i + 1 < argc) {
+            exportLufs = (float)std::strtod(argv[++i], nullptr);
         }
         else if (std::string(argv[i]) == "--height" && i + 1 < argc) {
             exportHeight = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
@@ -306,7 +313,7 @@ int main(int argc, char* argv[])
         if (!exportPath.empty()) {
             gui.exportAndQuit(exportPath,
                 codec == "av1" ? ExportSettings::Codec::AV1 :
-                codec == "h265" ? ExportSettings::Codec::H265 : ExportSettings::Codec::H264, exportHeight, exportFps);
+                codec == "h265" ? ExportSettings::Codec::H265 : ExportSettings::Codec::H264, exportHeight, exportFps, exportLufs);
         }
 
         gui.run();
