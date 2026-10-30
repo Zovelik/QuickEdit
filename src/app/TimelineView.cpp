@@ -57,6 +57,22 @@ int streamsOf(const Project& project, const Clip& clip)
 }
 
 
+// The streams of such a clip still in it (not removed), and heard (not
+// muted either).
+int streamsLeft(const Project& project, const Clip& clip, bool heard)
+{
+    int count = 0;
+
+    for (int stream = 0; stream < streamsOf(project, clip); stream++) {
+        if (!clip.streamRemoved(stream) && !(heard && clip.streamMuted(stream))) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+
 // Square icon button drawn without an ImGui item: the timeline handles the
 // mouse itself. Returns true when clicked.
 bool headerButton(ImDrawList* drawList, const ImVec2& min, float size, const char* icon, bool active, bool canvasHovered)
@@ -1314,8 +1330,9 @@ bool TimelineView::drawTrackHeaders(ImDrawList* drawList, Project& project, std:
             }
 
             // The audio streams of its clips, under it.
-            const bool streams = track.streamsUnfolded ||
-                std::any_of(track.clips.begin(), track.clips.end(), [&](const Clip& clip) { return streamsOf(project, clip) > 0; });
+            const bool streams = std::any_of(track.clips.begin(), track.clips.end(), [&](const Clip& clip) {
+                return streamsLeft(project, clip, false) > 0;
+            });
 
             if (streams) {
                 const ImVec2 at(min.x + 0.45f * unit, y + buttonSize + 0.1f * unit);
@@ -1608,7 +1625,9 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
                 color = FrozenClipColor;
             }
 
-            if (track.muted || (clip.muted && !video)) {
+            const bool silent = !video && (clip.muted || (streamsOf(project, clip) > 0 && streamsLeft(project, clip, true) == 0));
+
+            if (track.muted || silent) {
                 color = (color & 0x00FFFFFF) | 0x80000000;
             }
 
@@ -1722,10 +1741,13 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
                         name += "  " ICON_MD_GRAPHIC_EQ " " + media->audioStreamName(clip.audioStream);
                     }
                     else if (!video && media->audioStreams.size() > 1) {
-                        name += "  " ICON_MD_LAYERS " " + std::to_string(media->audioStreams.size());
+                        // The streams heard, of all those of the file.
+                        const int heard = streamsLeft(project, clip, true);
+                        const int all = (int)media->audioStreams.size();
+                        name += "  " ICON_MD_LAYERS " " + ((heard == all) ? std::to_string(all) : std::to_string(heard) + " / " + std::to_string(all));
                     }
 
-                    if (!video && clip.muted) {
+                    if (silent) {
                         name = ICON_MD_VOLUME_OFF " " + name;
                     }
                 }
