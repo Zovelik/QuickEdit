@@ -202,7 +202,7 @@ AudioBuffer decodeAudio(
     // The resampler is set up from the first frame: the parameters of the
     // stream may be incomplete until then.
     SwrPtr resampler;
-    AVChannelLayout stereo;
+    AVChannelLayout stereo = {};
     av_channel_layout_default(&stereo, AudioBuffer::Channels);
 
     auto convert = [&](const uint8_t** input, int inputFrames) {
@@ -224,7 +224,7 @@ AudioBuffer decodeAudio(
     auto receiveFrames = [&](AVFrame* frame) {
         while (avcodec_receive_frame(codec.get(), frame) >= 0) {
             if (!resampler) {
-                AVChannelLayout layout;
+                AVChannelLayout layout = {};     // Zeroed: av_channel_layout_copy() frees what it holds first
 
                 if (frame->ch_layout.order == AV_CHANNEL_ORDER_UNSPEC) {
                     av_channel_layout_default(&layout, frame->ch_layout.nb_channels);
@@ -340,7 +340,7 @@ std::vector<AudioBuffer> decodeAudioStreams(
     }
 
     const double durationSeconds = (format->duration != AV_NOPTS_VALUE) ? (double)format->duration / AV_TIME_BASE : 0.0;
-    AVChannelLayout stereo;
+    AVChannelLayout stereo = {};
     av_channel_layout_default(&stereo, AudioBuffer::Channels);
 
     auto convert = [&](Decoder& decoder, const uint8_t** input, int inputFrames) {
@@ -363,7 +363,7 @@ std::vector<AudioBuffer> decodeAudioStreams(
     auto receiveFrames = [&](Decoder& decoder, AVFrame* frame) {
         while (avcodec_receive_frame(decoder.codec.get(), frame) >= 0) {
             if (!decoder.resampler) {
-                AVChannelLayout layout;
+                AVChannelLayout layout = {};     // Zeroed: av_channel_layout_copy() frees what it holds first
 
                 if (frame->ch_layout.order == AV_CHANNEL_ORDER_UNSPEC) {
                     av_channel_layout_default(&layout, frame->ch_layout.nb_channels);

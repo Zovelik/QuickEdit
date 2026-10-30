@@ -17,6 +17,7 @@ extern "C" {
 #include <libavutil/log.h>
 }
 
+#include <atomic>
 #include <cstdarg>
 #include <cstdlib>
 #include <string>
@@ -90,6 +91,23 @@ LONG WINAPI writeCrashDump(EXCEPTION_POINTERS* exception)
 
     return EXCEPTION_CONTINUE_SEARCH;
 }
+
+// A corrupted heap or a buffer overrun ends the process without going
+// through the filter above: seen first here, for a dump too.
+LONG WINAPI writeFatalDump(EXCEPTION_POINTERS* exception)
+{
+    const DWORD code = exception->ExceptionRecord->ExceptionCode;
+
+    if (code == STATUS_HEAP_CORRUPTION || code == STATUS_STACK_BUFFER_OVERRUN) {
+        static std::atomic<bool> written = false;
+
+        if (!written.exchange(true)) {
+            writeCrashDump(exception);
+        }
+    }
+
+    return EXCEPTION_CONTINUE_SEARCH;
+}
 #endif
 
 } // namespace
@@ -113,6 +131,7 @@ int main(int argc, char* argv[])
     //                       [--quit-after seconds] [--record-screen seconds [--source index]]
 #ifdef WIN32
     SetUnhandledExceptionFilter(writeCrashDump);
+    AddVectoredExceptionHandler(1, writeFatalDump);
 #endif
 
     std::filesystem::path projectPath;
