@@ -386,6 +386,18 @@ Json clipToJson(const Clip& clip)
 
     if (clip.muted) json["muted"] = true;
 
+    for (const auto& [name, streams] : { std::pair{ "mutedStreams", &clip.mutedStreams }, std::pair{ "removedStreams", &clip.removedStreams } }) {
+        if (!streams->empty()) {
+            Json list = Json::array();
+
+            for (int stream : *streams) {
+                list.push_back(stream);
+            }
+
+            json[name] = list;
+        }
+    }
+
     if (clip.speed != 1.0) json["speed"] = clip.speed;
     if (clip.audioStream >= 0) json["audioStream"] = clip.audioStream;
     if (clip.fit != FitMode::Fit) json["fit"] = clip.fit == FitMode::Fill ? "fill" : "native";
@@ -476,6 +488,9 @@ Clip clipFromJson(const Json& json)
     clip.gainDb = (float)json["gainDb"].toDouble(0.0);
     clip.frozen = json["frozen"].toBool();
     clip.muted = json["muted"].toBool();
+
+    for (const Json& stream : json["mutedStreams"].items()) clip.mutedStreams.push_back((int)stream.toInt());
+    for (const Json& stream : json["removedStreams"].items()) clip.removedStreams.push_back((int)stream.toInt());
     clip.speed = std::clamp(json["speed"].toDouble(1.0), Project::MinSpeed, Project::MaxSpeed);
     clip.audioStream = (int)std::max<int64_t>(-1, json["audioStream"].toInt(-1));
 
@@ -544,6 +559,7 @@ Json trackToJson(const Track& track)
 
     if (track.height > 0.f) json["height"] = (double)track.height;
     if (track.blend != BlendMode::Normal) json["blend"] = blendModeName(track.blend);
+    if (track.streamsUnfolded) json["streamsUnfolded"] = true;
 
     Json clips = Json::array();
 
@@ -576,6 +592,7 @@ Track trackFromJson(const Json& json, TrackType type)
     track.locked = json["locked"].toBool();
     track.height = (float)json["height"].toDouble(0.0);
     track.blend = blendModeFromName(json["blend"].toString());
+    track.streamsUnfolded = json["streamsUnfolded"].toBool();
 
     for (const Json& clip : json["clips"].items()) {
         track.clips.push_back(clipFromJson(clip));

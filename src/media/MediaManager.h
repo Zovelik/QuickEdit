@@ -90,6 +90,11 @@ namespace media
             // Each stream, when the file has several.
             std::vector<std::shared_ptr<const AudioBuffer>> streams;
             std::vector<std::shared_ptr<const Waveform>> streamWaveforms;
+
+            // Mixes of some of the streams, made when asked, by stream
+            // number (-2 - the mask of the streams left out).
+            mutable std::map<int, std::shared_ptr<const AudioBuffer>> mixes;
+            mutable std::map<int, std::shared_ptr<const Waveform>> mixWaveforms;
             std::shared_ptr<std::atomic<bool>> cancel;
         };
 

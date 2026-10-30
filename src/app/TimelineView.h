@@ -220,8 +220,20 @@ private:
         float height;
     };
 
-    void layoutRows(const core::Sequence& sequence, float top);
+    // The audio streams of the clips of an unfolded track, one row each
+    // under the track (not rows of tracks: no clips are dragged there).
+    struct StreamRow
+    {
+        core::TrackType type;
+        int trackIndex;
+        int stream;
+        float top;
+        float height;
+    };
+
+    void layoutRows(const core::Project& project, float top);
     const Row* rowAt(float y) const;
+    const StreamRow* streamRowAt(float y) const;
 
     float timeToX(core::Time t) const;
     core::Time xToTime(float x) const;
@@ -231,7 +243,9 @@ private:
     core::Time roundToFrame(core::Time t, const core::Sequence& sequence) const;
 
     void drawRuler(ImDrawList* drawList, const core::Sequence& sequence, const ImVec2& min, const ImVec2& max) const;
-    bool drawTrackHeaders(ImDrawList* drawList, core::Sequence& sequence, std::string& label, core::Id& effectsOfTrack);
+    bool drawTrackHeaders(ImDrawList* drawList, core::Project& project, std::string& label, core::Id& effectsOfTrack);
+    void drawStreamRows(ImDrawList* drawList, const core::Project& project, const std::vector<core::Id>& selection) const;
+    bool drawStreamHeaders(ImDrawList* drawList, core::Project& project, std::string& label);
     void drawClips(ImDrawList* drawList, const core::Project& project, const std::vector<core::Id>& selection) const;
 
     // Waveform of an audio clip inside the rectangle [min, max] of the clip.
@@ -264,10 +278,7 @@ private:
 
     static bool isSelected(const std::vector<core::Id>& selection, core::Id clipId);
 
-    // The button of the audio streams of a clip (its icon, nullptr when it
-    // has none), and whether the mouse is over it.
-    static const char* streamsButton(const core::Project& project, const core::Clip& clip, core::TrackType type);
-    bool overStreamsButton(const core::Clip& clip, const Row& row, const char* icon, const ImVec2& mouse) const;
+
 
     // View
     float _pixelsPerSecond = 50.f;
@@ -289,6 +300,7 @@ private:
     float _tracksTop = 0.f;
     float _tracksBottom = 0.f;
     std::vector<Row> _rows;
+    std::vector<StreamRow> _streamRows;
 
     struct GroupHeader
     {

@@ -109,6 +109,45 @@ MediaState MediaManager::state(Id id) const
 }
 
 
+namespace {
+
+// The sum of the streams of an entry not in the mask of a stream number
+// below -1 (see Clip::audioSource()); nullptr when none is left.
+template<typename Entry>
+std::shared_ptr<const AudioBuffer> mixOf(const Entry& entry, int stream)
+{
+    if (const auto found = entry.mixes.find(stream); found != entry.mixes.end()) {
+        return found->second;
+    }
+
+    const int excluded = -(stream + 2);
+    AudioBuffer mix;
+    bool any = false;
+
+    for (size_t i = 0; i < entry.streams.size(); i++) {
+        if (i < 30 && (excluded & (1 << i))) {
+            continue;
+        }
+
+        const AudioBuffer& buffer = *entry.streams[i];
+        mix.sampleRate = buffer.sampleRate;
+        mix.samples.resize(std::max(mix.samples.size(), buffer.samples.size()), 0.f);
+
+        for (size_t j = 0; j < buffer.samples.size(); j++) {
+            mix.samples[j] += buffer.samples[j];
+        }
+
+        any = true;
+    }
+
+    std::shared_ptr<const AudioBuffer> shared = any ? std::make_shared<AudioBuffer>(std::move(mix)) : nullptr;
+    entry.mixes[stream] = shared;
+    return shared;
+}
+
+} // namespace
+
+
 std::shared_ptr<const AudioBuffer> MediaManager::audio(Id id, int stream) const
 {
     std::scoped_lock lock(_mutex);
@@ -116,6 +155,11 @@ std::shared_ptr<const AudioBuffer> MediaManager::audio(Id id, int stream) const
 
     if (it == _entries.end()) {
         return nullptr;
+    }
+
+    // Some of the streams.
+    if (stream < -1) {
+        return it->second.streams.empty() ? it->second.audio : mixOf(it->second, stream);
     }
 
     // A file of one stream: the stream is the whole sound.
@@ -138,6 +182,22 @@ std::shared_ptr<const Waveform> MediaManager::waveform(Id id, int stream) const
 
     if (stream >= 0 && stream < (int)it->second.streamWaveforms.size()) {
         return it->second.streamWaveforms[(size_t)stream];
+    }
+
+    // Some of the streams: the waveform of their mix.
+    if (stream < -1) {
+        if (it->second.streams.empty()) {
+            return it->second.waveform;
+        }
+
+        if (const auto found = it->second.mixWaveforms.find(stream); found != it->second.mixWaveforms.end()) {
+            return found->second;
+        }
+
+        const std::shared_ptr<const AudioBuffer> mix = mixOf(it->second, stream);
+        std::shared_ptr<const Waveform> waveform = mix ? std::make_shared<Waveform>(Waveform::build(*mix)) : nullptr;
+        it->second.mixWaveforms[stream] = waveform;
+        return waveform;
     }
 
     return (stream <= 0) ? it->second.waveform : nullptr;
@@ -271,6 +331,8 @@ void MediaManager::analyze(Id id, std::filesystem::path path, uint32_t sampleRat
             entry.waveform = std::move(waveform);
             entry.streams = std::move(streams);
             entry.streamWaveforms = std::move(streamWaveforms);
+            entry.mixes.clear();
+            entry.mixWaveforms.clear();
             entry.state.status = MediaStatus::Ready;
             entry.state.progress = 1.f;
         });

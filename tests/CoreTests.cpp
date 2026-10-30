@@ -395,6 +395,41 @@ void testOverwrite()
 }
 
 
+void testAudioStreams()
+{
+    Clip clip;
+    CHECK(clip.audioSource() == -1);
+
+    // Streams 1 and 3 left out: -2 - 0b1010.
+    clip.mutedStreams = { 1 };
+    clip.removedStreams = { 3 };
+    CHECK(clip.audioSource() == -2 - 10);
+    CHECK(clip.streamMuted(1) && !clip.streamMuted(3) && clip.streamRemoved(3));
+
+    // A clip of one stream is that stream.
+    clip.audioStream = 2;
+    CHECK(clip.audioSource() == 2);
+
+    // Saved and loaded with the project.
+    Project project;
+    const Id media = project.importMedia("C:/media/clip.mp4");
+    const Id clipId = project.addClip(media, project.sequence().videoTracks[0].id, 0);
+    CHECK(clipId != InvalidId);
+
+    Clip* sound = &project.sequence().soundTracks[0].clips[0];
+    sound->mutedStreams = { 0 };
+    sound->removedStreams = { 2 };
+    project.sequence().soundTracks[0].streamsUnfolded = true;
+
+    Project loaded;
+    loaded.fromJson(project.toJson("C:/media"), "C:/media");
+    const Clip& again = loaded.sequence().soundTracks[0].clips[0];
+    CHECK(again.mutedStreams == std::vector<int>{ 0 });
+    CHECK(again.removedStreams == std::vector<int>{ 2 });
+    CHECK(loaded.sequence().soundTracks[0].streamsUnfolded);
+}
+
+
 void testRippleDelete()
 {
     Project project;
@@ -902,6 +937,7 @@ int main()
     testSaveLoadAndHistory();
     testRippleDelete();
     testOverwrite();
+    testAudioStreams();
     testMediaFolders();
     testSequences();
     testSubtitles();

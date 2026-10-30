@@ -83,7 +83,7 @@ void addNestedSound(const Project& project, const Sequence& nested, Time offset,
 
             const Time start = std::max(clip.start + offset, from);
             const Time end = std::min(clip.end() + offset, to);
-            std::shared_ptr<const media::AudioBuffer> buffer = (end > start) ? audioOf(clip.mediaId, clip.audioStream) : nullptr;
+            std::shared_ptr<const media::AudioBuffer> buffer = (end > start) ? audioOf(clip.mediaId, clip.audioSource()) : nullptr;
 
             if (!buffer || buffer->sampleRate != sampleRate) {
                 continue;
@@ -169,7 +169,7 @@ std::shared_ptr<const MixGraph> buildMixGraph(
                 continue;
             }
 
-            std::shared_ptr<const media::AudioBuffer> buffer = audioOf(clip.mediaId, clip.audioStream);
+            std::shared_ptr<const media::AudioBuffer> buffer = audioOf(clip.mediaId, clip.audioSource());
 
             if (!buffer || buffer->sampleRate != graph->sampleRate) {
                 continue;

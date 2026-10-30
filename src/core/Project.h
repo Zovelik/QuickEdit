@@ -7,6 +7,7 @@
 #include <core/Time.h>
 #include <core/VideoEffects.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -228,6 +229,34 @@ namespace core
         // aside).
         bool muted = false;
 
+        // A sound clip of all the streams of a file (audioStream -1): the
+        // streams muted, and the ones removed (no longer under its track).
+        std::vector<int> mutedStreams;
+        std::vector<int> removedStreams;
+
+        bool streamMuted(int stream) const { return std::find(mutedStreams.begin(), mutedStreams.end(), stream) != mutedStreams.end(); }
+        bool streamRemoved(int stream) const { return std::find(removedStreams.begin(), removedStreams.end(), stream) != removedStreams.end(); }
+
+        // The audio heard: audioStream, -1 for all the streams, or the
+        // streams heard as -2 - (the mask of the others), the first 30
+        // (see media::MediaManager::audio()).
+        int audioSource() const
+        {
+            if (audioStream >= 0 || (mutedStreams.empty() && removedStreams.empty())) {
+                return audioStream;
+            }
+
+            int excluded = 0;
+
+            for (const std::vector<int>* streams : { &mutedStreams, &removedStreams }) {
+                for (int stream : *streams) {
+                    if (stream >= 0 && stream < 30) excluded |= 1 << stream;
+                }
+            }
+
+            return -2 - excluded;
+        }
+
         // Media clips: playback speed, 2 shows the media twice as fast (its
         // sound higher). The clip shows duration * speed of the media.
         double speed = 1.0;
@@ -304,6 +333,10 @@ namespace core
         bool muted = false;     // Video: hidden. Audio: muted.
         bool solo = false;      // Audio only
         bool locked = false;
+
+        // Sound and audio tracks: the audio streams of their clips shown
+        // under them, one row each.
+        bool streamsUnfolded = false;
 
         // Height in the timeline, in font sizes; 0 for the default one.
         float height = 0.f;

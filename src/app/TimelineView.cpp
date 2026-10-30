@@ -44,6 +44,19 @@ constexpr float MinZoom = 0.05f;      // pixels per second
 constexpr float MaxZoom = 4000.f;
 
 
+// The streams of a sound clip mixing those of a file with several (shown
+// under its track when unfolded), 0 for any other clip.
+int streamsOf(const Project& project, const Clip& clip)
+{
+    if (clip.kind != ClipKind::Media || clip.audioStream >= 0) {
+        return 0;
+    }
+
+    const MediaItem* media = project.findMedia(clip.mediaId);
+    return (media && media->audioStreams.size() > 1) ? (int)media->audioStreams.size() : 0;
+}
+
+
 // Square icon button drawn without an ImGui item: the timeline handles the
 // mouse itself. Returns true when clicked.
 bool headerButton(ImDrawList* drawList, const ImVec2& min, float size, const char* icon, bool active, bool canvasHovered)
@@ -103,33 +116,6 @@ int TimelineView::groupOf(TrackType type)
 {
     // A video track and its sound track move together.
     return (type == TrackType::Audio) ? 1 : (type == TrackType::Subtitle ? 2 : 0);
-}
-
-
-// The button at the start of the name of a sound clip of a file with several
-// audio streams: shows each stream (on audio tracks), or mixes them again.
-// Its icon, nullptr when the clip has none.
-const char* TimelineView::streamsButton(const Project& project, const Clip& clip, TrackType type)
-{
-    const MediaItem* media = (clip.kind == ClipKind::Media) ? project.findMedia(clip.mediaId) : nullptr;
-
-    if (!media || media->audioStreams.size() < 2 || (type != TrackType::Sound && type != TrackType::Audio)) {
-        return nullptr;
-    }
-
-    return (clip.audioStream < 0) ? ICON_MD_UNFOLD_MORE : ICON_MD_UNFOLD_LESS;
-}
-
-
-bool TimelineView::overStreamsButton(const Clip& clip, const Row& row, const char* icon, const ImVec2& mouse) const
-{
-    const float unit = ImGui::GetFontSize();
-    const float x = std::max(timeToX(clip.start), _timelineLeft) + 0.35f * unit;
-    const float y = row.top + 2.f + 0.2f * unit;
-
-    // Drawn only on the clips wide enough for their name.
-    return timeToX(clip.end()) - timeToX(clip.start) > 2.f * unit &&
-        ImRect(ImVec2(x - 0.15f * unit, y - 0.1f * unit), ImVec2(x + ImGui::CalcTextSize(icon).x + 0.15f * unit, y + unit)).Contains(mouse);
 }
 
 
@@ -213,8 +199,9 @@ Time TimelineView::roundToFrame(Time t, const Sequence& sequence) const
 }
 
 
-void TimelineView::layoutRows(const Sequence& sequence, float top)
+void TimelineView::layoutRows(const Project& project, float top)
 {
+    const Sequence& sequence = project.sequence();
     const float unit = ImGui::GetFontSize();
     const float videoHeight = 2.8f * unit;
     const float audioHeight = 3.4f * unit;
@@ -223,8 +210,36 @@ void TimelineView::layoutRows(const Sequence& sequence, float top)
     const float headerHeight = 1.5f * unit;
 
     _rows.clear();
+    _streamRows.clear();
     _groupHeaders.clear();
     float y = top - _scrollY;
+
+    // The streams of the clips of an unfolded track, under it: those left
+    // in at least one clip.
+    auto addStreams = [&](TrackType type, int index) {
+        const Track& track = tracksOfType(sequence, type)[index];
+
+        if (!track.streamsUnfolded) {
+            return;
+        }
+
+        int count = 0;
+
+        for (const Clip& clip : track.clips) {
+            count = std::max(count, streamsOf(project, clip));
+        }
+
+        for (int stream = 0; stream < count; stream++) {
+            const bool shown = std::any_of(track.clips.begin(), track.clips.end(), [&](const Clip& clip) {
+                return streamsOf(project, clip) > stream && !clip.streamRemoved(stream);
+            });
+
+            if (shown) {
+                _streamRows.push_back({ type, index, stream, y, 1.8f * unit });
+                y += 1.8f * unit;
+            }
+        }
+    };
 
     // The height chosen for a track, else the default of its type.
     auto heightOf = [&](TrackType type, int index, float defaultHeight) {
@@ -250,6 +265,7 @@ void TimelineView::layoutRows(const Sequence& sequence, float top)
             const float height = heightOf(TrackType::Sound, i, audioHeight);
             _rows.push_back({ TrackType::Sound, i, y, height });
             y += height;
+            addStreams(TrackType::Sound, i);
         }
     }
 
@@ -263,6 +279,7 @@ void TimelineView::layoutRows(const Sequence& sequence, float top)
         const float height = heightOf(TrackType::Audio, i, audioHeight);
         _rows.push_back({ TrackType::Audio, i, y, height });
         y += height;
+        addStreams(TrackType::Audio, i);
     }
 
     // Subtitles, when there are some.
@@ -276,6 +293,18 @@ void TimelineView::layoutRows(const Sequence& sequence, float top)
             y += 2.f * unit;
         }
     }
+}
+
+
+const TimelineView::StreamRow* TimelineView::streamRowAt(float y) const
+{
+    for (const StreamRow& row : _streamRows) {
+        if (y >= row.top && y < row.top + row.height) {
+            return &row;
+        }
+    }
+
+    return nullptr;
 }
 
 
@@ -323,19 +352,25 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
 
     // The tracks may be taller than the panel: clamp the vertical scrolling,
     // and a scrollbar at the right.
-    layoutRows(sequence, _tracksTop);
+    layoutRows(project, _tracksTop);
 
     float contentHeight = 0.f;
     const float viewHeight = _tracksBottom - _tracksTop;
 
     if (!_rows.empty()) {
-        contentHeight = (_rows.back().top + _rows.back().height) - (_rows.front().top);
+        float bottom = _rows.back().top + _rows.back().height;
+
+        if (!_streamRows.empty()) {
+            bottom = std::max(bottom, _streamRows.back().top + _streamRows.back().height);
+        }
+
+        contentHeight = bottom - _rows.front().top;
         const float maxScrollY = std::max(0.f, contentHeight - viewHeight);
         const float clamped = std::clamp(_scrollY, 0.f, maxScrollY);
 
         if (clamped != _scrollY) {
             _scrollY = clamped;
-            layoutRows(sequence, _tracksTop);
+            layoutRows(project, _tracksTop);
         }
     }
 
@@ -349,7 +384,7 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
 
         if (ImGui::ScrollbarEx(bar, ImGui::GetID("##tracksScroll"), ImGuiAxis_Y, &scroll, (ImS64)viewHeight, (ImS64)contentHeight, ImDrawFlags_None)) {
             _scrollY = (float)scroll;
-            layoutRows(sequence, _tracksTop);
+            layoutRows(project, _tracksTop);
         }
     }
 
@@ -411,9 +446,14 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
 
     drawList->PushClipRect(ImVec2(_timelineLeft, _tracksTop), ImVec2(_timelineRight, _tracksBottom), true);
     drawClips(drawList, project, selection);
+    drawStreamRows(drawList, project, selection);
     drawList->PopClipRect();
 
-    if (drawTrackHeaders(drawList, sequence, result.label, result.effectsOfTrack)) {
+    if (drawTrackHeaders(drawList, project, result.label, result.effectsOfTrack)) {
+        result.edited = true;
+    }
+
+    if (drawStreamHeaders(drawList, project, result.label)) {
         result.edited = true;
     }
 
@@ -560,15 +600,20 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
             // The clips may have moved in memory.
             hoveredClip = nullptr;
         }
-        else if (const char* icon = (hoveredClip && hoveredRow && mouse.x >= _timelineLeft) ? streamsButton(project, *hoveredClip, hoveredRow->type) : nullptr;
-                 icon && overStreamsButton(*hoveredClip, *hoveredRow, icon, mouse)) {
-            const Id clipId = hoveredClip->id;
-            hoveredClip = nullptr;
+        else if (const StreamRow* streamRow = (mouse.x >= _timelineLeft && mouse.y >= _tracksTop) ? streamRowAt(mouse.y) : nullptr) {
+            // A stream of a clip: the clip, with its links.
+            toolClick = true;
 
-            if (project.findClip(clipId)->audioStream < 0 ? project.unfoldAudioStreams(clipId) : project.foldAudioStreams(clipId)) {
-                std::erase_if(selection, [&](Id id) { return project.findClip(id) == nullptr; });
-                result.edited = true;
-                result.label = "Audio streams";
+            if (!io.KeyCtrl) {
+                selection.clear();
+            }
+
+            const Time t = xToTime(mouse.x);
+
+            for (const Clip& clip : tracksOfType(sequence, streamRow->type)[streamRow->trackIndex].clips) {
+                if (clip.start <= t && t < clip.end()) {
+                    addWithLinks(project, clip.id, selection);
+                }
             }
         }
         else if (hoveredClip && mouse.x >= _timelineLeft) {
@@ -657,12 +702,6 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
         }
 
         ImGui::EndPopup();
-    }
-
-    if (const char* icon = (hovered && hoveredClip && hoveredRow && _dragMode == DragMode::None) ? streamsButton(project, *hoveredClip, hoveredRow->type) : nullptr;
-        icon && overStreamsButton(*hoveredClip, *hoveredRow, icon, mouse)) {
-        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        ImGui::SetTooltip("%s", hoveredClip->audioStream < 0 ? tr("Show each audio stream, on audio tracks") : tr("Mix the audio streams again in one clip"));
     }
 
     if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && hoveredClip && _dragMode == DragMode::None) {
@@ -1026,6 +1065,23 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
             break;
         }
 
+        // The streams removed from clips, back.
+        const bool anyRemoved = std::any_of(selection.begin(), selection.end(), [&](Id id) {
+            const Clip* clip = project.findClip(id);
+            return clip && !clip->removedStreams.empty();
+        });
+
+        if (anyRemoved && ImGui::MenuItem(tr(ICON_MD_RESTORE " Restore the Removed Audio Streams"))) {
+            for (Id clipId : selection) {
+                if (Clip* clip = project.findClip(clipId)) {
+                    clip->removedStreams.clear();
+                }
+            }
+
+            result.edited = true;
+            result.label = "Restore audio streams";
+        }
+
         // Sound and audio clips heard or not.
         std::vector<Clip*> sounds;
 
@@ -1216,8 +1272,9 @@ void TimelineView::drawRuler(ImDrawList* drawList, const Sequence& sequence, con
 }
 
 
-bool TimelineView::drawTrackHeaders(ImDrawList* drawList, Sequence& sequence, std::string& label, Id& effectsOfTrack)
+bool TimelineView::drawTrackHeaders(ImDrawList* drawList, Project& project, std::string& label, Id& effectsOfTrack)
 {
+    Sequence& sequence = project.sequence();
     const float unit = ImGui::GetFontSize();
     const float buttonSize = 1.5f * unit;
     const bool canvasHovered = ImGui::IsItemHovered() && _dragMode == DragMode::None;
@@ -1256,6 +1313,25 @@ bool TimelineView::drawTrackHeaders(ImDrawList* drawList, Sequence& sequence, st
                 effectsOfTrack = track.id;
             }
 
+            // The audio streams of its clips, under it.
+            const bool streams = track.streamsUnfolded ||
+                std::any_of(track.clips.begin(), track.clips.end(), [&](const Clip& clip) { return streamsOf(project, clip) > 0; });
+
+            if (streams) {
+                const ImVec2 at(min.x + 0.45f * unit, y + buttonSize + 0.1f * unit);
+
+                if (headerButton(drawList, at, buttonSize, track.streamsUnfolded ? ICON_MD_ARROW_DROP_DOWN : ICON_MD_ARROW_RIGHT, false, canvasHovered)) {
+                    track.streamsUnfolded = !track.streamsUnfolded;
+                    label = track.streamsUnfolded ? "Show the audio streams" : "Hide the audio streams";
+                    edited = true;
+                }
+
+                if (canvasHovered && ImGui::IsMouseHoveringRect(at, ImVec2(at.x + buttonSize, at.y + buttonSize))) {
+                    ImGui::SetTooltip("%s", track.streamsUnfolded ? tr("Hide the audio streams of the clips")
+                                                                  : tr("Show the audio streams of the clips, each under the track"));
+                }
+            }
+
             if (headerButton(drawList, ImVec2(x, y), buttonSize, ICON_MD_HEADSET, track.solo, canvasHovered)) {
                 track.solo = !track.solo;
                 label = "Solo track";
@@ -1275,6 +1351,134 @@ bool TimelineView::drawTrackHeaders(ImDrawList* drawList, Sequence& sequence, st
             track.muted = !track.muted;
             label = picture ? "Toggle track output" : "Mute track";
             edited = true;
+        }
+    }
+
+    return edited;
+}
+
+
+void TimelineView::drawStreamRows(ImDrawList* drawList, const Project& project, const std::vector<Id>& selection) const
+{
+    for (const StreamRow& row : _streamRows) {
+        const Track& track = tracksOfType(project.sequence(), row.type)[row.trackIndex];
+
+        drawList->AddRectFilled(ImVec2(_timelineLeft, row.top), ImVec2(_timelineRight, row.top + row.height - 1.f),
+            ImGui::GetColorU32(ImGuiCol_WindowBg, 0.7f));
+
+        // The stream of each clip, aligned with it.
+        for (const Clip& clip : track.clips) {
+            if (streamsOf(project, clip) <= row.stream || clip.streamRemoved(row.stream)) {
+                continue;
+            }
+
+            const float x0 = timeToX(clip.start);
+            const float x1 = timeToX(clip.end());
+
+            if (x1 < _timelineLeft || x0 > _timelineRight) {
+                continue;
+            }
+
+            const bool heard = !clip.muted && !track.muted && !clip.streamMuted(row.stream);
+            const ImVec2 min(x0, row.top + 1.f);
+            const ImVec2 max(std::max(x1, x0 + 1.f), row.top + row.height - 2.f);
+            ImU32 color = isSelected(selection, clip.id) ? AudioClipSelectedColor : AudioClipColor;
+
+            if (!heard) {
+                color = (color & 0x00FFFFFF) | 0x50000000;
+            }
+
+            drawList->AddRectFilled(min, max, color, 3.f);
+
+            if (waveformOf) {
+                if (const std::shared_ptr<const media::Waveform> waveform = waveformOf(clip.mediaId, row.stream)) {
+                    drawWaveform(drawList, clip, *waveform, min, max);
+                }
+            }
+
+            // Not heard: veiled.
+            if (!heard) {
+                drawList->AddRectFilled(min, max, IM_COL32(20, 20, 20, 150), 3.f);
+            }
+
+            drawList->AddRect(min, max, IM_COL32(0, 0, 0, 120), 3.f);
+        }
+    }
+}
+
+
+bool TimelineView::drawStreamHeaders(ImDrawList* drawList, Project& project, std::string& label)
+{
+    const float unit = ImGui::GetFontSize();
+    const bool canvasHovered = ImGui::IsItemHovered() && _dragMode == DragMode::None;
+    bool edited = false;
+
+    for (const StreamRow& row : _streamRows) {
+        Track& track = tracksOfType(project.sequence(), row.type)[row.trackIndex];
+        const ImVec2 min(_timelineLeft - _headerWidth, row.top);
+        const ImVec2 max(_timelineLeft - 1.f, row.top + row.height - 1.f);
+        const ImU32 dim = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+
+        drawList->AddRectFilled(min, max, ImGui::GetColorU32(ImGuiCol_TitleBg));
+        drawList->AddRectFilled(min, ImVec2(min.x + 0.25f * unit, max.y), AudioClipColor);
+
+        // A branch of the tree, from the track.
+        const float lineX = min.x + 1.f * unit;
+        const float middle = row.top + 0.5f * row.height;
+        drawList->AddLine(ImVec2(lineX, row.top), ImVec2(lineX, middle), dim);
+        drawList->AddLine(ImVec2(lineX, middle), ImVec2(lineX + 0.5f * unit, middle), dim);
+
+        // Its name: of the first clip that has it.
+        std::vector<Clip*> clips;
+        std::string name;
+
+        for (Clip& clip : track.clips) {
+            if (streamsOf(project, clip) > row.stream && !clip.streamRemoved(row.stream)) {
+                clips.push_back(&clip);
+
+                if (name.empty()) {
+                    name = project.findMedia(clip.mediaId)->audioStreamName(row.stream);
+                }
+            }
+        }
+
+        drawList->AddText(ImVec2(lineX + 0.7f * unit, middle - 0.5f * ImGui::GetFontSize()), ImGui::GetColorU32(ImGuiCol_Text),
+            (std::string(ICON_MD_GRAPHIC_EQ " ") + name).c_str());
+
+        // Mute and remove, for the clips of the track.
+        const bool allMuted = !clips.empty() && std::all_of(clips.begin(), clips.end(), [&](const Clip* clip) { return clip->streamMuted(row.stream); });
+        const float size = row.height - 0.3f * unit;
+        const ImVec2 removeAt(max.x - 0.3f * unit - size, row.top + 0.15f * unit);
+        const ImVec2 muteAt(removeAt.x - size - 0.15f * unit, removeAt.y);
+
+        if (headerButton(drawList, muteAt, size, allMuted ? ICON_MD_VOLUME_OFF : ICON_MD_VOLUME_UP, !allMuted, canvasHovered)) {
+            for (Clip* clip : clips) {
+                std::erase(clip->mutedStreams, row.stream);
+
+                if (!allMuted) {
+                    clip->mutedStreams.push_back(row.stream);
+                }
+            }
+
+            label = allMuted ? "Unmute audio stream" : "Mute audio stream";
+            edited = true;
+        }
+
+        if (headerButton(drawList, removeAt, size, ICON_MD_CLOSE, false, canvasHovered)) {
+            for (Clip* clip : clips) {
+                std::erase(clip->mutedStreams, row.stream);
+                clip->removedStreams.push_back(row.stream);
+            }
+
+            label = "Remove audio stream";
+            edited = true;
+        }
+
+        if (canvasHovered && ImGui::IsMouseHoveringRect(muteAt, ImVec2(muteAt.x + size, muteAt.y + size))) {
+            ImGui::SetTooltip("%s", allMuted ? tr("Hear this audio stream") : tr("Mute this audio stream"));
+        }
+        else if (canvasHovered && ImGui::IsMouseHoveringRect(removeAt, ImVec2(removeAt.x + size, removeAt.y + size))) {
+            ImGui::SetTooltip("%s", tr("Remove this audio stream from the clips (Restore in their menu)"));
         }
     }
 
@@ -1474,7 +1678,7 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
             }
 
             if (sound && waveformOf) {
-                if (const std::shared_ptr<const media::Waveform> waveform = waveformOf(clip.mediaId, clip.audioStream)) {
+                if (const std::shared_ptr<const media::Waveform> waveform = waveformOf(clip.mediaId, clip.audioSource())) {
                     // Below the name of the clip.
                     const ImVec2 waveMin(min.x, min.y + 1.2f * unit);
                     drawWaveform(drawList, clip, *waveform, waveMin, ImVec2(max.x, max.y - 0.15f * unit));
@@ -1523,11 +1727,6 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
 
                     if (!video && clip.muted) {
                         name = ICON_MD_VOLUME_OFF " " + name;
-                    }
-
-                    // The button of the streams, before the name.
-                    if (const char* icon = streamsButton(project, clip, row.type)) {
-                        name = std::string(icon) + " " + name;
                     }
                 }
                 const float textX = std::max(min.x, _timelineLeft) + 0.35f * unit;
