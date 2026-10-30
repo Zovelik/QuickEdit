@@ -118,9 +118,9 @@ cpack -C Release --config out/build/x64-Release/CPackConfig.cmake
   `appimagetool` on the `PATH`), with a desktop entry, the `.qep` file type
   and AppStream data.
 
-The GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests
-every push to `master`; a published release (or a manual run of the
-workflow) also builds the packages and attaches them to the release. The
+The GitHub Actions workflow (`.github/workflows/build.yml`) runs for a
+published release: it builds, tests and packages QuickEdit, and attaches the
+packages to the release (a manual run keeps them as artifacts of the run). The
 version is the last git tag (`v1.2.0` gives 1.2.0).
 
 ## Languages
