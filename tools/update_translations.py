@@ -88,7 +88,7 @@ def texts():
     keys.update(key_of(c_string(l)) for l in literals_between(gui, 'timelineTools()\n{', 'return tools;'))
 
     inspector = read(os.path.join(ROOT, 'src', 'app', 'Inspector.cpp'))
-    for table in ('ResolutionPresets[]', 'LetterAnimationNames[]', 'FrameRatePresets[]'):
+    for table in ('ResolutionPresets[]', 'LetterAnimationNames[]', 'FrameRatePresets[]', 'ScaleFilterNames[]', 'ScaleFilterTooltips[]'):
         keys.update(key_of(c_string(l)) for l in literals_between(inspector, table, ';'))
 
     layers = read(os.path.join(ROOT, 'src', 'core', 'Layers.cpp'))

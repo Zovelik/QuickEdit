@@ -11,12 +11,15 @@ Windows and Linux. C++20, SDL3, Dear ImGui, Vulkan, FFmpeg.
 
 - **Timeline**: video tracks with their sound, audio tracks, subtitle tracks;
   snapping, rectangle selection, ripple delete, gaps, linked picture and
-  sound. Tools: select, blade, slip, select forward. Clip speed, freeze
+  sound; clips moved or dropped over others overwrite what they cover. The
+  audio streams of a file unfold under its track, each one muted or
+  removed. Tools: select, blade, slip, select forward. Clip speed, freeze
   frame. Several sequences, nested in one another.
 - **GPU everywhere**: decoding with Vulkan Video, compositing, effects and
   encoding (Vulkan Video, NVENC, AMF) without the pictures leaving the GPU.
 - **Pictures**: position, scale, rotation and opacity with keyframes and
-  curves; fit, fill or native size; crop, rounded corners, border, shadow;
+  curves; fit, fill or native size; bilinear, bicubic, Lanczos or nearest
+  sampling; crop, rounded corners, border, shadow;
   transitions; video effects (color, blur, sharpen, vignette, chroma key,
   pixelate) per clip or per track; generators and transitions written as
   GLSL shaders, with a built-in editor.

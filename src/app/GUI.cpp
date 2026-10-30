@@ -258,6 +258,11 @@ GUI::GUI(const std::filesystem::path& projectPath, double startSeconds, Id selec
 
 GUI::~GUI()
 {
+    // A recording being opened or finished on a thread uses the recorders:
+    // done before they go.
+    if (_screenJob.valid()) _screenJob.wait();
+    if (_sceneJob.valid()) _sceneJob.wait();
+
     // Before the GPU objects it uses.
     _exporter.reset();
 
@@ -1518,8 +1523,10 @@ void GUI::mediaPanel()
 
         drawFolder("");
 
-        // The rest of the list: out of any folder.
+        // The rest of the list: out of any folder. Of the color of the
+        // even rows whatever the number of rows above (not alternating).
         ImGui::TableNextRow();
+        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImGuiCol_TableRowBg));
         ImGui::TableNextColumn();
         ImGui::Dummy(ImVec2(1.f, std::max(ImGui::GetTextLineHeight(), ImGui::GetContentRegionAvail().y)));
 

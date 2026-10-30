@@ -161,8 +161,13 @@ namespace core
     enum class ScaleFilter
     {
         Bilinear,   // Smooth
-        Nearest     // Sharp pixels (screen captures at whole scales)
+        Nearest,    // Sharp pixels (screen captures at whole scales)
+        Bicubic,    // Sharper than bilinear (Catmull-Rom)
+        Lanczos,    // Sharpest (Lanczos 3), a little ringing on hard edges
+        Count
     };
+
+    const char* scaleFilterName(ScaleFilter filter);
 
     // Sequence pixels per pixel of a picture of the given size, in a frame
     // of the given size.

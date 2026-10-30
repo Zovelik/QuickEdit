@@ -1116,7 +1116,8 @@ void Compositor::cmdDrawLayer(VkCommandBuffer commandBuffer, const Layer& layer,
             toNdc(place.apply(local[0], local[3]), width, height, parameters.corners23);
             toNdc(place.apply(local[2], local[3]), width, height, parameters.corners23 + 2);
 
-            parameters.color[0] = parameters.color[1] = parameters.color[2] = 1.f;
+            parameters.color[0] = (layer.clip->filter == ScaleFilter::Bicubic) ? 2.f : (layer.clip->filter == ScaleFilter::Lanczos) ? 3.f : 0.f;
+            parameters.color[1] = parameters.color[2] = 1.f;
             parameters.color[3] = opacity;
             std::copy(local, local + 4, parameters.local);
             std::copy(picture, picture + 4, parameters.picture);

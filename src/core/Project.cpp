@@ -11,6 +11,17 @@
 namespace core
 {
 
+const char* scaleFilterName(ScaleFilter filter)
+{
+    switch (filter) {
+        case ScaleFilter::Nearest: return "nearest";
+        case ScaleFilter::Bicubic: return "bicubic";
+        case ScaleFilter::Lanczos: return "lanczos";
+        default:                   return "bilinear";
+    }
+}
+
+
 namespace {
 
 // Durations given to the media before they are probed, and to still images.
@@ -401,7 +412,7 @@ Json clipToJson(const Clip& clip)
     if (clip.speed != 1.0) json["speed"] = clip.speed;
     if (clip.audioStream >= 0) json["audioStream"] = clip.audioStream;
     if (clip.fit != FitMode::Fit) json["fit"] = clip.fit == FitMode::Fill ? "fill" : "native";
-    if (clip.filter != ScaleFilter::Bilinear) json["filter"] = "nearest";
+    if (clip.filter != ScaleFilter::Bilinear) json["filter"] = scaleFilterName(clip.filter);
     if (clip.blend != BlendMode::Normal) json["blend"] = blendModeName(clip.blend);
 
     if (clip.fadeIn > 0) json["fadeIn"] = clip.fadeIn;
@@ -496,7 +507,13 @@ Clip clipFromJson(const Json& json)
 
     const std::string fit = json["fit"].toString();
     clip.fit = (fit == "fill") ? FitMode::Fill : (fit == "native") ? FitMode::Native : FitMode::Fit;
-    clip.filter = (json["filter"].toString() == "nearest") ? ScaleFilter::Nearest : ScaleFilter::Bilinear;
+    clip.filter = ScaleFilter::Bilinear;
+
+    for (int filter = 0; filter < (int)ScaleFilter::Count; filter++) {
+        if (json["filter"].toString() == scaleFilterName((ScaleFilter)filter)) {
+            clip.filter = (ScaleFilter)filter;
+        }
+    }
     clip.blend = blendModeFromName(json["blend"].toString());
     clip.fadeIn = std::clamp<Time>(json["fadeIn"].toInt(), 0, clip.duration);
     clip.fadeOut = std::clamp<Time>(json["fadeOut"].toInt(), 0, clip.duration);

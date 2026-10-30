@@ -432,27 +432,32 @@ void Inspector::transformSection(Clip& clip, Time localTime, std::string& edit)
         }
     }
 
-    // Sampling: smooth, or sharp pixels (a screen capture enlarged).
+    // Sampling of the picture at another size.
     if (clip.kind == ClipKind::Media || clip.kind == ClipKind::Sequence) {
         propertyLabel("Sampling");
 
-        const float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
-        const float width = (ImGui::GetContentRegionAvail().x - spacing) / 2.f;
+        static const char* const ScaleFilterNames[] = { "Bilinear", "Nearest (Sharp Pixels)", "Bicubic", "Lanczos" };
+        static const char* const ScaleFilterTooltips[] = {
+            "Smooth when the picture is scaled",
+            "Each pixel stays a sharp square (screen captures, pixel art)",
+            "Sharper than bilinear, for videos enlarged or reduced",
+            "The sharpest, for the details of a reduced screen (a little ringing on hard edges)",
+        };
 
-        if (widgets::optionButton("Smooth", clip.filter == ScaleFilter::Bilinear, ImVec2(width, 0.f))) {
-            clip.filter = ScaleFilter::Bilinear;
-            edit = "Change sampling";
+        ImGui::SetNextItemWidth(-FLT_MIN);
+
+        if (ImGui::BeginCombo("##sampling", tr(ScaleFilterNames[(int)clip.filter]))) {
+            for (int filter = 0; filter < (int)ScaleFilter::Count; filter++) {
+                if (ImGui::Selectable(tr(ScaleFilterNames[filter]), (int)clip.filter == filter)) {
+                    clip.filter = (ScaleFilter)filter;
+                    edit = "Change sampling";
+                }
+
+                ImGui::SetItemTooltip("%s", tr(ScaleFilterTooltips[filter]));
+            }
+
+            ImGui::EndCombo();
         }
-
-        ImGui::SetItemTooltip("%s", tr("Bilinear: smooth when the picture is scaled"));
-        ImGui::SameLine(0.f, spacing);
-
-        if (widgets::optionButton("Sharp Pixels", clip.filter == ScaleFilter::Nearest, ImVec2(width, 0.f))) {
-            clip.filter = ScaleFilter::Nearest;
-            edit = "Change sampling";
-        }
-
-        ImGui::SetItemTooltip("%s", tr("Nearest: each pixel stays a sharp square (screen captures, pixel art)"));
     }
 
     // Blending with the pictures below.
