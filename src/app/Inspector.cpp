@@ -187,6 +187,31 @@ std::string Inspector::draw(Project& project, const std::vector<Id>& selection, 
     }
     else {
         ImGui::SeparatorText(tr("Audio"));
+
+        // The audio streams of a file (a screen recording: the computer and
+        // the microphone): mixed, or one clip each.
+        if (media && media->audioStreams.size() > 1) {
+            ImGui::AlignTextToFramePadding();
+
+            if (clip->audioStream >= 0) {
+                ImGui::TextDisabled("%s", (std::string(tr("Stream")) + ": " + media->audioStreamName(clip->audioStream)).c_str());
+                ImGui::SameLine();
+
+                if (ImGui::Button(tr(ICON_MD_UNFOLD_LESS " Mix the Audio Streams"))) {
+                    project.foldAudioStreams(clip->id);
+                    return "Mix the audio streams";
+                }
+            }
+            else {
+                ImGui::TextDisabled(tr("%zu audio streams, mixed"), media->audioStreams.size());
+                ImGui::SameLine();
+
+                if (ImGui::Button(tr(ICON_MD_UNFOLD_MORE " Show Each Audio Stream"))) {
+                    project.unfoldAudioStreams(clip->id);
+                    return "Show each audio stream";
+                }
+            }
+        }
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::SliderFloat("##gain", &clip->gainDb, -60.f, 12.f, tr("Gain %.1f dB"));
         finishedEdit(edit, "Change gain");

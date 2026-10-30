@@ -34,7 +34,7 @@ void mixTrack(const MixGraph& graph, const MixTrack& track, int64_t first, int64
 
 namespace {
 
-using AudioOf = std::function<std::shared_ptr<const media::AudioBuffer>(Id mediaId)>;
+using AudioOf = std::function<std::shared_ptr<const media::AudioBuffer>(Id mediaId, int stream)>;
 using EffectsOf = std::function<std::vector<std::shared_ptr<AudioEffect>>(Id owner, const std::vector<EffectSlot>& slots)>;
 
 
@@ -79,7 +79,7 @@ void addNestedSound(const Project& project, const Sequence& nested, Time offset,
         for (const Clip& clip : track->clips) {
             const Time start = std::max(clip.start + offset, from);
             const Time end = std::min(clip.end() + offset, to);
-            std::shared_ptr<const media::AudioBuffer> buffer = (end > start) ? audioOf(clip.mediaId) : nullptr;
+            std::shared_ptr<const media::AudioBuffer> buffer = (end > start) ? audioOf(clip.mediaId, clip.audioStream) : nullptr;
 
             if (!buffer || buffer->sampleRate != sampleRate) {
                 continue;
@@ -132,7 +132,7 @@ void addNestedSound(const Project& project, const Sequence& nested, Time offset,
 
 std::shared_ptr<const MixGraph> buildMixGraph(
     const Project& project,
-    const std::function<std::shared_ptr<const media::AudioBuffer>(Id mediaId)>& audioOf,
+    const std::function<std::shared_ptr<const media::AudioBuffer>(Id mediaId, int stream)>& audioOf,
     const std::function<std::vector<std::shared_ptr<AudioEffect>>(Id owner, const std::vector<EffectSlot>& slots)>& effectsOf)
 {
     auto graph = std::make_shared<MixGraph>();
@@ -161,7 +161,7 @@ std::shared_ptr<const MixGraph> buildMixGraph(
         mixTrack.effects = effectsOnce(effectsOf, track.id, track.effects, usedOwners);
 
         for (const Clip& clip : track.clips) {
-            std::shared_ptr<const media::AudioBuffer> buffer = audioOf(clip.mediaId);
+            std::shared_ptr<const media::AudioBuffer> buffer = audioOf(clip.mediaId, clip.audioStream);
 
             if (!buffer || buffer->sampleRate != graph->sampleRate) {
                 continue;

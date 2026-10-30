@@ -256,7 +256,7 @@ GUI::GUI(const std::filesystem::path& projectPath, double startSeconds, Id selec
         }
     }
 
-    _timeline.waveformOf = [this](Id mediaId) { return _media.waveform(mediaId); };
+    _timeline.waveformOf = [this](Id mediaId, int stream) { return _media.waveform(mediaId, stream); };
     _timeline.thumbnailsOf = [this](Id mediaId) { return thumbnailsOf(mediaId); };
     _timeline.userShaders = &_userShaders;
     _inspector.userShaders = &_userShaders;
@@ -2807,7 +2807,7 @@ std::vector<float> GUI::speechSamples(std::string& error)
     for (const auto* tracks : { &sequence.soundTracks, &sequence.audioTracks }) {
         for (const Track& track : *tracks) {
             for (const Clip& clip : track.clips) {
-                if (!track.muted && !_media.audio(clip.mediaId)) {
+                if (!track.muted && !_media.audio(clip.mediaId, clip.audioStream)) {
                     error = "Some sounds are still being analyzed: try again in a moment.";
                     return {};
                 }
@@ -2828,7 +2828,7 @@ std::vector<float> GUI::speechSamples(std::string& error)
         }
     }
 
-    const auto graph = audio::buildMixGraph(source, [this](Id mediaId) { return _media.audio(mediaId); });
+    const auto graph = audio::buildMixGraph(source, [this](Id mediaId, int stream) { return _media.audio(mediaId, stream); });
     const int64_t frames = mulDivFloor(sequence.duration(), rate, TicksPerSecond);
 
     if (frames <= 0) {
@@ -4259,6 +4259,22 @@ void GUI::stopScreenRecording()
 
     const Time start = _screenStart;
 
+    // The microphone in the file of the recording, as its second audio
+    // stream: the clip plays both, and can show each one.
+    bool microphoneInFile = false;
+
+    if (microphoneFrames > 0) {
+        std::string error;
+
+        if (capture::addAudioStream(_screenPath, _screenMicrophonePath, "Microphone", error)) {
+            std::filesystem::remove(_screenMicrophonePath, ec);
+            microphoneInFile = true;
+        }
+        else {
+            SDL_Log("Screen recording: the microphone stays apart: %s", error.c_str());
+        }
+    }
+
     // The picture: the video track chosen at the start while it is still
     // free, else the first free one, or a new one.
     auto freeFrom = [&](const Track& track) {
@@ -4315,8 +4331,9 @@ void GUI::stopScreenRecording()
         end = clip->end();
     }
 
-    // The microphone: the first audio track free over it, or a new one.
-    if (microphoneFrames > 0) {
+    // The microphone apart (it could not join the file): the first audio
+    // track free over it, or a new one.
+    if (microphoneFrames > 0 && !microphoneInFile) {
         const Time microphoneEnd = start + mulDivFloor(microphoneFrames, TicksPerSecond, audio::Recorder::SampleRate);
         Id audioTrack = InvalidId;
 
@@ -4776,11 +4793,14 @@ bool GUI::startExport()
     context.vulkanEncode = hasVideoEncodeQueue() && _hwDevice;
     context.defaultFont = _defaultFontData;
 
-    std::map<Id, std::shared_ptr<const media::AudioBuffer>> audio;
+    // The sound of each media, all its streams together (-1) and each one.
+    std::map<std::pair<Id, int>, std::shared_ptr<const media::AudioBuffer>> audio;
 
     for (const MediaItem& item : _project.media()) {
-        if (std::shared_ptr<const media::AudioBuffer> buffer = _media.audio(item.id)) {
-            audio[item.id] = buffer;
+        for (int stream = -1; stream < (int)std::max<size_t>(1, item.audioStreams.size()); stream++) {
+            if (std::shared_ptr<const media::AudioBuffer> buffer = _media.audio(item.id, stream)) {
+                audio[{ item.id, stream }] = buffer;
+            }
         }
     }
 
@@ -6009,7 +6029,7 @@ void GUI::updateMedia()
     if (_mixDirty) {
         _mixDirty = false;
         _audio.setGraph(audio::buildMixGraph(_project,
-            [this](Id mediaId) { return _media.audio(mediaId); },
+            [this](Id mediaId, int stream) { return _media.audio(mediaId, stream); },
             [this](Id, const std::vector<EffectSlot>& slots) { return _effects.effectsOf(slots); }));
     }
 }

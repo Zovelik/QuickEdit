@@ -361,6 +361,7 @@ Json clipToJson(const Clip& clip)
     json["frozen"] = clip.frozen;
 
     if (clip.speed != 1.0) json["speed"] = clip.speed;
+    if (clip.audioStream >= 0) json["audioStream"] = clip.audioStream;
     if (clip.fit != FitMode::Fit) json["fit"] = clip.fit == FitMode::Fill ? "fill" : "native";
     if (clip.filter != ScaleFilter::Bilinear) json["filter"] = "nearest";
     if (clip.blend != BlendMode::Normal) json["blend"] = blendModeName(clip.blend);
@@ -449,6 +450,7 @@ Clip clipFromJson(const Json& json)
     clip.gainDb = (float)json["gainDb"].toDouble(0.0);
     clip.frozen = json["frozen"].toBool();
     clip.speed = std::clamp(json["speed"].toDouble(1.0), Project::MinSpeed, Project::MaxSpeed);
+    clip.audioStream = (int)std::max<int64_t>(-1, json["audioStream"].toInt(-1));
 
     const std::string fit = json["fit"].toString();
     clip.fit = (fit == "fill") ? FitMode::Fill : (fit == "native") ? FitMode::Native : FitMode::Fit;
@@ -586,6 +588,16 @@ std::string MediaItem::name() const
 {
     const std::u8string u8 = path.filename().u8string();
     return std::string(u8.begin(), u8.end());
+}
+
+
+std::string MediaItem::audioStreamName(int stream) const
+{
+    if (stream >= 0 && stream < (int)audioStreams.size() && !audioStreams[(size_t)stream].empty()) {
+        return audioStreams[(size_t)stream];
+    }
+
+    return "Stream " + std::to_string(stream + 1);
 }
 
 
@@ -1407,6 +1419,95 @@ const ShaderDef* Project::findShader(const std::string& id) const
 }
 
 
+bool Project::unfoldAudioStreams(Id clipId)
+{
+    Clip* clip = findClip(clipId);
+    const Track* track = findTrackOfClip(clipId);
+    const MediaItem* media = clip ? findMedia(clip->mediaId) : nullptr;
+
+    if (!clip || !track || !media || clip->kind != ClipKind::Media || clip->audioStream >= 0 || media->audioStreams.size() < 2 ||
+        (track->type != TrackType::Sound && track->type != TrackType::Audio)) {
+        return false;
+    }
+
+    // The clips of the streams go together.
+    if (clip->linkGroup == InvalidId) {
+        clip->linkGroup = newId();
+    }
+
+    clip->audioStream = 0;
+
+    // A copy: adding a track may move the clip in memory.
+    const Clip first = *clip;
+    const size_t streams = media->audioStreams.size();
+
+    auto freeOver = [&](const Track& t) {
+        return !t.locked && std::none_of(t.clips.begin(), t.clips.end(),
+            [&](const Clip& c) { return c.start < first.end() && c.end() > first.start; });
+    };
+
+    for (size_t stream = 1; stream < streams; stream++) {
+        Clip copy = first;
+        copy.id = newId();
+        copy.audioStream = (int)stream;
+        copy.effects.clear();
+
+        Track* target = nullptr;
+
+        for (Track& t : _sequence.audioTracks) {
+            if (freeOver(t)) {
+                target = &t;
+                break;
+            }
+        }
+
+        if (!target) {
+            _sequence.addTrack(TrackType::Audio, newId(), InvalidId);
+            target = &_sequence.audioTracks.back();
+        }
+
+        target->clips.push_back(copy);
+        target->sortClips();
+    }
+
+    return true;
+}
+
+
+bool Project::foldAudioStreams(Id clipId)
+{
+    Clip* clip = findClip(clipId);
+
+    if (!clip || clip->audioStream < 0) {
+        return false;
+    }
+
+    // The clips of the other streams of the same piece of media.
+    std::vector<Id> others;
+
+    if (clip->linkGroup != InvalidId) {
+        for (auto* tracks : { &_sequence.soundTracks, &_sequence.audioTracks }) {
+            for (const Track& track : *tracks) {
+                for (const Clip& c : track.clips) {
+                    if (c.id != clipId && c.linkGroup == clip->linkGroup && c.mediaId == clip->mediaId &&
+                        c.audioStream >= 0 && c.start == clip->start) {
+                        others.push_back(c.id);
+                    }
+                }
+            }
+        }
+    }
+
+    removeClips(others, false);
+
+    if (Clip* kept = findClip(clipId)) {
+        kept->audioStream = -1;
+    }
+
+    return true;
+}
+
+
 bool Project::setClipSpeed(Id clipId, double speed)
 {
     const Clip* grabbed = findClip(clipId);
@@ -1822,6 +1923,12 @@ Json Project::toJson(const std::filesystem::path& projectDir) const
         entry["sampleRate"] = item.sampleRate;
         entry["channels"] = item.channels;
 
+        if (!item.audioStreams.empty()) {
+            Json streams = Json::array();
+            for (const std::string& stream : item.audioStreams) streams.push_back(stream);
+            entry["audioStreams"] = streams;
+        }
+
         if (!item.folder.empty()) {
             entry["folder"] = item.folder;
         }
@@ -1898,6 +2005,10 @@ void Project::fromJson(const Json& json, const std::filesystem::path& projectDir
         item.hasAudio = entry["hasAudio"].toBool();
         item.sampleRate = (uint32_t)entry["sampleRate"].toInt();
         item.channels = (uint32_t)entry["channels"].toInt();
+
+        for (const Json& stream : entry["audioStreams"].items()) {
+            item.audioStreams.push_back(stream.toString());
+        }
         item.folder = entry["folder"].toString();
         loaded._media.push_back(item);
     }

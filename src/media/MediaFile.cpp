@@ -113,6 +113,18 @@ ProbeResult probe(const std::filesystem::path& path)
         result.isImage = isImageFormat(format.get()) || stream->nb_frames == 1;
     }
 
+    for (unsigned int i = 0; i < format->nb_streams; i++) {
+        const AVStream* stream = format->streams[i];
+
+        if (stream->codecpar->codec_type != AVMEDIA_TYPE_AUDIO) {
+            continue;
+        }
+
+        const AVDictionaryEntry* title = av_dict_get(stream->metadata, "title", nullptr, 0);
+        const AVDictionaryEntry* language = av_dict_get(stream->metadata, "language", nullptr, 0);
+        result.audioStreams.push_back(title ? title->value : (language && std::string(language->value) != "und") ? language->value : "");
+    }
+
     if (audioIndex >= 0) {
         const AVCodecParameters* codec = format->streams[audioIndex]->codecpar;
 
@@ -279,4 +291,169 @@ AudioBuffer decodeAudio(
     return buffer;
 }
 
+
+
+std::vector<AudioBuffer> decodeAudioStreams(
+    const std::filesystem::path& path,
+    uint32_t sampleRate,
+    const std::atomic<bool>& cancel,
+    const std::function<void(float)>& progress)
+{
+    FormatContextPtr format = openInput(path);
+
+    // One decoder per audio stream, the other streams skipped.
+    struct Decoder
+    {
+        int streamIndex = -1;
+        CodecContextPtr codec;
+        SwrPtr resampler;
+        AudioBuffer buffer;
+    };
+
+    std::vector<Decoder> decoders;
+
+    for (unsigned int i = 0; i < format->nb_streams; i++) {
+        AVStream* stream = format->streams[i];
+        const AVCodec* decoder = (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) ? avcodec_find_decoder(stream->codecpar->codec_id) : nullptr;
+        stream->discard = decoder ? AVDISCARD_DEFAULT : AVDISCARD_ALL;
+
+        if (!decoder) {
+            continue;
+        }
+
+        Decoder& entry = decoders.emplace_back();
+        entry.streamIndex = (int)i;
+        entry.codec.reset(avcodec_alloc_context3(decoder));
+        avcodec_parameters_to_context(entry.codec.get(), stream->codecpar);
+        entry.codec->thread_count = 0;
+        entry.buffer.sampleRate = sampleRate;
+
+        const int result = avcodec_open2(entry.codec.get(), decoder, nullptr);
+
+        if (result < 0) {
+            throw std::runtime_error("Could not open the audio decoder: " + errorString(result));
+        }
+    }
+
+    if (decoders.empty()) {
+        throw std::runtime_error("The file has no readable audio stream");
+    }
+
+    const double durationSeconds = (format->duration != AV_NOPTS_VALUE) ? (double)format->duration / AV_TIME_BASE : 0.0;
+    AVChannelLayout stereo;
+    av_channel_layout_default(&stereo, AudioBuffer::Channels);
+
+    auto convert = [&](Decoder& decoder, const uint8_t** input, int inputFrames) {
+        const int outputFrames = swr_get_out_samples(decoder.resampler.get(), inputFrames);
+
+        if (outputFrames <= 0) {
+            return;
+        }
+
+        std::vector<float>& samples = decoder.buffer.samples;
+        const size_t offset = samples.size();
+        samples.resize(offset + (size_t)outputFrames * AudioBuffer::Channels);
+
+        uint8_t* output = (uint8_t*)(samples.data() + offset);
+        const int converted = swr_convert(decoder.resampler.get(), &output, outputFrames, input, inputFrames);
+
+        samples.resize(offset + (size_t)std::max(0, converted) * AudioBuffer::Channels);
+    };
+
+    auto receiveFrames = [&](Decoder& decoder, AVFrame* frame) {
+        while (avcodec_receive_frame(decoder.codec.get(), frame) >= 0) {
+            if (!decoder.resampler) {
+                AVChannelLayout layout;
+
+                if (frame->ch_layout.order == AV_CHANNEL_ORDER_UNSPEC) {
+                    av_channel_layout_default(&layout, frame->ch_layout.nb_channels);
+                }
+                else {
+                    av_channel_layout_copy(&layout, &frame->ch_layout);
+                }
+
+                SwrContext* swr = nullptr;
+                const int result = swr_alloc_set_opts2(
+                    &swr,
+                    &stereo, AV_SAMPLE_FMT_FLT, (int)sampleRate,
+                    &layout, (AVSampleFormat)frame->format, frame->sample_rate,
+                    0, nullptr);
+
+                av_channel_layout_uninit(&layout);
+
+                if (result < 0 || swr_init(swr) < 0) {
+                    swr_free(&swr);
+                    throw std::runtime_error("Could not convert the audio of the file");
+                }
+
+                decoder.resampler.reset(swr);
+            }
+
+            convert(decoder, (const uint8_t**)frame->extended_data, frame->nb_samples);
+            av_frame_unref(frame);
+        }
+    };
+
+    PacketPtr packet(av_packet_alloc());
+    FramePtr frame(av_frame_alloc());
+
+    while (!cancel && av_read_frame(format.get(), packet.get()) >= 0) {
+        for (Decoder& decoder : decoders) {
+            if (packet->stream_index != decoder.streamIndex) {
+                continue;
+            }
+
+            if (progress && durationSeconds > 0.0 && packet->pts != AV_NOPTS_VALUE && &decoder == &decoders.front()) {
+                const double seconds = (double)packet->pts * av_q2d(format->streams[decoder.streamIndex]->time_base);
+                progress((float)std::clamp(seconds / durationSeconds, 0.0, 1.0));
+            }
+
+            if (avcodec_send_packet(decoder.codec.get(), packet.get()) >= 0) {
+                receiveFrames(decoder, frame.get());
+            }
+        }
+
+        av_packet_unref(packet.get());
+    }
+
+    std::vector<AudioBuffer> buffers;
+
+    for (Decoder& decoder : decoders) {
+        avcodec_send_packet(decoder.codec.get(), nullptr);
+        receiveFrames(decoder, frame.get());
+
+        if (decoder.resampler) {
+            convert(decoder, nullptr, 0);
+        }
+
+        decoder.buffer.samples.shrink_to_fit();
+        buffers.push_back(std::move(decoder.buffer));
+    }
+
+    if (progress) {
+        progress(1.f);
+    }
+
+    return buffers;
+}
+
+
+AudioBuffer mixAudio(const std::vector<AudioBuffer>& buffers)
+{
+    AudioBuffer mix;
+
+    for (const AudioBuffer& buffer : buffers) {
+        mix.sampleRate = buffer.sampleRate;
+
+        if (buffer.samples.size() > mix.samples.size()) {
+            mix.samples.resize(buffer.samples.size(), 0.f);
+        }
+
+        for (size_t i = 0; i < buffer.samples.size(); i++) {
+            mix.samples[i] += buffer.samples[i];
+        }
+    }
+
+    return mix;
+}
 }

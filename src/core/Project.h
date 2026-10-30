@@ -58,7 +58,14 @@ namespace core
         uint32_t sampleRate = 0;
         uint32_t channels = 0;
 
+        // The audio streams of the file (their titles, may be empty): a
+        // screen recording has the computer sound and the microphone.
+        std::vector<std::string> audioStreams;
+
         std::string name() const;
+
+        // "Stream 2", or its title.
+        std::string audioStreamName(int stream) const;
     };
 
 
@@ -220,6 +227,10 @@ namespace core
         // Media clips: playback speed, 2 shows the media twice as fast (its
         // sound higher). The clip shows duration * speed of the media.
         double speed = 1.0;
+
+        // Sound clips: the audio stream of the media heard, -1 for all of
+        // them together.
+        int audioStream = -1;
 
         // Text clips only.
         TextContent text;
@@ -468,6 +479,13 @@ namespace core
         // the part of the media they show: their length changes, and the
         // clips after them on their tracks follow. Speeds are clamped to
         // [MinSpeed, MaxSpeed]. False when nothing changed.
+        // A sound clip of a media with several audio streams: one linked clip
+        // per stream, the others on audio tracks free over the clip (new
+        // ones when needed); or back to a single clip of all the streams.
+        // False when nothing changed.
+        bool unfoldAudioStreams(Id clipId);
+        bool foldAudioStreams(Id clipId);
+
         static constexpr double MinSpeed = 0.1;
         static constexpr double MaxSpeed = 16.0;
         bool setClipSpeed(Id clipId, double speed);

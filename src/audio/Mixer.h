@@ -74,7 +74,7 @@ namespace audio
     // a plugin processes one stream.
     std::shared_ptr<const MixGraph> buildMixGraph(
         const core::Project& project,
-        const std::function<std::shared_ptr<const media::AudioBuffer>(core::Id mediaId)>& audioOf,
+        const std::function<std::shared_ptr<const media::AudioBuffer>(core::Id mediaId, int stream)>& audioOf,
         const std::function<std::vector<std::shared_ptr<AudioEffect>>(core::Id owner, const std::vector<core::EffectSlot>& slots)>& effectsOf = {});
 
 

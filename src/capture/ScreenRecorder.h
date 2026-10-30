@@ -69,6 +69,13 @@ namespace capture
     // The screens, the cameras, then the windows of the other applications.
     std::vector<CaptureSource> listSources();
 
+    // Adds the audio of a file (a microphone recording) to a recording as one
+    // more audio stream, with a title: the streams are copied, not encoded
+    // again. The recording is replaced on success. False with error set
+    // otherwise, the recording then left as it was.
+    bool addAudioStream(const std::filesystem::path& recording, const std::filesystem::path& audio,
+        const std::string& title, std::string& error);
+
     // The formats a camera offers (DirectShow capabilities), the largest
     // first. Empty when unknown (other systems).
     std::vector<CameraFormat> listCameraFormats(const CaptureSource& camera);

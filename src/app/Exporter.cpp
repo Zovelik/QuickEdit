@@ -164,7 +164,7 @@ struct GpuWork
 
 
 Exporter::Exporter(ExportContext context, Project project,
-    std::map<Id, std::shared_ptr<const media::AudioBuffer>> audio,
+    std::map<std::pair<Id, int>, std::shared_ptr<const media::AudioBuffer>> audio,
     std::map<Id, std::vector<std::shared_ptr<audio::AudioEffect>>> effects,
     ExportSettings settings)
     : _context(std::move(context))
@@ -412,8 +412,8 @@ void Exporter::exportVideo()
 
     // Audio
     std::shared_ptr<const audio::MixGraph> mixGraph = audio::buildMixGraph(_project,
-        [this](Id mediaId) {
-            const auto it = _audio.find(mediaId);
+        [this](Id mediaId, int stream) {
+            const auto it = _audio.find({ mediaId, stream });
             return (it != _audio.end()) ? it->second : nullptr;
         },
         [this](Id owner, const std::vector<EffectSlot>&) {

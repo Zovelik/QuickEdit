@@ -109,21 +109,38 @@ MediaState MediaManager::state(Id id) const
 }
 
 
-std::shared_ptr<const AudioBuffer> MediaManager::audio(Id id) const
+std::shared_ptr<const AudioBuffer> MediaManager::audio(Id id, int stream) const
 {
     std::scoped_lock lock(_mutex);
     const auto it = _entries.find(id);
 
-    return (it != _entries.end()) ? it->second.audio : nullptr;
+    if (it == _entries.end()) {
+        return nullptr;
+    }
+
+    // A file of one stream: the stream is the whole sound.
+    if (stream >= 0 && stream < (int)it->second.streams.size()) {
+        return it->second.streams[(size_t)stream];
+    }
+
+    return (stream <= 0) ? it->second.audio : nullptr;
 }
 
 
-std::shared_ptr<const Waveform> MediaManager::waveform(Id id) const
+std::shared_ptr<const Waveform> MediaManager::waveform(Id id, int stream) const
 {
     std::scoped_lock lock(_mutex);
     const auto it = _entries.find(id);
 
-    return (it != _entries.end()) ? it->second.waveform : nullptr;
+    if (it == _entries.end()) {
+        return nullptr;
+    }
+
+    if (stream >= 0 && stream < (int)it->second.streamWaveforms.size()) {
+        return it->second.streamWaveforms[(size_t)stream];
+    }
+
+    return (stream <= 0) ? it->second.waveform : nullptr;
 }
 
 
@@ -135,7 +152,17 @@ bool MediaManager::applyProbeResults(Project& project) const
     for (MediaItem& item : project.media()) {
         const auto it = _entries.find(item.id);
 
-        if (it == _entries.end() || !it->second.state.probe || item.probed) {
+        if (it == _entries.end() || !it->second.state.probe) {
+            continue;
+        }
+
+        // The audio streams of the media probed before they were listed.
+        if (item.probed) {
+            if (item.audioStreams != it->second.state.probe->audioStreams) {
+                item.audioStreams = it->second.state.probe->audioStreams;
+                changed = true;
+            }
+
             continue;
         }
 
@@ -163,6 +190,7 @@ void MediaManager::applyProbe(MediaItem& item, const ProbeResult& probe)
     item.hasAudio = probe.hasAudio;
     item.sampleRate = probe.sampleRate;
     item.channels = probe.channels;
+    item.audioStreams = probe.audioStreams;
 }
 
 
@@ -205,17 +233,35 @@ void MediaManager::analyze(Id id, std::filesystem::path path, uint32_t sampleRat
         // Progress is published every percent, not on every packet.
         int lastPercent = -1;
 
-        auto buffer = std::make_shared<AudioBuffer>(decodeAudio(path, sampleRate, *cancel, [&](float progress) {
+        // Every audio stream; their sum is the sound of the media.
+        std::vector<AudioBuffer> decoded = decodeAudioStreams(path, sampleRate, *cancel, [&](float progress) {
             const int percent = (int)(progress * 100.f);
 
             if (percent != lastPercent) {
                 lastPercent = percent;
                 update(id, cancel, [&](Entry& entry) { entry.state.progress = progress; });
             }
-        }));
+        });
 
         if (*cancel) {
             return;
+        }
+
+        std::vector<std::shared_ptr<const AudioBuffer>> streams;
+        std::vector<std::shared_ptr<const Waveform>> streamWaveforms;
+        std::shared_ptr<const AudioBuffer> buffer;
+
+        if (decoded.size() == 1) {
+            buffer = std::make_shared<AudioBuffer>(std::move(decoded.front()));
+        }
+        else {
+            buffer = std::make_shared<AudioBuffer>(mixAudio(decoded));
+
+            for (AudioBuffer& stream : decoded) {
+                auto shared = std::make_shared<AudioBuffer>(std::move(stream));
+                streamWaveforms.push_back(std::make_shared<Waveform>(Waveform::build(*shared)));
+                streams.push_back(std::move(shared));
+            }
         }
 
         auto waveform = std::make_shared<Waveform>(Waveform::build(*buffer));
@@ -223,6 +269,8 @@ void MediaManager::analyze(Id id, std::filesystem::path path, uint32_t sampleRat
         update(id, cancel, [&](Entry& entry) {
             entry.audio = std::move(buffer);
             entry.waveform = std::move(waveform);
+            entry.streams = std::move(streams);
+            entry.streamWaveforms = std::move(streamWaveforms);
             entry.state.status = MediaStatus::Ready;
             entry.state.progress = 1.f;
         });

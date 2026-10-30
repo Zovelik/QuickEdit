@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <vector>
 
 
 namespace media
@@ -32,6 +33,10 @@ namespace media
 
         std::string videoCodec;
         std::string audioCodec;
+
+        // Every audio stream, in the order of the file: its title (or
+        // language), empty when it has none.
+        std::vector<std::string> audioStreams;
     };
 
 
@@ -52,4 +57,16 @@ namespace media
         uint32_t sampleRate,
         const std::atomic<bool>& cancel,
         const std::function<void(float)>& progress = {});
+
+    // Decodes every audio stream of a file, in one reading, as decodeAudio()
+    // does for one. The buffers are in the order of the streams of the file.
+    std::vector<AudioBuffer> decodeAudioStreams(
+        const std::filesystem::path& path,
+        uint32_t sampleRate,
+        const std::atomic<bool>& cancel,
+        const std::function<void(float)>& progress = {});
+
+    // The sum of several buffers (the streams of a file played together),
+    // as long as the longest.
+    AudioBuffer mixAudio(const std::vector<AudioBuffer>& buffers);
 }

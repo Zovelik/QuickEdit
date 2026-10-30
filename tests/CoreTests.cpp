@@ -301,7 +301,7 @@ void testSequences()
     buffer->sampleRate = project.sequence().sampleRate;
     buffer->samples.assign(2 * 48000 * 2, 0.5f);
 
-    const auto graph = audio::buildMixGraph(project, [&](Id) { return buffer; });
+    const auto graph = audio::buildMixGraph(project, [&](Id, int) { return buffer; });
     bool found = false;
 
     // In a sub-track of the sound track of the video track: through the
@@ -790,6 +790,27 @@ void testSpeedAndTracks()
     CHECK(native.sequence().videoTracks[0].clips[0].blend == BlendMode::Screen);
     CHECK(native.sequence().videoTracks[0].blend == BlendMode::Multiply);
     CHECK(native.sequence().videoTracks[0].height == 4.5f);
+
+    // A file of two audio streams: one clip each, then mixed again.
+    project.findMedia(video)->audioStreams = { "Computer sound", "Microphone" };
+    const Id soundClip = sequence.soundTracks[0].clips[0].id;
+    const size_t audioClips = sequence.audioTracks[0].clips.size();
+
+    CHECK(project.unfoldAudioStreams(soundClip));
+    CHECK(project.findClip(soundClip)->audioStream == 0);
+    CHECK(sequence.audioTracks[0].clips.size() == audioClips + 1);
+    CHECK(sequence.audioTracks[0].clips.back().audioStream == 1);
+    CHECK(sequence.audioTracks[0].clips.back().linkGroup == project.findClip(soundClip)->linkGroup);
+    CHECK(!project.unfoldAudioStreams(soundClip));
+
+    Project streams;
+    streams.fromJson(project.toJson({}), {});
+    CHECK(streams.findMedia(video)->audioStreamName(1) == "Microphone");
+    CHECK(streams.findClip(soundClip)->audioStream == 0);
+
+    CHECK(project.foldAudioStreams(soundClip));
+    CHECK(project.findClip(soundClip)->audioStream == -1);
+    CHECK(sequence.audioTracks[0].clips.size() == audioClips);
 
     // Tracks: a video track goes with its sound track; one stays.
     const size_t videos = sequence.videoTracks.size();

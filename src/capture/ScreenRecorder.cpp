@@ -593,6 +593,145 @@ std::vector<CameraFormat> listCameraFormats(const CaptureSource& camera)
 }
 
 
+bool addAudioStream(const std::filesystem::path& recording, const std::filesystem::path& audio,
+    const std::string& title, std::string& error)
+{
+    const std::u8string recordingName = recording.u8string();
+    const std::u8string audioName = audio.u8string();
+    const std::filesystem::path merged = recording.parent_path() / (recording.stem().u8string() + u8" (merging).mkv");
+    const std::u8string mergedName = merged.u8string();
+
+    AVFormatContext* inputs[2] = {};
+    AVFormatContext* output = nullptr;
+    std::vector<int> streamMaps[2];
+    int result = 0;
+
+    auto cleanup = [&]() {
+        for (AVFormatContext*& input : inputs) avformat_close_input(&input);
+
+        if (output) {
+            if (!(output->oformat->flags & AVFMT_NOFILE)) avio_closep(&output->pb);
+            avformat_free_context(output);
+            output = nullptr;
+        }
+    };
+
+    auto fail = [&](const std::string& message) {
+        error = message;
+        cleanup();
+        std::error_code ec;
+        std::filesystem::remove(merged, ec);
+        return false;
+    };
+
+    const char* names[2] = { (const char*)recordingName.c_str(), (const char*)audioName.c_str() };
+
+    for (int i = 0; i < 2; i++) {
+        if ((result = avformat_open_input(&inputs[i], names[i], nullptr, nullptr)) < 0 ||
+            (result = avformat_find_stream_info(inputs[i], nullptr)) < 0) {
+            return fail("Could not read " + std::string(names[i]) + ": " + averror(result));
+        }
+    }
+
+    if ((result = avformat_alloc_output_context2(&output, nullptr, "matroska", (const char*)mergedName.c_str())) < 0) {
+        return fail("Could not create the file: " + averror(result));
+    }
+
+    // Every stream of the recording, then the audio of the other file.
+    for (int i = 0; i < 2; i++) {
+        for (unsigned int s = 0; s < inputs[i]->nb_streams; s++) {
+            const AVStream* in = inputs[i]->streams[s];
+            const bool copied = (i == 0) || in->codecpar->codec_type == AVMEDIA_TYPE_AUDIO;
+            streamMaps[i].push_back(copied ? (int)output->nb_streams : -1);
+
+            if (!copied) {
+                continue;
+            }
+
+            AVStream* out = avformat_new_stream(output, nullptr);
+            avcodec_parameters_copy(out->codecpar, in->codecpar);
+            out->codecpar->codec_tag = 0;
+            out->time_base = in->time_base;
+            av_dict_copy(&out->metadata, in->metadata, 0);
+
+            if (i == 1) {
+                av_dict_set(&out->metadata, "title", title.c_str(), 0);
+            }
+        }
+    }
+
+    if ((result = avio_open(&output->pb, (const char*)mergedName.c_str(), AVIO_FLAG_WRITE)) < 0 ||
+        (result = avformat_write_header(output, nullptr)) < 0) {
+        return fail("Could not write the file: " + averror(result));
+    }
+
+    // The packets of both files, by time.
+    AVPacket* packets[2] = { av_packet_alloc(), av_packet_alloc() };
+    bool pending[2] = {};
+    bool ended[2] = {};
+
+    auto next = [&](int i) {
+        while (!ended[i] && !pending[i]) {
+            if (av_read_frame(inputs[i], packets[i]) < 0) {
+                ended[i] = true;
+            }
+            else if (streamMaps[i][(size_t)packets[i]->stream_index] >= 0) {
+                pending[i] = true;
+            }
+            else {
+                av_packet_unref(packets[i]);
+            }
+        }
+    };
+
+    auto timeOf = [&](int i) {
+        const AVPacket* packet = packets[i];
+        const int64_t t = (packet->dts != AV_NOPTS_VALUE) ? packet->dts : packet->pts;
+        return av_rescale_q(t == AV_NOPTS_VALUE ? 0 : t, inputs[i]->streams[packet->stream_index]->time_base, AV_TIME_BASE_Q);
+    };
+
+    while (result >= 0) {
+        next(0);
+        next(1);
+
+        if (!pending[0] && !pending[1]) {
+            break;
+        }
+
+        const int i = (!pending[1] || (pending[0] && timeOf(0) <= timeOf(1))) ? 0 : 1;
+        AVPacket* packet = packets[i];
+        const AVStream* in = inputs[i]->streams[packet->stream_index];
+
+        packet->stream_index = streamMaps[i][(size_t)packet->stream_index];
+        av_packet_rescale_ts(packet, in->time_base, output->streams[packet->stream_index]->time_base);
+        packet->pos = -1;
+
+        result = av_interleaved_write_frame(output, packet);
+        pending[i] = false;
+    }
+
+    av_packet_free(&packets[0]);
+    av_packet_free(&packets[1]);
+
+    if (result < 0 || (result = av_write_trailer(output)) < 0) {
+        return fail("Could not write the file: " + averror(result));
+    }
+
+    cleanup();
+
+    std::error_code ec;
+    std::filesystem::rename(merged, recording, ec);
+
+    if (ec) {
+        std::filesystem::remove(merged, ec);
+        error = "Could not replace the recording: " + ec.message();
+        return false;
+    }
+
+    return true;
+}
+
+
 void excludeFromCapture(bool exclude)
 {
 #ifdef _WIN32
@@ -893,6 +1032,7 @@ bool ScreenRecorder::start(const std::filesystem::path& path, const ScreenRecord
         if (codec && avcodec_open2(audio->encoder, codec, nullptr) >= 0) {
             audio->stream = avformat_new_stream(_format, nullptr);
             avcodec_parameters_from_context(audio->stream->codecpar, audio->encoder);
+            av_dict_set(&audio->stream->metadata, "title", "Computer sound", 0);
             audio->stream->time_base = audio->encoder->time_base;
             audio->fifo = av_audio_fifo_alloc(AV_SAMPLE_FMT_FLTP, 2, 8192);
             _audio = audio.release();

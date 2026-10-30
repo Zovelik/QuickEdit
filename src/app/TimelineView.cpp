@@ -928,6 +928,32 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
             result.generateSubtitles = _contextTrack;
         }
 
+        // The audio streams of a file: a clip each, or mixed again.
+        for (Id clipId : selection) {
+            const Clip* clip = project.findClip(clipId);
+            const Track* track = clip ? project.findTrackOfClip(clipId) : nullptr;
+            const MediaItem* media = clip ? project.findMedia(clip->mediaId) : nullptr;
+
+            if (!track || !media || media->audioStreams.size() < 2 ||
+                (track->type != TrackType::Sound && track->type != TrackType::Audio)) {
+                continue;
+            }
+
+            if (clip->audioStream < 0 && ImGui::MenuItem(tr(ICON_MD_UNFOLD_MORE " Show Each Audio Stream"))) {
+                project.unfoldAudioStreams(clipId);
+                result.edited = true;
+                result.label = "Show each audio stream";
+            }
+            else if (clip->audioStream >= 0 && ImGui::MenuItem(tr(ICON_MD_UNFOLD_LESS " Mix the Audio Streams"))) {
+                project.foldAudioStreams(clipId);
+                std::erase_if(selection, [&](Id id) { return project.findClip(id) == nullptr; });
+                result.edited = true;
+                result.label = "Mix the audio streams";
+            }
+
+            break;
+        }
+
         if (ImGui::MenuItem(tr(ICON_MD_VOLUME_OFF " Remove the Sound of the Video"))) {
             // The clips of the sound tracks linked with the selected videos.
             std::vector<Id> sounds;
@@ -1302,7 +1328,7 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
             }
 
             if (sound && waveformOf) {
-                if (const std::shared_ptr<const media::Waveform> waveform = waveformOf(clip.mediaId)) {
+                if (const std::shared_ptr<const media::Waveform> waveform = waveformOf(clip.mediaId, clip.audioStream)) {
                     // Below the name of the clip.
                     const ImVec2 waveMin(min.x, min.y + 1.2f * unit);
                     drawWaveform(drawList, clip, *waveform, waveMin, ImVec2(max.x, max.y - 0.15f * unit));
@@ -1336,6 +1362,14 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
                         char speed[32];
                         std::snprintf(speed, sizeof(speed), "  " ICON_MD_SPEED " %g%%", std::round(clip.speed * 1000.0) / 10.0);
                         name += speed;
+                    }
+
+                    // The audio stream heard, or how many are mixed.
+                    if (!video && clip.audioStream >= 0) {
+                        name += "  " ICON_MD_GRAPHIC_EQ " " + media->audioStreamName(clip.audioStream);
+                    }
+                    else if (!video && media->audioStreams.size() > 1) {
+                        name += "  " ICON_MD_LAYERS " " + std::to_string(media->audioStreams.size());
                     }
                 }
                 const float textX = std::max(min.x, _timelineLeft) + 0.35f * unit;

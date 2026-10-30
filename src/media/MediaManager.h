@@ -65,8 +65,10 @@ namespace media
         uint64_t revision() const { return _revision.load(); }
 
         MediaState state(core::Id id) const;
-        std::shared_ptr<const AudioBuffer> audio(core::Id id) const;
-        std::shared_ptr<const Waveform> waveform(core::Id id) const;
+        // The sound of a media: all its audio streams together (stream -1),
+        // or one of them.
+        std::shared_ptr<const AudioBuffer> audio(core::Id id, int stream = -1) const;
+        std::shared_ptr<const Waveform> waveform(core::Id id, int stream = -1) const;
 
         // Copies the probed properties into the media items of the project.
         // Returns true when anything changed. Called after each analysis and
@@ -82,8 +84,12 @@ namespace media
             std::filesystem::path path;
             uint32_t sampleRate = 0;
             MediaState state;
-            std::shared_ptr<const AudioBuffer> audio;
+            std::shared_ptr<const AudioBuffer> audio;           // All the streams
             std::shared_ptr<const Waveform> waveform;
+
+            // Each stream, when the file has several.
+            std::vector<std::shared_ptr<const AudioBuffer>> streams;
+            std::vector<std::shared_ptr<const Waveform>> streamWaveforms;
             std::shared_ptr<std::atomic<bool>> cancel;
         };
 

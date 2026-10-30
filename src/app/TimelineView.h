@@ -107,7 +107,7 @@ public:
     Result draw(core::Project& project, core::Time& playhead, std::vector<core::Id>& selection);
 
     // Waveform drawn in the audio clips of a media, nullptr when not ready.
-    std::function<std::shared_ptr<const media::Waveform>(core::Id mediaId)> waveformOf;
+    std::function<std::shared_ptr<const media::Waveform>(core::Id mediaId, int stream)> waveformOf;
 
     // Pictures drawn in the video clips of a media: an atlas of tiles
     // (Columns per row, TileWidth x TileHeight of atlasWidth x atlasHeight),
