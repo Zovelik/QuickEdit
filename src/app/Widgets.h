@@ -1,5 +1,7 @@
 #pragma once
 
+#include <app/I18n.h>
+
 #include <imgui.h>
 
 
@@ -21,7 +23,7 @@ namespace widgets
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, style.Colors[ImGuiCol_FrameBgHovered]);
         }
 
-        const bool pressed = ImGui::Button(label, size);
+        const bool pressed = ImGui::Button(tr(label), size);
         ImGui::PopStyleColor(2);
 
         return pressed && !selected;

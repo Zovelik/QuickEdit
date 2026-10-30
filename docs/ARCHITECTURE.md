@@ -133,6 +133,12 @@ Windows only for now.
 - `Inspector`, `KeyframeEditor`, `ViewerTextEditor` (text editing in the
   viewer), `SubtitleGenerator` (whisper.cpp), `EffectRack`, `Exporter`.
 - `Widgets.h`: small widgets shared by the panels.
+- `I18n`: translations of the interface. `tr()` looks the English text up in
+  the catalog of the language (`lang/<code>.json`), keeping the icons at the
+  start of a label and its ImGui ID (`##`, `###`). The windows looked up by
+  name have a stable ID (`tr("Timeline###Timeline")`). The labels of the undo
+  history are translated when shown. `tools/update_translations.py` keeps
+  the catalogs in line with the code.
 
 ### Export
 
@@ -173,9 +179,10 @@ QuickEdit project.qep [--time seconds] [--select clipId] [--edit]
 Done: editing model and timeline, Vulkan Video decoding, compositing, texts,
 keyframes and curves, transitions, VST3, export, voice-over / screen / camera
 recording, video effects, user shaders, nested sequences, subtitles with
-automatic transcription, clip speed, timeline tools, loudness normalization.
+automatic transcription, clip speed, timeline tools, loudness normalization,
+interface in English and French.
 
-Next: multilingual interface, packages (Windows installer, Linux AppImage)
+Next: packages (Windows installer, Linux AppImage)
 built by GitHub Actions, Linux check of the capture and the plugin editors,
 spectrum display of the sound.
 

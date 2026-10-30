@@ -1,4 +1,5 @@
 #include <app/TimelineView.h>
+#include <app/I18n.h>
 
 #include <fonts/IconsMaterialDesign.h>
 
@@ -530,7 +531,7 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
     }
 
     if (ImGui::BeginPopup("##gapContext")) {
-        if (ImGui::MenuItem(ICON_MD_DELETE_SWEEP " Close Gap", "Del")) {
+        if (ImGui::MenuItem(tr(ICON_MD_DELETE_SWEEP " Close Gap"), "Del")) {
             if (project.closeGap(_gap.trackId, _gap.start, _gap.end)) {
                 result.edited = true;
                 result.label = "Close gap";
@@ -569,10 +570,10 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
         const Track* track = project.findTrack(_contextTrack);
 
         if (track) {
-            ImGui::TextDisabled("Track %s", track->name.c_str());
+            ImGui::TextDisabled(tr("Track %s"), track->name.c_str());
 
             if ((track->type == TrackType::Sound || track->type == TrackType::Audio) &&
-                ImGui::MenuItem(ICON_MD_RECORD_VOICE_OVER " Generate Subtitles from this Track...")) {
+                ImGui::MenuItem(tr(ICON_MD_RECORD_VOICE_OVER " Generate Subtitles from this Track..."))) {
                 result.generateSubtitles = _contextTrack;
             }
 
@@ -580,7 +581,7 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
         }
 
         auto addItem = [&](const char* label, TrackType type) {
-            if (ImGui::MenuItem(label)) {
+            if (ImGui::MenuItem(tr(label))) {
                 result.addTrack = true;
                 result.addTrackType = type;
             }
@@ -595,9 +596,9 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
 
             // A video track goes with its sound track; one video track stays.
             const bool paired = track->type == TrackType::Video || track->type == TrackType::Sound;
-            const char* label = (track->type == TrackType::Sound) ? ICON_MD_DELETE " Delete Track (with its Video Track)"
-                : (track->type == TrackType::Video) ? ICON_MD_DELETE " Delete Track (with its Sound Track)"
-                : ICON_MD_DELETE " Delete Track";
+            const char* label = (track->type == TrackType::Sound) ? tr(ICON_MD_DELETE " Delete Track (with its Video Track)")
+                : (track->type == TrackType::Video) ? tr(ICON_MD_DELETE " Delete Track (with its Sound Track)")
+                : tr(ICON_MD_DELETE " Delete Track");
 
             if (ImGui::MenuItem(label, nullptr, false, !paired || sequence.videoTracks.size() > 1)) {
                 result.deleteTrack = _contextTrack;
@@ -815,15 +816,15 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
     // ------------------------------------------------------------------------
 
     if (ImGui::BeginPopup("##clipContext")) {
-        if (ImGui::MenuItem(ICON_MD_CONTENT_CUT " Split at Playhead", "Ctrl+K")) {
+        if (ImGui::MenuItem(tr(ICON_MD_CONTENT_CUT " Split at Playhead"), "Ctrl+K")) {
             project.splitAt(playhead, selection);
             result.edited = true;
             result.label = "Split clips";
         }
 
-        if (ImGui::BeginMenu(ICON_MD_COMPARE_ARROWS " Transition In")) {
+        if (ImGui::BeginMenu(tr(ICON_MD_COMPARE_ARROWS " Transition In"))) {
             for (int type = 0; type <= (int)TransitionType::Zoom; type++) {
-                if (ImGui::MenuItem(transitionName((TransitionType)type))) {
+                if (ImGui::MenuItem(tr(transitionName((TransitionType)type)))) {
                     for (Id clipId : selection) {
                         const Track* track = project.findTrackOfClip(clipId);
                         Clip* clip = project.findClip(clipId);
@@ -873,11 +874,11 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
             ImGui::EndMenu();
         }
 
-        if (_contextTrack != InvalidId && ImGui::MenuItem(ICON_MD_RECORD_VOICE_OVER " Generate Subtitles from this Track...")) {
+        if (_contextTrack != InvalidId && ImGui::MenuItem(tr(ICON_MD_RECORD_VOICE_OVER " Generate Subtitles from this Track..."))) {
             result.generateSubtitles = _contextTrack;
         }
 
-        if (ImGui::MenuItem(ICON_MD_VOLUME_OFF " Remove the Sound of the Video")) {
+        if (ImGui::MenuItem(tr(ICON_MD_VOLUME_OFF " Remove the Sound of the Video"))) {
             // The clips of the sound tracks linked with the selected videos.
             std::vector<Id> sounds;
 
@@ -901,7 +902,7 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
             result.label = "Remove sound";
         }
 
-        if (ImGui::MenuItem(ICON_MD_LINK_OFF " Unlink")) {
+        if (ImGui::MenuItem(tr(ICON_MD_LINK_OFF " Unlink"))) {
             for (Id clipId : selection) {
                 if (Clip* clip = project.findClip(clipId)) {
                     clip->linkGroup = InvalidId;
@@ -914,14 +915,14 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem(ICON_MD_DELETE " Delete", "Del")) {
+        if (ImGui::MenuItem(tr(ICON_MD_DELETE " Delete"), "Del")) {
             project.removeClips(selection, false);
             selection.clear();
             result.edited = true;
             result.label = "Delete clips";
         }
 
-        if (ImGui::MenuItem(ICON_MD_DELETE_SWEEP " Ripple Delete", "Shift+Del")) {
+        if (ImGui::MenuItem(tr(ICON_MD_DELETE_SWEEP " Ripple Delete"), "Shift+Del")) {
             project.rippleDelete(selection, false);
             selection.clear();
             result.edited = true;
@@ -1116,13 +1117,17 @@ bool TimelineView::drawGroupHeaders(ImDrawList* drawList, Sequence& sequence, st
             x += buttonSize + 0.2f * unit;
         }
 
-        const char* title = sound ? "Video sound" : (header.type == TrackType::Subtitle ? "Subtitles" : "Audio");
-        drawList->AddText(ImVec2(x, min.y + 0.5f * (header.height - ImGui::GetFontSize())), ImGui::GetColorU32(ImGuiCol_TextDisabled), title);
+        // Mute / unmute the whole group, at the right of the header column;
+        // the title before it, cut when too long (translations).
+        const ImVec2 mutePosition(_timelineLeft - buttonSize - 0.3f * unit, y);
+        const char* title = sound ? tr("Video sound") : (header.type == TrackType::Subtitle ? tr("Subtitles") : tr("Audio"));
 
-        // Mute / unmute the whole group, after the title.
+        drawList->PushClipRect(ImVec2(x, min.y), ImVec2(mutePosition.x - 0.2f * unit, max.y), true);
+        drawList->AddText(ImVec2(x, min.y + 0.5f * (header.height - ImGui::GetFontSize())), ImGui::GetColorU32(ImGuiCol_TextDisabled), title);
+        drawList->PopClipRect();
+
         std::vector<Track>& tracks = sequence.tracks(header.type);
         const bool allMuted = !tracks.empty() && std::all_of(tracks.begin(), tracks.end(), [](const Track& t) { return t.muted; });
-        const ImVec2 mutePosition(x + ImGui::CalcTextSize(title).x + 0.4f * unit, y);
 
         if (headerButton(drawList, mutePosition, buttonSize, allMuted ? ICON_MD_VOLUME_OFF : ICON_MD_VOLUME_UP, !allMuted, canvasHovered)) {
             for (Track& track : tracks) {
@@ -1322,7 +1327,7 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
             if (max.x - min.x > 2.f * unit) {
                 drawList->PushClipRect(min, ImVec2(max.x - 0.2f * unit, max.y), true);
                 drawList->AddText(ImVec2(std::max(min.x, _timelineLeft) + 0.35f * unit, min.y + 0.2f * unit),
-                    IM_COL32(255, 255, 255, 230), ICON_MD_FIBER_MANUAL_RECORD " Recording");
+                    IM_COL32(255, 255, 255, 230), tr(ICON_MD_FIBER_MANUAL_RECORD " Recording"));
                 drawList->PopClipRect();
             }
 

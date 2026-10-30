@@ -1,4 +1,5 @@
 #include <app/KeyframeEditor.h>
+#include <app/I18n.h>
 
 #include <fonts/IconsMaterialDesign.h>
 
@@ -20,11 +21,11 @@ constexpr ImU32 PlayheadColor = IM_COL32(255, 122, 0, 200);
 const char* easingName(Easing easing)
 {
     switch (easing) {
-        case Easing::Linear:    return "Linear";
-        case Easing::EaseIn:    return "Ease In";
-        case Easing::EaseOut:   return "Ease Out";
-        case Easing::EaseInOut: return "Ease In and Out";
-        case Easing::Hold:      return "Hold";
+        case Easing::Linear:    return tr("Linear");
+        case Easing::EaseIn:    return tr("Ease In");
+        case Easing::EaseOut:   return tr("Ease Out");
+        case Easing::EaseInOut: return tr("Ease In and Out");
+        case Easing::Hold:      return tr("Hold");
         default:                return "";
     }
 }
@@ -83,7 +84,7 @@ KeyframeEditor::Result KeyframeEditor::draw(Project& project, const std::vector<
     const Track* track = clip ? project.findTrackOfClip(clip->id) : nullptr;
 
     if (!clip || !track || track->type != TrackType::Video) {
-        ImGui::TextDisabled("Select a video, image, text or generator clip to edit the curves of its animations.");
+        ImGui::TextDisabled(tr("Select a video, image, text or generator clip to edit the curves of its animations."));
         return result;
     }
 
@@ -133,7 +134,7 @@ KeyframeEditor::Result KeyframeEditor::draw(Project& project, const std::vector<
             ImGui::PushID(property.value);
 
             const bool animated = property.value->animated();
-            const std::string label = std::string(animated ? ICON_MD_LENS " " : "    ") + property.name +
+            const std::string label = std::string(animated ? ICON_MD_LENS " " : "    ") + tr(property.name) +
                 (animated ? "  (" + std::to_string(property.value->keys.size()) + ")" : "");
 
             if (!animated) {
@@ -178,13 +179,13 @@ void KeyframeEditor::drawCurve(const Clip& clip, Property& property, const Seque
     // Tools
     ImGui::BeginGroup();
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted((property.group + " > " + property.name).c_str());
+    ImGui::TextUnformatted((tr(property.group) + " > " + tr(property.name)).c_str());
     ImGui::SameLine();
 
     const Time local = std::clamp<Time>(playhead - clip.start, 0, clip.duration);
     const bool atKey = value.keyAt(local) >= 0;
 
-    if (ImGui::SmallButton(atKey ? ICON_MD_REMOVE " Keyframe" : ICON_MD_ADD " Keyframe")) {
+    if (ImGui::SmallButton(atKey ? tr(ICON_MD_REMOVE " Keyframe") : tr(ICON_MD_ADD " Keyframe"))) {
         if (atKey) {
             value.removeKey(local);
             result.edit = "Remove keyframe";
@@ -197,15 +198,15 @@ void KeyframeEditor::drawCurve(const Clip& clip, Property& property, const Seque
         _selectedKeys.clear();
     }
 
-    ImGui::SetItemTooltip("At the playhead");
+    ImGui::SetItemTooltip(tr("At the playhead"));
     ImGui::SameLine();
 
-    if (ImGui::SmallButton(ICON_MD_FIT_SCREEN " Fit")) {
+    if (ImGui::SmallButton(tr(ICON_MD_FIT_SCREEN " Fit"))) {
         _viewStart = _viewEnd = 0;
     }
 
     ImGui::SameLine();
-    ImGui::TextDisabled("Double click: add   Drag: move (Shift: value only, Alt: time only)   Right click: easing   Del: remove");
+    ImGui::TextDisabled(tr("Double click: add   Drag: move (Shift: value only, Alt: time only)   Right click: easing   Del: remove"));
 
     // The area of the curve.
     const ImVec2 min = ImGui::GetCursorScreenPos();
@@ -422,7 +423,7 @@ void KeyframeEditor::drawCurve(const Clip& clip, Property& property, const Seque
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem(ICON_MD_DELETE " Remove", "Del")) {
+        if (ImGui::MenuItem(tr(ICON_MD_DELETE " Remove"), "Del")) {
             _selectedKeys.insert(contextKey);
             const std::vector<int> removed(_selectedKeys.rbegin(), _selectedKeys.rend());
 

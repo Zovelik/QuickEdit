@@ -1,4 +1,6 @@
 #include <app/GUI.h>
+#include <app/I18n.h>
+#include <core/Paths.h>
 #include <app/AppIcon.h>
 #include <config.h>
 
@@ -29,6 +31,41 @@ using namespace core;
 
 namespace {
 
+// Settings of the application (language...), in the settings folder.
+std::filesystem::path settingsPath()
+{
+    return configDirectory() / "settings.json";
+}
+
+
+Json loadSettings()
+{
+    std::ifstream file(settingsPath(), std::ios::binary);
+    std::stringstream text;
+    text << file.rdbuf();
+
+    try {
+        return text.str().empty() ? Json::object() : Json::parse(text.str());
+    }
+    catch (const std::exception&) {
+        return Json::object();
+    }
+}
+
+
+void saveSetting(const std::string& key, const Json& value)
+{
+    Json settings = loadSettings();
+
+    if (!settings.isObject()) {
+        settings = Json::object();
+    }
+
+    settings[key] = value;
+    std::ofstream(settingsPath(), std::ios::binary) << settings.dump();
+}
+
+
 // Flat, square toolbar button with a tooltip (also shown when disabled).
 // Stays on the same line for the next toolbar item.
 bool toolbarButton(
@@ -46,6 +83,7 @@ bool toolbarButton(
     }
 
     const bool pressed = ImGui::Button(icon, ImVec2(size, size));
+    tooltip = tr(tooltip);
 
     if (selected) {
         ImGui::PopStyleColor();
@@ -92,12 +130,12 @@ bool panelButton(const char* label, const char* tooltip, bool selected = false, 
 
     ImGui::PushStyleColor(ImGuiCol_Button, selected ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive) : ImVec4(0.f, 0.f, 0.f, 0.f));
     ImGui::BeginDisabled(!enabled);
-    const bool pressed = ImGui::Button(label, size);
+    const bool pressed = ImGui::Button(tr(label), size);
     ImGui::EndDisabled();
     ImGui::PopStyleColor();
 
     if (tooltip && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled)) {
-        ImGui::SetTooltip("%s", tooltip);
+        ImGui::SetTooltip("%s", tr(tooltip));
     }
 
     ImGui::SameLine();
@@ -206,6 +244,15 @@ GUI::GUI(const std::filesystem::path& projectPath, double startSeconds, Id selec
                 _codeFont = io.Fonts->AddFontFromFileTTF(path.string().c_str(), 0.f);
                 break;
             }
+        }
+    }
+
+    // The language chosen before, else the system's.
+    {
+        const std::string language = loadSettings()["language"].toString();
+
+        if (language.empty() || !i18n::setLanguage(language)) {
+            i18n::setLanguage(i18n::systemLanguage());
         }
     }
 
@@ -613,11 +660,11 @@ void GUI::dockLayout(ImGuiID dockSpaceId)
     const ImGuiID mediaNode = ImGui::DockBuilderSplitNode(viewerNode, ImGuiDir_Left, 0.25f, nullptr, &viewerNode);
     const ImGuiID inspectorNode = ImGui::DockBuilderSplitNode(viewerNode, ImGuiDir_Right, 0.3f, nullptr, &viewerNode);
 
-    ImGui::DockBuilderDockWindow("Media", mediaNode);
-    ImGui::DockBuilderDockWindow("Viewer", viewerNode);
-    ImGui::DockBuilderDockWindow("Inspector", inspectorNode);
-    ImGui::DockBuilderDockWindow("Timeline", timelineNode);
-    ImGui::DockBuilderDockWindow("Keyframes", timelineNode);
+    ImGui::DockBuilderDockWindow("###Media", mediaNode);
+    ImGui::DockBuilderDockWindow("###Viewer", viewerNode);
+    ImGui::DockBuilderDockWindow("###Inspector", inspectorNode);
+    ImGui::DockBuilderDockWindow("###Timeline", timelineNode);
+    ImGui::DockBuilderDockWindow("###Keyframes", timelineNode);
     ImGui::DockBuilderFinish(dockSpaceId);
 }
 
@@ -699,53 +746,53 @@ void GUI::menuBar()
         const float menusMinX = ImGui::GetCursorScreenPos().x;
         bool menuOpen = false;
 
-        if (beginBarMenu("File")) {
+        if (beginBarMenu(tr("File"))) {
             menuOpen = true;
 
-            if (ImGui::MenuItem(ICON_MD_NOTE_ADD    " New Project",        "Ctrl+N"))       { _requestedAction = PendingAction::NewProject; }
-            if (ImGui::MenuItem(ICON_MD_FOLDER_OPEN " Open Project...",    "Ctrl+O"))       { requestOpenFile(); }
-            if (ImGui::MenuItem(ICON_MD_SAVE        " Save Project",       "Ctrl+S"))       { requestSaveFile(); }
-            if (ImGui::MenuItem(ICON_MD_SAVE_AS     " Save Project As...", "Ctrl+Shift+S")) { requestSaveAsFile(); }
+            if (ImGui::MenuItem(tr(ICON_MD_NOTE_ADD    " New Project"),        "Ctrl+N"))       { _requestedAction = PendingAction::NewProject; }
+            if (ImGui::MenuItem(tr(ICON_MD_FOLDER_OPEN " Open Project..."),    "Ctrl+O"))       { requestOpenFile(); }
+            if (ImGui::MenuItem(tr(ICON_MD_SAVE        " Save Project"),       "Ctrl+S"))       { requestSaveFile(); }
+            if (ImGui::MenuItem(tr(ICON_MD_SAVE_AS     " Save Project As..."), "Ctrl+Shift+S")) { requestSaveAsFile(); }
             ImGui::Separator();
-            if (ImGui::MenuItem(ICON_MD_UPLOAD_FILE " Import Media...",    "Ctrl+I"))       { requestImportMedia(); }
-            if (ImGui::MenuItem(ICON_MD_MOVIE_CREATION " Export Video...", "Ctrl+E"))       { _requestExportPopup = true; }
+            if (ImGui::MenuItem(tr(ICON_MD_UPLOAD_FILE " Import Media..."),    "Ctrl+I"))       { requestImportMedia(); }
+            if (ImGui::MenuItem(tr(ICON_MD_MOVIE_CREATION " Export Video..."), "Ctrl+E"))       { _requestExportPopup = true; }
             ImGui::Separator();
 
-            if (ImGui::MenuItem(ICON_MD_SUBTITLES " Import Subtitles (.srt)...")) {
+            if (ImGui::MenuItem(tr(ICON_MD_SUBTITLES " Import Subtitles (.srt)..."))) {
                 _subtitleDialogSaves = false;
                 SDL_ShowOpenFileDialog(GUI::onSubtitleFile, this, window(), subtitleFilters, SDL_arraysize(subtitleFilters), nullptr, false);
             }
 
-            if (ImGui::MenuItem(ICON_MD_SUBTITLES " Export Subtitles (.srt)...", nullptr, false, !subtitleCues(_project.sequence()).empty())) {
+            if (ImGui::MenuItem(tr(ICON_MD_SUBTITLES " Export Subtitles (.srt)..."), nullptr, false, !subtitleCues(_project.sequence()).empty())) {
                 _subtitleDialogSaves = true;
                 SDL_ShowSaveFileDialog(GUI::onSubtitleFile, this, window(), subtitleFilters, SDL_arraysize(subtitleFilters), nullptr);
             }
             ImGui::Separator();
-            if (ImGui::MenuItem(ICON_MD_EXIT_TO_APP " Exit",               "Alt+F4"))       { quit(); }
+            if (ImGui::MenuItem(tr(ICON_MD_EXIT_TO_APP " Exit"),               "Alt+F4"))       { quit(); }
             ImGui::EndMenu();
         }
 
-        if (beginBarMenu("Edit")) {
+        if (beginBarMenu(tr("Edit"))) {
             menuOpen = true;
 
-            const std::string undoLabel = std::string(ICON_MD_UNDO " Undo ") + _history.undoLabel();
-            const std::string redoLabel = std::string(ICON_MD_REDO " Redo ") + _history.redoLabel();
+            const std::string undoLabel = std::string(tr(ICON_MD_UNDO " Undo ")) + tr(_history.undoLabel());
+            const std::string redoLabel = std::string(tr(ICON_MD_REDO " Redo ")) + tr(_history.redoLabel());
 
             if (ImGui::MenuItem(undoLabel.c_str(), "Ctrl+Z", nullptr, _history.canUndo())) { undo(); }
             if (ImGui::MenuItem(redoLabel.c_str(), "Ctrl+Y", nullptr, _history.canRedo())) { redo(); }
             ImGui::Separator();
-            if (ImGui::MenuItem(ICON_MD_CONTENT_CUT " Split at Playhead", "Ctrl+K"))                    { splitAtPlayhead(); }
-            if (ImGui::MenuItem(ICON_MD_PAUSE_CIRCLE " Freeze Frame",   "Shift+F"))                   { freezeFrame(); }
-            if (ImGui::MenuItem(ICON_MD_COMPARE_ARROWS " Add / Remove Transition", "Ctrl+D"))          { toggleTransition(); }
-            if (ImGui::MenuItem(ICON_MD_DELETE       " Delete",           "Del",       nullptr, hasSelection)) { deleteSelection(false); }
-            if (ImGui::MenuItem(ICON_MD_DELETE_SWEEP " Ripple Delete",    "Shift+Del", nullptr, hasSelection)) { deleteSelection(true); }
+            if (ImGui::MenuItem(tr(ICON_MD_CONTENT_CUT " Split at Playhead"), "Ctrl+K"))                    { splitAtPlayhead(); }
+            if (ImGui::MenuItem(tr(ICON_MD_PAUSE_CIRCLE " Freeze Frame"),   "Shift+F"))                   { freezeFrame(); }
+            if (ImGui::MenuItem(tr(ICON_MD_COMPARE_ARROWS " Add / Remove Transition"), "Ctrl+D"))          { toggleTransition(); }
+            if (ImGui::MenuItem(tr(ICON_MD_DELETE       " Delete"),           "Del",       nullptr, hasSelection)) { deleteSelection(false); }
+            if (ImGui::MenuItem(tr(ICON_MD_DELETE_SWEEP " Ripple Delete"),    "Shift+Del", nullptr, hasSelection)) { deleteSelection(true); }
             ImGui::Separator();
 
-            if (ImGui::MenuItem(ICON_MD_TEXT_FIELDS " Add Text", "T")) { addText(); }
-            if (ImGui::MenuItem(ICON_MD_SUBTITLES " Add Subtitle", "Shift+T")) { addSubtitle(); }
-            if (ImGui::MenuItem(ICON_MD_RECORD_VOICE_OVER " Generate Subtitles...")) { _showSubtitleGenerator = true; }
+            if (ImGui::MenuItem(tr(ICON_MD_TEXT_FIELDS " Add Text"), "T")) { addText(); }
+            if (ImGui::MenuItem(tr(ICON_MD_SUBTITLES " Add Subtitle"), "Shift+T")) { addSubtitle(); }
+            if (ImGui::MenuItem(tr(ICON_MD_RECORD_VOICE_OVER " Generate Subtitles..."))) { _showSubtitleGenerator = true; }
 
-            if (ImGui::BeginMenu(ICON_MD_AUTO_AWESOME " Add Generator")) {
+            if (ImGui::BeginMenu(tr(ICON_MD_AUTO_AWESOME " Add Generator"))) {
                 for (const ShaderDef& shader : builtinShaders()) {
                     if (shader.kind == ShaderKind::Generator && ImGui::MenuItem(shader.name.c_str())) addGenerator(shader);
                 }
@@ -760,13 +807,13 @@ void GUI::menuBar()
 
                 ImGui::Separator();
 
-                if (ImGui::MenuItem(ICON_MD_ADD " New Generator Shader...")) {
+                if (ImGui::MenuItem(tr(ICON_MD_ADD " New Generator Shader..."))) {
                     if (const ShaderDef* shader = newShader(ShaderKind::Generator)) addGenerator(*shader);
                 }
 
-                if (ImGui::MenuItem(ICON_MD_ADD " New Transition Shader...")) { newShader(ShaderKind::Transition); }
+                if (ImGui::MenuItem(tr(ICON_MD_ADD " New Transition Shader..."))) { newShader(ShaderKind::Transition); }
 
-                if (ImGui::BeginMenu(ICON_MD_EDIT " Edit Shader", !_userShaders.empty())) {
+                if (ImGui::BeginMenu(tr(ICON_MD_EDIT " Edit Shader"), !_userShaders.empty())) {
                     for (const ShaderDef& shader : _userShaders) {
                         if (ImGui::MenuItem(shader.name.c_str(), shader.kind == ShaderKind::Generator ? "Generator" : "Transition")) {
                             editShader(shader.id);
@@ -776,26 +823,26 @@ void GUI::menuBar()
                     ImGui::EndMenu();
                 }
 
-                if (ImGui::MenuItem(ICON_MD_FOLDER_OPEN " Open Shaders Folder")) { openShaderFolder(); }
-                if (ImGui::MenuItem(ICON_MD_REFRESH " Reload Shaders")) { reloadShaders(true); }
+                if (ImGui::MenuItem(tr(ICON_MD_FOLDER_OPEN " Open Shaders Folder"))) { openShaderFolder(); }
+                if (ImGui::MenuItem(tr(ICON_MD_REFRESH " Reload Shaders"))) { reloadShaders(true); }
                 ImGui::EndMenu();
             }
-            ImGui::MenuItem(ICON_MD_MIC " Record Voice-Over...", "R", &_showRecorder);
-            ImGui::MenuItem(ICON_MD_SCREEN_SHARE " Record Screen...", "Shift+R", &_showScreenRecorder);
+            ImGui::MenuItem(tr(ICON_MD_MIC " Record Voice-Over..."), "R", &_showRecorder);
+            ImGui::MenuItem(tr(ICON_MD_SCREEN_SHARE " Record Screen..."), "Shift+R", &_showScreenRecorder);
             ImGui::Separator();
-            if (ImGui::MenuItem(ICON_MD_LIBRARY_ADD " Add Video Track")) { addTrack(TrackType::Video); }
-            if (ImGui::MenuItem(ICON_MD_PLAYLIST_ADD " Add Audio Track")) { addTrack(TrackType::Audio); }
-            if (ImGui::MenuItem(ICON_MD_SUBTITLES " Add Subtitle Track")) { addTrack(TrackType::Subtitle); }
+            if (ImGui::MenuItem(tr(ICON_MD_LIBRARY_ADD " Add Video Track"))) { addTrack(TrackType::Video); }
+            if (ImGui::MenuItem(tr(ICON_MD_PLAYLIST_ADD " Add Audio Track"))) { addTrack(TrackType::Audio); }
+            if (ImGui::MenuItem(tr(ICON_MD_SUBTITLES " Add Subtitle Track"))) { addTrack(TrackType::Subtitle); }
             ImGui::Separator();
-            if (ImGui::MenuItem(ICON_MD_VIDEO_SETTINGS " Project Properties...")) { _requestProjectProperties = true; }
+            if (ImGui::MenuItem(tr(ICON_MD_VIDEO_SETTINGS " Project Properties..."))) { _requestProjectProperties = true; }
             ImGui::Separator();
 
             bool snapping = _timeline.snapping();
-            if (ImGui::MenuItem(ICON_MD_VERTICAL_ALIGN_CENTER " Snapping", "N", &snapping)) { _timeline.setSnapping(snapping); }
+            if (ImGui::MenuItem(tr(ICON_MD_VERTICAL_ALIGN_CENTER " Snapping"), "N", &snapping)) { _timeline.setSnapping(snapping); }
 
-            if (ImGui::BeginMenu(ICON_MD_HANDYMAN " Timeline Tool")) {
+            if (ImGui::BeginMenu(tr(ICON_MD_HANDYMAN " Timeline Tool"))) {
                 for (const TimelineToolInfo& info : timelineTools()) {
-                    if (ImGui::MenuItem(info.label, info.shortcut, _timeline.tool() == info.tool)) { _timeline.setTool(info.tool); }
+                    if (ImGui::MenuItem(tr(info.label), info.shortcut, _timeline.tool() == info.tool)) { _timeline.setTool(info.tool); }
                 }
 
                 ImGui::EndMenu();
@@ -804,28 +851,41 @@ void GUI::menuBar()
             ImGui::EndMenu();
         }
 
-        if (beginBarMenu("Playback")) {
+        if (beginBarMenu(tr("Playback"))) {
             menuOpen = true;
 
-            if (ImGui::MenuItem(_playing ? ICON_MD_PAUSE " Pause" : ICON_MD_PLAY_ARROW " Play", "Space")) { togglePlayback(); }
+            if (ImGui::MenuItem(_playing ? tr(ICON_MD_PAUSE " Pause") : tr(ICON_MD_PLAY_ARROW " Play"), tr("Space"))) { togglePlayback(); }
             ImGui::Separator();
-            if (ImGui::MenuItem(ICON_MD_SKIP_PREVIOUS   " Go to Start",    "Home"))  { seek(0); }
-            if (ImGui::MenuItem(ICON_MD_SKIP_NEXT       " Go to End",      "End"))   { seek(_project.sequence().duration()); }
-            if (ImGui::MenuItem(ICON_MD_NAVIGATE_BEFORE " Previous Frame", "Left"))  { stepFrames(-1); }
-            if (ImGui::MenuItem(ICON_MD_NAVIGATE_NEXT   " Next Frame",     "Right")) { stepFrames(1); }
+            if (ImGui::MenuItem(tr(ICON_MD_SKIP_PREVIOUS   " Go to Start"),    "Home"))  { seek(0); }
+            if (ImGui::MenuItem(tr(ICON_MD_SKIP_NEXT       " Go to End"),      "End"))   { seek(_project.sequence().duration()); }
+            if (ImGui::MenuItem(tr(ICON_MD_NAVIGATE_BEFORE " Previous Frame"), "Left"))  { stepFrames(-1); }
+            if (ImGui::MenuItem(tr(ICON_MD_NAVIGATE_NEXT   " Next Frame"),     "Right")) { stepFrames(1); }
             ImGui::EndMenu();
         }
 
-        if (beginBarMenu("View")) {
+        if (beginBarMenu(tr("View"))) {
             menuOpen = true;
 
-            if (ImGui::MenuItem(ICON_MD_ZOOM_IN    " Zoom In Timeline",  "Ctrl++")) { _timeline.setZoom(_timeline.zoom() * 1.5f); }
-            if (ImGui::MenuItem(ICON_MD_ZOOM_OUT   " Zoom Out Timeline", "Ctrl+-")) { _timeline.setZoom(_timeline.zoom() / 1.5f); }
-            if (ImGui::MenuItem(ICON_MD_FIT_SCREEN " Fit Sequence",      "Ctrl+0")) { _timeline.requestZoomToFit(); }
+            if (ImGui::MenuItem(tr(ICON_MD_ZOOM_IN    " Zoom In Timeline"),  "Ctrl++")) { _timeline.setZoom(_timeline.zoom() * 1.5f); }
+            if (ImGui::MenuItem(tr(ICON_MD_ZOOM_OUT   " Zoom Out Timeline"), "Ctrl+-")) { _timeline.setZoom(_timeline.zoom() / 1.5f); }
+            if (ImGui::MenuItem(tr(ICON_MD_FIT_SCREEN " Fit Sequence"),      "Ctrl+0")) { _timeline.requestZoomToFit(); }
             ImGui::Separator();
-            if (ImGui::MenuItem(ICON_MD_TIMELINE " Keyframes")) { ImGui::SetWindowFocus("Keyframes"); }
+            if (ImGui::MenuItem(tr(ICON_MD_TIMELINE " Keyframes"))) { ImGui::SetWindowFocus("###Keyframes"); }
             ImGui::Separator();
-            if (ImGui::MenuItem("Reset Layout")) { _dockLayoutInitialized = false; ImGui::DockBuilderRemoveNode(ImGui::GetID("MainDockSpace")); }
+
+            if (ImGui::BeginMenu(tr(ICON_MD_LANGUAGE " Language"))) {
+                for (const i18n::Language& language : i18n::languages()) {
+                    if (ImGui::MenuItem(language.name.c_str(), nullptr, language.code == i18n::language()) &&
+                        i18n::setLanguage(language.code)) {
+                        saveSetting("language", language.code);
+                    }
+                }
+
+                ImGui::EndMenu();
+            }
+
+            ImGui::Separator();
+            if (ImGui::MenuItem(tr("Reset Layout"))) { _dockLayoutInitialized = false; ImGui::DockBuilderRemoveNode(ImGui::GetID("MainDockSpace")); }
             ImGui::EndMenu();
         }
 
@@ -1093,12 +1153,12 @@ void GUI::shortcuts()
 
 void GUI::mediaPanel()
 {
-    if (!ImGui::Begin("Media")) {
+    if (!ImGui::Begin(tr("Media###Media"))) {
         ImGui::End();
         return;
     }
 
-    if (ImGui::Button(ICON_MD_UPLOAD_FILE " Import...")) {
+    if (ImGui::Button(tr(ICON_MD_UPLOAD_FILE " Import..."))) {
         requestImportMedia();
     }
 
@@ -1114,9 +1174,9 @@ void GUI::mediaPanel()
         newFolder = true;
     }
 
-    ImGui::SetItemTooltip("New folder (in the selected one)");
+    ImGui::SetItemTooltip(tr("New folder (in the selected one)"));
     ImGui::SameLine();
-    ImGui::TextDisabled("%zu item(s)", _project.media().size());
+    ImGui::TextDisabled(tr("%zu item(s)"), _project.media().size());
 
     const ImGuiTableFlags flags =
         ImGuiTableFlags_RowBg |
@@ -1148,8 +1208,8 @@ void GUI::mediaPanel()
 
     if (ImGui::BeginTable("##media", 2, flags)) {
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Duration", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("00:00:00:00").x);
+        ImGui::TableSetupColumn(tr("Name"), ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(tr("Duration"), ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("00:00:00:00").x);
         ImGui::TableHeadersRow();
 
         // A media: its row.
@@ -1218,21 +1278,21 @@ void GUI::mediaPanel()
                 ImGui::TextUnformatted(pathToUtf8(item.path).c_str());
 
                 if (missing) {
-                    ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " File not found");
+                    ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), tr(ICON_MD_WARNING " File not found"));
                 }
                 else if (state.status == media::MediaStatus::Error) {
                     ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " %s", state.error.c_str());
                 }
                 else if (!item.probed) {
-                    ImGui::TextDisabled("Analyzing...");
+                    ImGui::TextDisabled(tr("Analyzing..."));
                 }
                 else {
                     if (item.type != MediaType::Audio) {
-                        ImGui::Text("%u x %u, %.3f fps", item.width, item.height, item.frameRate.toDouble());
+                        ImGui::Text(tr("%u x %u, %.3f fps"), item.width, item.height, item.frameRate.toDouble());
                     }
 
                     if (item.hasAudio) {
-                        ImGui::Text("%u Hz, %u channel(s)", item.sampleRate, item.channels);
+                        ImGui::Text(tr("%u Hz, %u channel(s)"), item.sampleRate, item.channels);
                     }
 
                     if (state.probe) {
@@ -1254,8 +1314,8 @@ void GUI::mediaPanel()
             }
 
             if (ImGui::BeginPopupContextItem()) {
-                if (ImGui::BeginMenu(ICON_MD_DRIVE_FILE_MOVE " Move to")) {
-                    if (ImGui::MenuItem("(No folder)", nullptr, item.folder.empty())) {
+                if (ImGui::BeginMenu(tr(ICON_MD_DRIVE_FILE_MOVE " Move to"))) {
+                    if (ImGui::MenuItem(tr("(No folder)"), nullptr, item.folder.empty())) {
                         moveSelection(item.id, std::string());
                     }
 
@@ -1268,7 +1328,7 @@ void GUI::mediaPanel()
                     ImGui::EndMenu();
                 }
 
-                if (ImGui::MenuItem(ICON_MD_DELETE " Remove from Project")) {
+                if (ImGui::MenuItem(tr(ICON_MD_DELETE " Remove from Project"))) {
                     removeMedia = mediaSelected(item.id) ? _mediaSelection : std::vector<Id>{ item.id };
                 }
 
@@ -1278,7 +1338,7 @@ void GUI::mediaPanel()
             ImGui::TableNextColumn();
 
             if (state.status == media::MediaStatus::Error || missing) {
-                ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " Error");
+                ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), tr(ICON_MD_WARNING " Error"));
             }
             else if (!item.probed) {
                 ImGui::TextDisabled("...");
@@ -1334,17 +1394,17 @@ void GUI::mediaPanel()
                 }
 
                 if (ImGui::BeginPopupContextItem()) {
-                    if (ImGui::MenuItem(ICON_MD_CREATE_NEW_FOLDER " New Folder Inside")) {
+                    if (ImGui::MenuItem(tr(ICON_MD_CREATE_NEW_FOLDER " New Folder Inside"))) {
                         newFolderIn = child;
                     }
 
-                    if (ImGui::MenuItem(ICON_MD_EDIT " Rename")) {
+                    if (ImGui::MenuItem(tr(ICON_MD_EDIT " Rename"))) {
                         _renamingFolder = child;
                         _folderName = name;
                         _focusFolderName = true;
                     }
 
-                    if (ImGui::MenuItem(ICON_MD_DELETE " Delete Folder", "Del")) {
+                    if (ImGui::MenuItem(tr(ICON_MD_DELETE " Delete Folder"), "Del")) {
                         removeFolder = child;
                     }
 
@@ -1404,14 +1464,14 @@ void GUI::mediaPanel()
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
 
-            if (ImGui::TreeNodeEx("##sequences", ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_DefaultOpen, "%s Sequences", ICON_MD_VIDEO_LIBRARY)) {
+            if (ImGui::TreeNodeEx("##sequences", ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_DefaultOpen, tr("%s Sequences"), ICON_MD_VIDEO_LIBRARY)) {
                 for (const Sequence* sequence : _project.sequences()) {
                     ImGui::PushID((int)sequence->id);
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
 
                     const bool current = sequence->id == _project.sequence().id;
-                    ImGui::Selectable((std::string(ICON_MD_MOVIE_FILTER " ") + sequence->name + (current ? "  (shown)" : "")).c_str(), false, ImGuiSelectableFlags_SpanAllColumns);
+                    ImGui::Selectable((std::string(ICON_MD_MOVIE_FILTER " ") + sequence->name + (current ? tr("  (shown)") : "")).c_str(), false, ImGuiSelectableFlags_SpanAllColumns);
 
                     if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                         showSequence(sequence->id);
@@ -1544,13 +1604,13 @@ void GUI::mediaPanel()
         }
         else {
             _confirmRemoveMedia = removeMedia;
-            ImGui::OpenPopup("Remove Media");
+            ImGui::OpenPopup(tr("Remove Media"));
         }
     }
 
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
-    if (ImGui::BeginPopupModal("Remove Media", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::BeginPopupModal(tr("Remove Media"), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         size_t count = 0;
 
         for (Id id : _confirmRemoveMedia) {
@@ -1564,17 +1624,17 @@ void GUI::mediaPanel()
         }
         else {
             if (item) {
-                ImGui::Text("\"%s\" is used by %zu clip%s of the timeline.", item->name().c_str(), count, count > 1 ? "s" : "");
-                ImGui::TextUnformatted("Remove it from the project, with its clips?");
+                ImGui::Text(tr("\"%s\" is used by %zu clip%s of the timeline."), item->name().c_str(), count, count > 1 ? "s" : "");
+                ImGui::TextUnformatted(tr("Remove it from the project, with its clips?"));
             }
             else {
-                ImGui::Text("These %zu media are used by %zu clip%s of the timeline.", _confirmRemoveMedia.size(), count, count > 1 ? "s" : "");
-                ImGui::TextUnformatted("Remove them from the project, with their clips?");
+                ImGui::Text(tr("These %zu media are used by %zu clip%s of the timeline."), _confirmRemoveMedia.size(), count, count > 1 ? "s" : "");
+                ImGui::TextUnformatted(tr("Remove them from the project, with their clips?"));
             }
 
             ImGui::Spacing();
 
-            if (ImGui::Button(ICON_MD_DELETE " Remove") || ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
+            if (ImGui::Button(tr(ICON_MD_DELETE " Remove")) || ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
                 ImGui::CloseCurrentPopup();
                 removeMediaAndClips(_confirmRemoveMedia);
                 _confirmRemoveMedia.clear();
@@ -1582,7 +1642,7 @@ void GUI::mediaPanel()
 
             ImGui::SameLine();
 
-            if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            if (ImGui::Button(tr("Cancel")) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
                 ImGui::CloseCurrentPopup();
                 _confirmRemoveMedia.clear();
             }
@@ -1641,7 +1701,7 @@ void GUI::removeMediaAndClips(const std::vector<Id>& mediaIds)
 void GUI::viewerPanel()
 {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    const bool open = ImGui::Begin("Viewer");
+    const bool open = ImGui::Begin(tr("Viewer###Viewer"));
     ImGui::PopStyleVar();
 
     if (!open) {
@@ -1691,7 +1751,7 @@ void GUI::viewerPanel()
 
     if (_viewerLoading && SDL_GetTicks() - _viewerLoadingSince > 400) {
         const float unit = ImGui::GetFontSize();
-        const char* label = "Loading...";
+        const char* label = tr("Loading...");
         const ImVec2 textSize = ImGui::CalcTextSize(label);
         const ImVec2 boxMin(frameMin.x + 0.6f * unit, frameMin.y + 0.6f * unit);
         const ImVec2 boxMax(boxMin.x + textSize.x + 2.6f * unit, boxMin.y + textSize.y + 0.8f * unit);
@@ -1723,23 +1783,23 @@ void GUI::viewerPanel()
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.f, 0.f, 0.f, 0.f));
 
     if (ImGui::Button(ICON_MD_SKIP_PREVIOUS, ImVec2(buttonWidth, 0)))   { seek(0); }
-    ImGui::SetItemTooltip("Go to Start (Home)");
+    ImGui::SetItemTooltip(tr("Go to Start (Home)"));
     ImGui::SameLine();
     if (ImGui::Button(ICON_MD_NAVIGATE_BEFORE, ImVec2(buttonWidth, 0))) { stepFrames(-1); }
-    ImGui::SetItemTooltip("Previous Frame (Left)");
+    ImGui::SetItemTooltip(tr("Previous Frame (Left)"));
     ImGui::SameLine();
 
     ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
     if (ImGui::Button(_playing ? ICON_MD_PAUSE : ICON_MD_PLAY_ARROW, ImVec2(buttonWidth, 0))) { togglePlayback(); }
     ImGui::PopStyleColor();
-    ImGui::SetItemTooltip(_playing ? "Pause (Space)" : "Play (Space)");
+    ImGui::SetItemTooltip(_playing ? tr("Pause (Space)") : tr("Play (Space)"));
     ImGui::SameLine();
 
     if (ImGui::Button(ICON_MD_NAVIGATE_NEXT, ImVec2(buttonWidth, 0)))   { stepFrames(1); }
-    ImGui::SetItemTooltip("Next Frame (Right)");
+    ImGui::SetItemTooltip(tr("Next Frame (Right)"));
     ImGui::SameLine();
     if (ImGui::Button(ICON_MD_SKIP_NEXT, ImVec2(buttonWidth, 0)))       { seek(sequence.duration()); }
-    ImGui::SetItemTooltip("Go to End (End)");
+    ImGui::SetItemTooltip(tr("Go to End (End)"));
 
     ImGui::PopStyleColor();
     ImGui::PopStyleVar();
@@ -1754,14 +1814,14 @@ void GUI::viewerPanel()
 
 void GUI::inspectorPanel()
 {
-    if (ImGui::Begin("Inspector") && ImGui::BeginTabBar("##inspectorTabs")) {
-        if (ImGui::BeginTabItem(ICON_MD_EDIT " Clip")) {
+    if (ImGui::Begin(tr("Inspector###Inspector")) && ImGui::BeginTabBar("##inspectorTabs")) {
+        if (ImGui::BeginTabItem(tr(ICON_MD_EDIT " Clip"))) {
             clipTab();
             ImGui::EndTabItem();
         }
 
         // Selected from the effects button of the tracks.
-        if (ImGui::BeginTabItem(ICON_MD_TUNE " Effects", nullptr, std::exchange(_showEffectsTab, false) ? ImGuiTabItemFlags_SetSelected : 0)) {
+        if (ImGui::BeginTabItem(tr(ICON_MD_TUNE " Effects"), nullptr, std::exchange(_showEffectsTab, false) ? ImGuiTabItemFlags_SetSelected : 0)) {
             effectsTab();
             ImGui::EndTabItem();
         }
@@ -2267,12 +2327,12 @@ void GUI::addText()
     Id clipId = InvalidId;
 
     for (int i = (int)sequence.videoTracks.size() - 1; i >= 0 && clipId == InvalidId; i--) {
-        clipId = _project.addTextClip(sequence.videoTracks[i].id, start, duration, "Your text");
+        clipId = _project.addTextClip(sequence.videoTracks[i].id, start, duration, tr("Your text"));
     }
 
     if (clipId == InvalidId) {
         addTrack(TrackType::Video);
-        clipId = _project.addTextClip(sequence.videoTracks.back().id, start, duration, "Your text");
+        clipId = _project.addTextClip(sequence.videoTracks.back().id, start, duration, tr("Your text"));
     }
 
     if (clipId != InvalidId) {
@@ -2493,7 +2553,7 @@ void GUI::checkEditedShader()
     shader.name = std::string(stem.begin(), stem.end());
 
     if (!parseShader(_shaderEditorText, shader)) {
-        _shaderEditorError = "Define vec4 generate(vec2 uv, float time) for a generator, or vec4 transition(vec2 uv) for a transition.";
+        _shaderEditorError = tr("Define vec4 generate(vec2 uv, float time) for a generator, or vec4 transition(vec2 uv) for a transition.");
     }
     else {
         _shaderEditorError = Compositor::checkShader(shader);
@@ -2673,7 +2733,7 @@ void GUI::shaderEditorWindow()
     }
 
     if (_shaderEditorError.empty()) {
-        ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.f), ICON_MD_CHECK " Compiles.%s", modified ? " Ctrl + S to use it." : "");
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.f), tr(ICON_MD_CHECK " Compiles.%s"), modified ? " Ctrl + S to use it." : "");
     }
     else {
         ImGui::BeginChild("##errors", ImVec2(-FLT_MIN, -FLT_MIN));
@@ -2722,12 +2782,12 @@ void GUI::addSubtitle()
     Id clipId = InvalidId;
 
     for (size_t i = 0; i < sequence.subtitleTracks.size() && clipId == InvalidId; i++) {
-        clipId = _project.addTextClip(sequence.subtitleTracks[i].id, start, duration, "Subtitle");
+        clipId = _project.addTextClip(sequence.subtitleTracks[i].id, start, duration, tr("Subtitle"));
     }
 
     if (clipId == InvalidId) {
         sequence.addTrack(TrackType::Subtitle, _project.newId(), InvalidId);
-        clipId = _project.addTextClip(sequence.subtitleTracks.back().id, start, duration, "Subtitle");
+        clipId = _project.addTextClip(sequence.subtitleTracks.back().id, start, duration, tr("Subtitle"));
     }
 
     if (clipId != InvalidId) {
@@ -2832,7 +2892,7 @@ void GUI::subtitleGeneratorWindow()
             commit("Generate subtitles");
         }
         else if (_generatorError.empty()) {
-            _generatorError = "No speech was recognized.";
+            _generatorError = tr("No speech was recognized.");
         }
     }
 
@@ -2843,13 +2903,13 @@ void GUI::subtitleGeneratorWindow()
     ImGui::SetNextWindowSize(ImVec2(30.f * ImGui::GetFontSize(), 0.f), ImGuiCond_Appearing);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
-    if (!ImGui::Begin(ICON_MD_RECORD_VOICE_OVER " Generate Subtitles###subtitleGenerator", &_showSubtitleGenerator, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
+    if (!ImGui::Begin(tr(ICON_MD_RECORD_VOICE_OVER " Generate Subtitles###subtitleGenerator"), &_showSubtitleGenerator, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
         return;
     }
 
     if (!speechRecognitionAvailable()) {
-        ImGui::TextWrapped("This build has no speech recognition: whisper.cpp was not found when it was built (see docs/ARCHITECTURE.md).");
+        ImGui::TextWrapped(tr("This build has no speech recognition: whisper.cpp was not found when it was built (see docs/ARCHITECTURE.md)."));
         ImGui::End();
         return;
     }
@@ -2863,8 +2923,8 @@ void GUI::subtitleGeneratorWindow()
         }
     }
 
-    ImGui::SeparatorText("Model");
-    ImGui::TextDisabled("The larger, the more accurate; the large ones want a GPU.");
+    ImGui::SeparatorText(tr("Model"));
+    ImGui::TextDisabled(tr("The larger, the more accurate; the large ones want a GPU."));
     ImGui::BeginDisabled(busy);
 
     // Columns: after the longest name, after the largest size.
@@ -2892,11 +2952,11 @@ void GUI::subtitleGeneratorWindow()
 
         ImGui::EndDisabled();
         ImGui::SameLine(sizeColumn);
-        ImGui::TextDisabled("%d MB", model.sizeMegabytes);
+        ImGui::TextDisabled(tr("%d MB"), model.sizeMegabytes);
         ImGui::SameLine(stateColumn);
 
         if (downloaded) {
-            ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.5f, 1.f), ICON_MD_CHECK " Ready");
+            ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.5f, 1.f), tr(ICON_MD_CHECK " Ready"));
         }
         else if (downloading) {
             ImGui::ProgressBar(_modelDownload.progress(), ImVec2(-3.f * ImGui::GetFontSize(), 0.f));
@@ -2909,7 +2969,7 @@ void GUI::subtitleGeneratorWindow()
         else {
             ImGui::BeginDisabled(_modelDownload.running());
 
-            if (ImGui::SmallButton(ICON_MD_DOWNLOAD " Download")) {
+            if (ImGui::SmallButton(tr(ICON_MD_DOWNLOAD " Download"))) {
                 _modelDownload.start(model);
             }
 
@@ -2925,7 +2985,7 @@ void GUI::subtitleGeneratorWindow()
     }
 
     // Source, language and processor
-    ImGui::SeparatorText("Speech");
+    ImGui::SeparatorText(tr("Speech"));
 
     const Track* sourceTrack = _project.findTrack(_subtitleSourceTrack);
 
@@ -2935,8 +2995,8 @@ void GUI::subtitleGeneratorWindow()
 
     ImGui::SetNextItemWidth(12.f * ImGui::GetFontSize());
 
-    if (ImGui::BeginCombo("Sound", sourceTrack ? sourceTrack->name.c_str() : "Whole sequence")) {
-        if (ImGui::Selectable("Whole sequence", !sourceTrack)) {
+    if (ImGui::BeginCombo(tr("Sound"), sourceTrack ? sourceTrack->name.c_str() : "Whole sequence")) {
+        if (ImGui::Selectable(tr("Whole sequence"), !sourceTrack)) {
             _subtitleSourceTrack = InvalidId;
         }
 
@@ -2958,7 +3018,7 @@ void GUI::subtitleGeneratorWindow()
 
     ImGui::SetNextItemWidth(12.f * ImGui::GetFontSize());
 
-    if (ImGui::BeginCombo("Language", languages[_whisperLanguage][1])) {
+    if (ImGui::BeginCombo(tr("Language"), languages[_whisperLanguage][1])) {
         for (int i = 0; i < (int)IM_ARRAYSIZE(languages); i++) {
             if (ImGui::Selectable(languages[i][1], i == _whisperLanguage)) _whisperLanguage = i;
         }
@@ -2966,8 +3026,8 @@ void GUI::subtitleGeneratorWindow()
         ImGui::EndCombo();
     }
 
-    ImGui::Checkbox("Use the GPU", &_whisperGpu);
-    ImGui::SetItemTooltip("Off: on the processor only, much slower with the large models.");
+    ImGui::Checkbox(tr("Use the GPU"), &_whisperGpu);
+    ImGui::SetItemTooltip(tr("Off: on the processor only, much slower with the large models."));
     ImGui::EndDisabled();
 
     ImGui::Spacing();
@@ -2990,7 +3050,7 @@ void GUI::subtitleGeneratorWindow()
     if (!busy) {
         ImGui::BeginDisabled(!chosen);
 
-        if (ImGui::Button(ICON_MD_AUTO_AWESOME " Generate", ImVec2(10.f * ImGui::GetFontSize(), 0.f)) || testStart) {
+        if (ImGui::Button(tr(ICON_MD_AUTO_AWESOME " Generate"), ImVec2(10.f * ImGui::GetFontSize(), 0.f)) || testStart) {
             _generatorError.clear();
             std::vector<float> samples = speechSamples(_generatorError);
 
@@ -3006,13 +3066,13 @@ void GUI::subtitleGeneratorWindow()
         ImGui::EndDisabled();
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled(chosen ? "Onto a new subtitle track." : "Download a model first.");
+        ImGui::TextDisabled(chosen ? tr("Onto a new subtitle track.") : tr("Download a model first."));
     }
     else {
-        ImGui::ProgressBar(_subtitleGenerator.progress(), ImVec2(-6.f * ImGui::GetFontSize(), 0.f), "Listening...");
+        ImGui::ProgressBar(_subtitleGenerator.progress(), ImVec2(-6.f * ImGui::GetFontSize(), 0.f), tr("Listening..."));
         ImGui::SameLine();
 
-        if (ImGui::Button("Cancel")) {
+        if (ImGui::Button(tr("Cancel"))) {
             _subtitleGenerator.cancel();
         }
     }
@@ -3036,7 +3096,7 @@ void GUI::importSubtitles(const std::filesystem::path& path)
     const std::vector<SubtitleCue> cues = parseSrt(text.str());
 
     if (cues.empty()) {
-        setErrorMessage("No subtitle could be read from " + pathToUtf8(path.filename()) + ".");
+        setErrorMessage(tr("No subtitle could be read from ") + pathToUtf8(path.filename()) + ".");
         return;
     }
 
@@ -3066,7 +3126,7 @@ bool GUI::exportSubtitles(const std::filesystem::path& path)
     file << toSrt(cues);
 
     if (!file) {
-        setErrorMessage("Could not write " + pathToUtf8(path) + ".");
+        setErrorMessage(tr("Could not write ") + pathToUtf8(path) + ".");
         return false;
     }
 
@@ -3277,14 +3337,14 @@ void GUI::recorderWindow()
     ImGui::SetNextWindowSize(ImVec2(28.f * ImGui::GetFontSize(), 0.f), ImGuiCond_Appearing);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
-    if (!ImGui::Begin(ICON_MD_MIC " Record Voice-Over###recorder", &_showRecorder, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
+    if (!ImGui::Begin(tr(ICON_MD_MIC " Record Voice-Over###recorder"), &_showRecorder, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
         return;
     }
 
     // The microphone records with the screen.
     if (_screenRecording && !_screenMicrophonePath.empty()) {
-        ImGui::TextDisabled(ICON_MD_SCREEN_SHARE " The microphone is recording with the screen.");
+        ImGui::TextDisabled(tr(ICON_MD_SCREEN_SHARE " The microphone is recording with the screen."));
         ImGui::End();
         return;
     }
@@ -3292,7 +3352,7 @@ void GUI::recorderWindow()
     const bool recording = _recorder.recording();
 
     // Input
-    std::string current = "Default input";
+    std::string current = tr("Default input");
 
     for (const audio::InputDevice& device : _inputDevices) {
         if (device.id == _inputDevice) current = device.name;
@@ -3310,7 +3370,7 @@ void GUI::recorderWindow()
             }
         };
 
-        choose(0, "Default input");
+        choose(0, tr("Default input"));
 
         for (const audio::InputDevice& device : _inputDevices) {
             choose(device.id, device.name);
@@ -3325,7 +3385,7 @@ void GUI::recorderWindow()
         _inputDevicesListed = false;
     }
 
-    ImGui::SetItemTooltip("Look for inputs again");
+    ImGui::SetItemTooltip(tr("Look for inputs again"));
     ImGui::EndDisabled();
 
     if (!_recorderError.empty()) {
@@ -3338,11 +3398,11 @@ void GUI::recorderWindow()
     ImGui::Spacing();
 
     ImGui::BeginDisabled(recording);
-    ImGui::Checkbox("Play the sequence while recording", &_playWhileRecording);
+    ImGui::Checkbox(tr("Play the sequence while recording"), &_playWhileRecording);
     ImGui::EndDisabled();
 
     if (_playWhileRecording) {
-        ImGui::TextDisabled("Use headphones, or the speakers will be recorded too.");
+        ImGui::TextDisabled(tr("Use headphones, or the speakers will be recorded too."));
     }
 
     ImGui::Spacing();
@@ -3356,7 +3416,7 @@ void GUI::recorderWindow()
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.25f, 0.22f, 1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.65f, 0.14f, 0.12f, 1.f));
 
-        if (ImGui::Button(ICON_MD_FIBER_MANUAL_RECORD " Record", ImVec2(width, 0.f))) {
+        if (ImGui::Button(tr(ICON_MD_FIBER_MANUAL_RECORD " Record"), ImVec2(width, 0.f))) {
             startRecording();
         }
 
@@ -3364,10 +3424,10 @@ void GUI::recorderWindow()
         ImGui::EndDisabled();
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("From the playhead, %s", formatTimecode(_playhead, _project.sequence().frameRate).c_str());
+        ImGui::TextDisabled(tr("From the playhead, %s"), formatTimecode(_playhead, _project.sequence().frameRate).c_str());
     }
     else {
-        if (ImGui::Button(ICON_MD_STOP " Stop", ImVec2(width, 0.f))) {
+        if (ImGui::Button(tr(ICON_MD_STOP " Stop"), ImVec2(width, 0.f))) {
             stopRecording();
         }
 
@@ -3379,13 +3439,13 @@ void GUI::recorderWindow()
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(ImVec4(0.95f, 0.3f, 0.25f, on ? 1.f : 0.25f), ICON_MD_FIBER_MANUAL_RECORD);
         ImGui::SameLine();
-        ImGui::Text("Recording  %s", formatTimecode(length, _project.sequence().frameRate).c_str());
+        ImGui::Text(tr("Recording  %s"), formatTimecode(length, _project.sequence().frameRate).c_str());
     }
 
     ImGui::Spacing();
     ImGui::PushTextWrapPos(0.f);
-    ImGui::TextDisabled("Placed on the first free audio track. Saved in %s.",
-        _projectPath.empty() ? "Documents/QuickEdit/Recordings" : "the Recordings folder next to the project");
+    ImGui::TextDisabled(tr("Placed on the first free audio track. Saved in %s."),
+        _projectPath.empty() ? tr("Documents/QuickEdit/Recordings") : tr("the Recordings folder next to the project"));
     ImGui::PopTextWrapPos();
 
     ImGui::End();
@@ -3452,16 +3512,16 @@ void GUI::levelMeter(const char* id, float peak, LevelMeter& meter)
 
     ImGui::PushID(id);
     ImGui::Dummy(ImVec2(width, height));
-    ImGui::SetItemTooltip("Aim for peaks between -12 and -6 dB.");
+    ImGui::SetItemTooltip(tr("Aim for peaks between -12 and -6 dB."));
 
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
 
     if (meter.peakDb > MinDb) {
-        ImGui::Text("%5.1f dB", meter.peakDb);
+        ImGui::Text(tr("%5.1f dB"), meter.peakDb);
     }
     else {
-        ImGui::TextDisabled(" -inf dB");
+        ImGui::TextDisabled(tr(" -inf dB"));
     }
 
     // Clipping lamp
@@ -3473,7 +3533,7 @@ void GUI::levelMeter(const char* id, float peak, LevelMeter& meter)
     drawList->AddText(ImVec2(lampMin.x + style.FramePadding.x, lampMin.y + style.FramePadding.y),
         clipping ? IM_COL32(255, 255, 255, 255) : ImGui::GetColorU32(ImGuiCol_TextDisabled), clipLabel);
     ImGui::Dummy(ImVec2(clipWidth, height));
-    ImGui::SetItemTooltip("The input saturates: lower its gain.");
+    ImGui::SetItemTooltip(tr("The input saturates: lower its gain."));
     ImGui::PopID();
 }
 
@@ -3716,7 +3776,7 @@ void GUI::screenRecorderWindow()
     ImGui::SetNextWindowSize(ImVec2(30.f * ImGui::GetFontSize(), 0.f), ImGuiCond_Appearing);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
-    if (!ImGui::Begin(ICON_MD_SCREEN_SHARE " Record Screen###screenRecorder", &_showScreenRecorder, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
+    if (!ImGui::Begin(tr(ICON_MD_SCREEN_SHARE " Record Screen###screenRecorder"), &_showScreenRecorder, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
         return;
     }
@@ -3736,10 +3796,10 @@ void GUI::screenRecorderWindow()
 
     const std::string preview = _captureSource.handle
         ? std::string(sourceIcon(_captureSource)) + _captureSource.name
-        : "Choose a screen, a camera or a window...";
+        : tr("Choose a screen, a camera or a window...");
 
     if (ImGui::BeginCombo("##source", preview.c_str(), ImGuiComboFlags_HeightLarge)) {
-        const char* titles[] = { "Screens", "Windows", "Cameras" };
+        const char* titles[] = { tr("Screens"), tr("Windows"), tr("Cameras") };
         int group = -1;
 
         for (const capture::CaptureSource& source : _captureSources) {
@@ -3770,7 +3830,7 @@ void GUI::screenRecorderWindow()
         _captureSourcesListed = false;
     }
 
-    ImGui::SetItemTooltip("Look for screens and windows again");
+    ImGui::SetItemTooltip(tr("Look for screens and windows again"));
 
     if (isCamera) {
         cameraFormatOptions();
@@ -3784,41 +3844,41 @@ void GUI::screenRecorderWindow()
         // pictures fall on its frames.
         const Rational& sequenceRate = _project.sequence().frameRate;
         char sequenceLabel[48];
-        std::snprintf(sequenceLabel, sizeof(sequenceLabel), "Sequence (%g)", (double)sequenceRate.num / (double)sequenceRate.den);
+        std::snprintf(sequenceLabel, sizeof(sequenceLabel), tr("Sequence (%g)"), (double)sequenceRate.num / (double)sequenceRate.den);
 
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Frame rate");
+        ImGui::TextUnformatted(tr("Frame rate"));
         ImGui::SameLine();
         ImGui::RadioButton(sequenceLabel, &_captureFrameRate, 0);
         ImGui::SameLine();
         ImGui::RadioButton("30", &_captureFrameRate, 30);
         ImGui::SameLine();
         ImGui::RadioButton("60", &_captureFrameRate, 60);
-        ImGui::Checkbox("Mouse cursor", &_captureCursor);
+        ImGui::Checkbox(tr("Mouse cursor"), &_captureCursor);
         ImGui::SameLine();
-        ImGui::Checkbox("Hide QuickEdit from the recording", &_hideFromCapture);
+        ImGui::Checkbox(tr("Hide QuickEdit from the recording"), &_hideFromCapture);
     }
     ImGui::EndDisabled();
 
     // Sound of the computer and microphone, with their levels.
     ImGui::Spacing();
     ImGui::BeginDisabled(recording);
-    ImGui::Checkbox("Computer sound", &_captureSound);
+    ImGui::Checkbox(tr("Computer sound"), &_captureSound);
     ImGui::EndDisabled();
 
     if (_captureSound) {
         levelMeter("##system", _screenRecorder.takeAudioPeak(), _systemMeter);
     }
 
-    std::string microphone = "Default input";
+    std::string microphone = tr("Default input");
 
     for (const audio::InputDevice& device : _inputDevices) {
         if (device.id == _inputDevice) microphone = device.name;
     }
 
     ImGui::BeginDisabled(recording);
-    ImGui::Checkbox(("Microphone: " + microphone + "##microphone").c_str(), &_captureMicrophone);
-    ImGui::SetItemTooltip("The input chosen in the Record Voice-Over window. Recorded on an audio track of its own.");
+    ImGui::Checkbox((tr("Microphone: ") + microphone + "##microphone").c_str(), &_captureMicrophone);
+    ImGui::SetItemTooltip(tr("The input chosen in the Record Voice-Over window. Recorded on an audio track of its own."));
     ImGui::EndDisabled();
 
     if (_captureMicrophone) {
@@ -3840,7 +3900,7 @@ void GUI::screenRecorderWindow()
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.25f, 0.22f, 1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.65f, 0.14f, 0.12f, 1.f));
 
-        if (ImGui::Button(ICON_MD_FIBER_MANUAL_RECORD " Record", ImVec2(width, 0.f))) {
+        if (ImGui::Button(tr(ICON_MD_FIBER_MANUAL_RECORD " Record"), ImVec2(width, 0.f))) {
             startScreenRecording();
         }
 
@@ -3848,10 +3908,10 @@ void GUI::screenRecorderWindow()
         ImGui::EndDisabled();
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("At the playhead, %s", formatTimecode(_playhead, _project.sequence().frameRate).c_str());
+        ImGui::TextDisabled(tr("At the playhead, %s"), formatTimecode(_playhead, _project.sequence().frameRate).c_str());
     }
     else {
-        if (ImGui::Button(ICON_MD_STOP " Stop", ImVec2(width, 0.f))) {
+        if (ImGui::Button(tr(ICON_MD_STOP " Stop"), ImVec2(width, 0.f))) {
             stopScreenRecording();
         }
 
@@ -3862,7 +3922,7 @@ void GUI::screenRecorderWindow()
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(ImVec4(0.95f, 0.3f, 0.25f, on ? 1.f : 0.25f), ICON_MD_FIBER_MANUAL_RECORD);
         ImGui::SameLine();
-        ImGui::Text("Recording  %s", formatTimecode(length, _project.sequence().frameRate).c_str());
+        ImGui::Text(tr("Recording  %s"), formatTimecode(length, _project.sequence().frameRate).c_str());
         ImGui::SameLine();
         ImGui::TextDisabled("(%s)", _screenRecorder.encoder().c_str());
     }
@@ -3875,8 +3935,8 @@ void GUI::screenRecorderWindow()
 
     ImGui::Spacing();
     ImGui::PushTextWrapPos(0.f);
-    ImGui::TextDisabled("Placed on the first free video track (the microphone on an audio track). Saved in %s.",
-        _projectPath.empty() ? "Documents/QuickEdit/Recordings" : "the Recordings folder next to the project");
+    ImGui::TextDisabled(tr("Placed on the first free video track (the microphone on an audio track). Saved in %s."),
+        _projectPath.empty() ? tr("Documents/QuickEdit/Recordings") : tr("the Recordings folder next to the project"));
     ImGui::PopTextWrapPos();
 
     ImGui::End();
@@ -3892,21 +3952,21 @@ void GUI::cameraFormatOptions()
     }
 
     capture::CameraFormat& chosen = _captureSource.format;
-    const float labelWidth = ImGui::CalcTextSize("Frame rate").x + ImGui::GetStyle().ItemSpacing.x;
+    const float labelWidth = ImGui::CalcTextSize(tr("Frame rate")).x + ImGui::GetStyle().ItemSpacing.x;
     const float half = 0.5f * (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x);
 
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Format");
+    ImGui::TextUnformatted(tr("Format"));
     ImGui::SameLine(labelWidth);
     ImGui::SetNextItemWidth(half - labelWidth);
 
     if (ImGui::BeginCombo("##cameraFormat", chosen.label().c_str(), ImGuiComboFlags_HeightLarge)) {
-        if (ImGui::Selectable("Automatic", chosen.automatic())) {
+        if (ImGui::Selectable(tr("Automatic"), chosen.automatic())) {
             chosen = capture::CameraFormat();
             _captureSource.frameRate = 0.0;
         }
 
-        ImGui::SetItemTooltip("The largest size the camera gives in MJPEG, up to 1080p");
+        ImGui::SetItemTooltip(tr("The largest size the camera gives in MJPEG, up to 1080p"));
 
         for (const capture::CameraFormat& format : _cameraFormats) {
             ImGui::PushID(&format);
@@ -3929,17 +3989,18 @@ void GUI::cameraFormatOptions()
     }
 
     if (_cameraFormats.empty()) {
-        ImGui::SetItemTooltip("The formats of this camera are not known: it gives its default one");
+        ImGui::SetItemTooltip(tr("The formats of this camera are not known: it gives its default one"));
     }
 
     // Frame rate, of the chosen format.
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Frame rate");
+    ImGui::TextUnformatted(tr("Frame rate"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-FLT_MIN);
 
-    char rateLabel[32] = "Automatic";
+    char rateLabel[32] = "";
+    std::snprintf(rateLabel, sizeof(rateLabel), "%s", tr("Automatic"));
 
     if (_captureSource.frameRate > 0.0) {
         std::snprintf(rateLabel, sizeof(rateLabel), "%g fps", _captureSource.frameRate);
@@ -4019,8 +4080,8 @@ void GUI::sourcePreview()
     if (_screenRecording) {
         const bool on = std::fmod(ImGui::GetTime(), 1.0) < 0.6;
         drawList->AddRect(min, max, IM_COL32(230, 60, 50, 255), 0.f, 0, 2.f);
-        drawList->AddRectFilled(ImVec2(min.x + 6.f, min.y + 6.f), ImVec2(min.x + 6.f + ImGui::CalcTextSize(ICON_MD_FIBER_MANUAL_RECORD " REC").x + 12.f, min.y + 10.f + ImGui::GetFontSize()), IM_COL32(0, 0, 0, 170), 4.f);
-        drawList->AddText(ImVec2(min.x + 12.f, min.y + 8.f), on ? IM_COL32(255, 90, 80, 255) : IM_COL32(255, 90, 80, 90), ICON_MD_FIBER_MANUAL_RECORD " REC");
+        drawList->AddRectFilled(ImVec2(min.x + 6.f, min.y + 6.f), ImVec2(min.x + 6.f + ImGui::CalcTextSize(tr(ICON_MD_FIBER_MANUAL_RECORD " REC")).x + 12.f, min.y + 10.f + ImGui::GetFontSize()), IM_COL32(0, 0, 0, 170), 4.f);
+        drawList->AddText(ImVec2(min.x + 12.f, min.y + 8.f), on ? IM_COL32(255, 90, 80, 255) : IM_COL32(255, 90, 80, 90), tr(ICON_MD_FIBER_MANUAL_RECORD " REC"));
     }
 
     if (message) {
@@ -4472,13 +4533,13 @@ void GUI::deleteTrack(Id trackId)
 
 void GUI::deleteTrackPopup()
 {
-    if (_confirmDeleteTrack != InvalidId && !ImGui::IsPopupOpen("Delete Track")) {
-        ImGui::OpenPopup("Delete Track");
+    if (_confirmDeleteTrack != InvalidId && !ImGui::IsPopupOpen(tr("Delete Track"))) {
+        ImGui::OpenPopup(tr("Delete Track"));
     }
 
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
-    if (!ImGui::BeginPopupModal("Delete Track", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!ImGui::BeginPopupModal(tr("Delete Track"), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         return;
     }
 
@@ -4492,11 +4553,11 @@ void GUI::deleteTrackPopup()
     }
 
     const bool paired = track->type == TrackType::Video || track->type == TrackType::Sound;
-    ImGui::Text("The track %s is not empty.", track->name.c_str());
-    ImGui::TextUnformatted(paired ? "Delete it with its clips, and those of its paired video / sound track?" : "Delete it with its clips?");
+    ImGui::Text(tr("The track %s is not empty."), track->name.c_str());
+    ImGui::TextUnformatted(paired ? tr("Delete it with its clips, and those of its paired video / sound track?") : tr("Delete it with its clips?"));
     ImGui::Spacing();
 
-    if (ImGui::Button(ICON_MD_DELETE " Delete") || ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
+    if (ImGui::Button(tr(ICON_MD_DELETE " Delete")) || ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
         deleteTrack(_confirmDeleteTrack);
         _confirmDeleteTrack = InvalidId;
         ImGui::CloseCurrentPopup();
@@ -4504,7 +4565,7 @@ void GUI::deleteTrackPopup()
 
     ImGui::SameLine();
 
-    if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+    if (ImGui::Button(tr("Cancel")) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         _confirmDeleteTrack = InvalidId;
         ImGui::CloseCurrentPopup();
     }
@@ -4516,7 +4577,7 @@ void GUI::deleteTrackPopup()
 void GUI::timelinePanel()
 {
     // The timeline handles the wheel itself.
-    const bool open = ImGui::Begin("Timeline", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    const bool open = ImGui::Begin(tr("Timeline###Timeline"), nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
     if (open) {
         sequenceTabs();
@@ -4526,7 +4587,7 @@ void GUI::timelinePanel()
 
         for (const TimelineToolInfo& info : timelineTools()) {
             char tooltip[256];
-            std::snprintf(tooltip, sizeof(tooltip), "%s (%s)\n%s", info.label, info.shortcut, info.help);
+            std::snprintf(tooltip, sizeof(tooltip), "%s (%s)\n%s", tr(info.label), info.shortcut, tr(info.help));
 
             if (panelButton(info.icon, tooltip, _timeline.tool() == info.tool)) {
                 _timeline.setTool(info.tool);
@@ -4552,7 +4613,7 @@ void GUI::timelinePanel()
             _timeline.setZoom(zoom);
         }
 
-        ImGui::SetItemTooltip("Zoom");
+        ImGui::SetItemTooltip(tr("Zoom"));
         ImGui::SameLine();
 
         if (panelButton(ICON_MD_ZOOM_IN, "Zoom In (Ctrl++, Ctrl+Wheel)")) {
@@ -4582,12 +4643,12 @@ void GUI::timelinePanel()
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled(ICON_MD_HELP_OUTLINE);
         ImGui::SetItemTooltip(
-            "Click on the ruler: move the playhead (drag to hear the sound)\n"
+            tr("Click on the ruler: move the playhead (drag to hear the sound)\n"
             "Click between clips: select the gap (Delete closes it)\n"
             "Drag on an empty area: select the clips in a rectangle\n"
             "Right click: menus of the clips and of the tracks\n"
             "Wheel: scroll in time   Ctrl+Wheel: zoom   Shift+Wheel: scroll the tracks\n"
-            "Middle button: move around");
+            "Middle button: move around"));
         ImGui::PopStyleVar();
 
         if (_recorder.recording() && !_screenRecording) {
@@ -4782,15 +4843,15 @@ void GUI::sequenceTabs()
             ImGui::EndDragDropSource();
         }
 
-        ImGui::SetItemTooltip("Drag into the timeline of another sequence to nest it");
+        ImGui::SetItemTooltip(tr("Drag into the timeline of another sequence to nest it"));
 
         if (ImGui::BeginPopupContextItem()) {
-            if (ImGui::MenuItem(ICON_MD_EDIT " Rename")) {
+            if (ImGui::MenuItem(tr(ICON_MD_EDIT " Rename"))) {
                 _renamingSequence = sequence->id;
                 _sequenceName = sequence->name;
             }
 
-            if (ImGui::MenuItem(ICON_MD_DELETE " Delete Sequence", nullptr, false, _project.sequences().size() > 1)) {
+            if (ImGui::MenuItem(tr(ICON_MD_DELETE " Delete Sequence"), nullptr, false, _project.sequences().size() > 1)) {
                 remove = sequence->id;
             }
 
@@ -4821,7 +4882,7 @@ void GUI::sequenceTabs()
         showSequence(id);
     }
 
-    ImGui::SetItemTooltip("New sequence");
+    ImGui::SetItemTooltip(tr("New sequence"));
     ImGui::EndTabBar();
 
     if (show != InvalidId) {
@@ -4835,23 +4896,23 @@ void GUI::sequenceTabs()
             commit("Delete sequence");
         }
         else {
-            setErrorMessage("This sequence is nested in another one: remove it from there first.");
+            setErrorMessage(tr("This sequence is nested in another one: remove it from there first."));
         }
     }
 
     // Renamed in a small window.
     if (_renamingSequence != InvalidId) {
-        ImGui::OpenPopup("Rename Sequence");
+        ImGui::OpenPopup(tr("Rename Sequence"));
     }
 
-    if (ImGui::BeginPopupModal("Rename Sequence", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::BeginPopupModal(tr("Rename Sequence"), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         if (ImGui::IsWindowAppearing()) {
             ImGui::SetKeyboardFocusHere();
         }
 
         const bool entered = ImGui::InputText("##name", &_sequenceName, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
 
-        if ((entered || ImGui::Button("OK")) && !_sequenceName.empty()) {
+        if ((entered || ImGui::Button(tr("OK"))) && !_sequenceName.empty()) {
             const Id id = _renamingSequence;
             const Id current = _project.sequence().id;
 
@@ -4867,7 +4928,7 @@ void GUI::sequenceTabs()
 
         ImGui::SameLine();
 
-        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        if (ImGui::Button(tr("Cancel")) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             _renamingSequence = InvalidId;
             ImGui::CloseCurrentPopup();
         }
@@ -4901,7 +4962,7 @@ void GUI::showSequence(Id id)
 void GUI::keyframesPanel()
 {
     // Beside the timeline, behind it until chosen.
-    if (ImGuiWindow* timeline = ImGui::FindWindowByName("Timeline"); timeline && timeline->DockId) {
+    if (ImGuiWindow* timeline = ImGui::FindWindowByName("###Timeline"); timeline && timeline->DockId) {
         ImGui::SetNextWindowDockID(timeline->DockId, ImGuiCond_FirstUseEver);
     }
 
@@ -4909,7 +4970,7 @@ void GUI::keyframesPanel()
         ImGui::SetNextWindowFocus();
     }
 
-    if (ImGui::Begin("Keyframes", nullptr, ImGuiWindowFlags_NoFocusOnAppearing)) {
+    if (ImGui::Begin(tr("Keyframes###Keyframes"), nullptr, ImGuiWindowFlags_NoFocusOnAppearing)) {
         const KeyframeEditor::Result result = _keyframes.draw(_project, _selection, _playhead);
 
         if (result.seeked) {
@@ -4929,13 +4990,13 @@ void GUI::keyframesPanel()
 void GUI::projectPropertiesPopup()
 {
     if (std::exchange(_requestProjectProperties, false)) {
-        ImGui::OpenPopup("Project Properties");
+        ImGui::OpenPopup(tr("Project Properties"));
     }
 
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(26.f * ImGui::GetFontSize(), 0.f), ImGuiCond_Appearing);
 
-    if (!ImGui::BeginPopupModal("Project Properties", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+    if (!ImGui::BeginPopupModal(tr("Project Properties"), nullptr, ImGuiWindowFlags_NoSavedSettings)) {
         return;
     }
 
@@ -4948,10 +5009,10 @@ void GUI::projectPropertiesPopup()
     }
 
     ImGui::Spacing();
-    ImGui::TextDisabled("The export can use another size or frame rate.");
+    ImGui::TextDisabled(tr("The export can use another size or frame rate."));
     ImGui::Spacing();
 
-    if (ImGui::Button("Close", ImVec2(8.f * ImGui::GetFontSize(), 0.f)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    if (ImGui::Button(tr("Close"), ImVec2(8.f * ImGui::GetFontSize(), 0.f)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
         ImGui::CloseCurrentPopup();
     }
 
@@ -4969,13 +5030,13 @@ void GUI::exportPopup()
             _exportPathText = pathToUtf8(path);
         }
 
-        ImGui::OpenPopup("Export Video");
+        ImGui::OpenPopup(tr("Export Video"));
     }
 
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(36.f * ImGui::GetFontSize(), 0.f), ImGuiCond_Appearing);
 
-    if (!ImGui::BeginPopupModal("Export Video", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+    if (!ImGui::BeginPopupModal(tr("Export Video"), nullptr, ImGuiWindowFlags_NoSavedSettings)) {
         return;
     }
 
@@ -4987,36 +5048,36 @@ void GUI::exportPopup()
         const std::string target = pathToUtf8(exporter.settings().path.filename());
 
         if (!exporter.done()) {
-            ImGui::Text("Exporting %s", target.c_str());
+            ImGui::Text(tr("Exporting %s"), target.c_str());
 
             if (!exporter.encoder().empty()) {
-                ImGui::TextDisabled("Encoder: %s", exporter.encoder().c_str());
+                ImGui::TextDisabled(tr("Encoder: %s"), exporter.encoder().c_str());
             }
 
             ImGui::ProgressBar(exporter.progress(), ImVec2(-FLT_MIN, 0.f));
 
-            if (ImGui::Button(ICON_MD_CLOSE " Cancel")) {
+            if (ImGui::Button(tr(ICON_MD_CLOSE " Cancel"))) {
                 _exporter->cancel();
             }
         }
         else {
             if (exporter.succeeded()) {
-                ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.5f, 1.f), ICON_MD_CHECK_CIRCLE " %s exported", target.c_str());
-                ImGui::TextDisabled("Encoder: %s", exporter.encoder().c_str());
+                ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.5f, 1.f), tr(ICON_MD_CHECK_CIRCLE " %s exported"), target.c_str());
+                ImGui::TextDisabled(tr("Encoder: %s"), exporter.encoder().c_str());
 
                 if (const std::string loudness = exporter.loudnessReport(); !loudness.empty()) {
                     ImGui::TextDisabled("%s", loudness.c_str());
                 }
             }
             else if (exporter.cancelled()) {
-                ImGui::TextUnformatted("Export cancelled.");
+                ImGui::TextUnformatted(tr("Export cancelled."));
             }
             else {
-                ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " Export failed");
+                ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), tr(ICON_MD_WARNING " Export failed"));
                 ImGui::TextWrapped("%s", exporter.error().c_str());
             }
 
-            if (exporter.succeeded() && ImGui::Button(ICON_MD_FOLDER_OPEN " Show in Folder")) {
+            if (exporter.succeeded() && ImGui::Button(tr(ICON_MD_FOLDER_OPEN " Show in Folder"))) {
                 const std::u8string folder = exporter.settings().path.parent_path().generic_u8string();
                 SDL_OpenURL(("file:///" + std::string(folder.begin(), folder.end())).c_str());
             }
@@ -5025,7 +5086,7 @@ void GUI::exportPopup()
                 ImGui::SameLine();
             }
 
-            if (ImGui::Button("Close")) {
+            if (ImGui::Button(tr("Close"))) {
                 _exporter.reset();
                 ImGui::CloseCurrentPopup();
             }
@@ -5037,23 +5098,23 @@ void GUI::exportPopup()
 
     // Settings
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("File");
+    ImGui::TextDisabled(tr("File"));
     ImGui::SameLine(labelWidth);
 
-    const float browseWidth = ImGui::CalcTextSize("Browse...").x + 2.f * ImGui::GetStyle().FramePadding.x;
+    const float browseWidth = ImGui::CalcTextSize(tr("Browse...")).x + 2.f * ImGui::GetStyle().FramePadding.x;
     ImGui::SetNextItemWidth(-browseWidth - ImGui::GetStyle().ItemSpacing.x);
     ImGui::InputText("##path", &_exportPathText);
     ImGui::SameLine();
 
-    if (ImGui::Button("Browse...")) {
+    if (ImGui::Button(tr("Browse..."))) {
         SDL_ShowSaveFileDialog(GUI::onExportFile, this, window(), exportFilters, SDL_arraysize(exportFilters), nullptr);
     }
 
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("Codec");
+    ImGui::TextDisabled(tr("Codec"));
     ImGui::SameLine(labelWidth);
 
-    const char* codecs[] = { "H.264 (most compatible)", "H.265 / HEVC", "AV1" };
+    const char* codecs[] = { tr("H.264 (most compatible)"), tr("H.265 / HEVC"), tr("AV1") };
     int codec = (int)_exportSettings.codec;
     ImGui::SetNextItemWidth(-FLT_MIN);
 
@@ -5062,24 +5123,24 @@ void GUI::exportPopup()
     }
 
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("Quality");
+    ImGui::TextDisabled(tr("Quality"));
     ImGui::SameLine(labelWidth);
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::SliderFloat("##bitrate", &_exportSettings.bitrateMbps, 2.f, 100.f, "%.0f Mbit/s", ImGuiSliderFlags_Logarithmic);
 
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("Audio");
+    ImGui::TextDisabled(tr("Audio"));
     ImGui::SameLine(labelWidth);
-    ImGui::Checkbox("AAC, 192 kbit/s", &_exportSettings.audio);
+    ImGui::Checkbox(tr("AAC, 192 kbit/s"), &_exportSettings.audio);
 
     // Loudness: the usual targets, or any.
     ImGui::BeginDisabled(!_exportSettings.audio);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("Loudness");
+    ImGui::TextDisabled(tr("Loudness"));
     ImGui::SameLine(labelWidth);
-    ImGui::Checkbox("Normalize to##loudness", &_exportSettings.normalizeLoudness);
-    ImGui::SetItemTooltip("The whole sound is measured first (EBU R128), then brought to this loudness,\n"
-        "its peaks kept under -1 dB.");
+    ImGui::Checkbox(tr("Normalize to##loudness"), &_exportSettings.normalizeLoudness);
+    ImGui::SetItemTooltip(tr("The whole sound is measured first (EBU R128), then brought to this loudness,\n"
+        "its peaks kept under -1 dB."));
     ImGui::SameLine();
     ImGui::BeginDisabled(!_exportSettings.normalizeLoudness);
 
@@ -5090,30 +5151,30 @@ void GUI::exportPopup()
     };
 
     const LoudnessTarget targets[] = {
-        { -14.f, "-14 LUFS  (YouTube, Spotify)" },
-        { -16.f, "-16 LUFS  (podcasts, Apple)" },
-        { -23.f, "-23 LUFS  (broadcast, EBU R128)" },
+        { -14.f, tr("-14 LUFS  (YouTube, Spotify)") },
+        { -16.f, tr("-16 LUFS  (podcasts, Apple)") },
+        { -23.f, tr("-23 LUFS  (broadcast, EBU R128)") },
     };
 
     char targetLabel[48];
     std::snprintf(targetLabel, sizeof(targetLabel), "%.1f LUFS", _exportSettings.targetLufs);
 
     for (const LoudnessTarget& target : targets) {
-        if (target.lufs == _exportSettings.targetLufs) std::snprintf(targetLabel, sizeof(targetLabel), "%s", target.label);
+        if (target.lufs == _exportSettings.targetLufs) std::snprintf(targetLabel, sizeof(targetLabel), "%s", tr(target.label));
     }
 
     ImGui::SetNextItemWidth(-FLT_MIN);
 
     if (ImGui::BeginCombo("##targetLufs", targetLabel)) {
         for (const LoudnessTarget& target : targets) {
-            if (ImGui::Selectable(target.label, target.lufs == _exportSettings.targetLufs)) {
+            if (ImGui::Selectable(tr(target.label), target.lufs == _exportSettings.targetLufs)) {
                 _exportSettings.targetLufs = target.lufs;
             }
         }
 
         ImGui::Separator();
         ImGui::SetNextItemWidth(8.f * ImGui::GetFontSize());
-        ImGui::DragFloat("Other##otherLufs", &_exportSettings.targetLufs, 0.1f, -40.f, -5.f, "%.1f LUFS", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::DragFloat(tr("Other##otherLufs"), &_exportSettings.targetLufs, 0.1f, -40.f, -5.f, tr("%.1f LUFS"), ImGuiSliderFlags_AlwaysClamp);
         ImGui::EndCombo();
     }
 
@@ -5123,9 +5184,9 @@ void GUI::exportPopup()
     // Subtitles: in the picture, and in a file beside it.
     if (!subtitleCues(_project.sequence()).empty()) {
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("Subtitles");
+        ImGui::TextDisabled(tr("Subtitles"));
         ImGui::SameLine(labelWidth);
-        ImGui::Checkbox("In the picture, and a .srt file beside the video", &_exportSubtitles);
+        ImGui::Checkbox(tr("In the picture, and a .srt file beside the video"), &_exportSubtitles);
     }
 
     // Size and rate, those of the sequence by default; the shape stays the
@@ -5136,7 +5197,7 @@ void GUI::exportPopup()
     };
 
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("Size");
+    ImGui::TextDisabled(tr("Size"));
     ImGui::SameLine(labelWidth);
     ImGui::SetNextItemWidth(-FLT_MIN);
 
@@ -5145,7 +5206,7 @@ void GUI::exportPopup()
     auto sizeLabel = [&](size_t i) {
         const uint32_t h = heights[i] ? heights[i] : sequence.height;
         const std::string size = std::to_string(widthFor(h)) + " x " + std::to_string(h & ~1u);
-        return heights[i] ? std::string(heightNames[i]) + "  (" + size + ")" : "Sequence  (" + size + ")";
+        return heights[i] ? std::string(heightNames[i]) + "  (" + size + ")" : tr("Sequence  (") + size + ")";
     };
 
     size_t currentSize = 0;
@@ -5166,11 +5227,11 @@ void GUI::exportPopup()
 
     if (_exportSettings.height > sequence.height) {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + labelWidth);
-        ImGui::TextDisabled("Larger than the sequence: the videos smaller than this are enlarged.");
+        ImGui::TextDisabled(tr("Larger than the sequence: the videos smaller than this are enlarged."));
     }
 
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("Frame rate");
+    ImGui::TextDisabled(tr("Frame rate"));
     ImGui::SameLine(labelWidth);
     ImGui::SetNextItemWidth(-FLT_MIN);
 
@@ -5179,7 +5240,7 @@ void GUI::exportPopup()
         char text[48];
 
         if (rate.num == 0) {
-            std::snprintf(text, sizeof(text), "Sequence  (%.3g fps)", sequence.frameRate.toDouble());
+            std::snprintf(text, sizeof(text), tr("Sequence  (%.3g fps)"), sequence.frameRate.toDouble());
         }
         else {
             std::snprintf(text, sizeof(text), "%.3g fps", rate.toDouble());
@@ -5200,23 +5261,23 @@ void GUI::exportPopup()
         ImGui::EndCombo();
     }
 
-    ImGui::TextDisabled("%s long", formatTimecode(sequence.duration(), sequence.frameRate).c_str());
+    ImGui::TextDisabled(tr("%s long"), formatTimecode(sequence.duration(), sequence.frameRate).c_str());
 
     if (hasVideoEncodeQueue()) {
-        ImGui::TextDisabled(ICON_MD_BOLT " Encoded on the GPU with Vulkan Video when the codec allows it");
+        ImGui::TextDisabled(tr(ICON_MD_BOLT " Encoded on the GPU with Vulkan Video when the codec allows it"));
     }
 
     const int analyzing = mediaInAnalysis();
 
     if (analyzing > 0) {
-        ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.f), "%d media still being analyzed...", analyzing);
+        ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.f), tr("%d media still being analyzed..."), analyzing);
     }
 
     ImGui::Separator();
 
     ImGui::BeginDisabled(analyzing > 0 || _exportPathText.empty() || sequence.duration() <= 0);
 
-    if (ImGui::Button(ICON_MD_MOVIE_CREATION " Export")) {
+    if (ImGui::Button(tr(ICON_MD_MOVIE_CREATION " Export"))) {
         _exportSettings.path = std::filesystem::path(std::u8string(_exportPathText.begin(), _exportPathText.end()));
         startExport();
     }
@@ -5224,7 +5285,7 @@ void GUI::exportPopup()
     ImGui::EndDisabled();
     ImGui::SameLine();
 
-    if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    if (ImGui::Button(tr("Cancel")) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
         ImGui::CloseCurrentPopup();
     }
 
@@ -5301,7 +5362,7 @@ void GUI::effectsTab()
 
     auto count = [](const Track& t) { return t.effects.size() + t.videoEffects.size(); };
 
-    if (ImGui::BeginCombo("##effectsTrack", track ? (std::string(ICON_MD_TUNE " Track ") + track->name).c_str() : "Choose a track...")) {
+    if (ImGui::BeginCombo("##effectsTrack", track ? (std::string(tr(ICON_MD_TUNE " Track ")) + track->name).c_str() : tr("Choose a track..."))) {
         for (const auto* tracks : { &sequence.videoTracks, &sequence.soundTracks, &sequence.audioTracks, &sequence.subtitleTracks }) {
             for (const Track& t : *tracks) {
                 const std::string label = t.name + (count(t) == 0 ? "" : "  (" + std::to_string(count(t)) + ")");
@@ -5320,7 +5381,7 @@ void GUI::effectsTab()
     track = _project.findTrack(_effectsTrack);
 
     if (!track) {
-        ImGui::TextDisabled("Select a clip, or choose a track.");
+        ImGui::TextDisabled(tr("Select a clip, or choose a track."));
         return;
     }
 
@@ -5330,7 +5391,7 @@ void GUI::effectsTab()
 
     // The clip first: its effects come before those of its track.
     if (clip && clip->kind == ClipKind::Media) {
-        ImGui::SeparatorText(video ? ICON_MD_MOVIE " Clip" : ICON_MD_AUDIOTRACK " Clip");
+        ImGui::SeparatorText(video ? tr(ICON_MD_MOVIE " Clip") : tr(ICON_MD_AUDIOTRACK " Clip"));
 
         if (video) {
             _inspector.videoEffectsSection(_project, clip->videoEffects, localTime, edit);
@@ -5340,8 +5401,8 @@ void GUI::effectsTab()
         }
     }
 
-    ImGui::SeparatorText((std::string(ICON_MD_TUNE " Track ") + track->name).c_str());
-    ImGui::TextDisabled(video ? "On each clip of the track, after its own." : "Applied in order, to the whole track.");
+    ImGui::SeparatorText((std::string(tr(ICON_MD_TUNE " Track ")) + track->name).c_str());
+    ImGui::TextDisabled(video ? tr("On each clip of the track, after its own.") : tr("Applied in order, to the whole track."));
 
     if (video) {
         // Keyframes of track effects: in the time of the sequence.
@@ -5380,7 +5441,7 @@ void GUI::audioEffectChain(std::vector<EffectSlot>& slots, const char* id)
             commit(active ? "Enable effect" : "Bypass effect");
         }
 
-        ImGui::SetItemTooltip("On / bypassed");
+        ImGui::SetItemTooltip(tr("On / bypassed"));
         ImGui::SameLine();
 
         audio::Vst3Plugin* plugin = _effects.plugin(slot.id);
@@ -5402,12 +5463,12 @@ void GUI::audioEffectChain(std::vector<EffectSlot>& slots, const char* id)
 
         if (ImGui::Button(ICON_MD_OPEN_IN_NEW)) {
             if (!plugin->openEditor()) {
-                setErrorMessage(slot.name + ": the plugin has no editor that can be shown.");
+                setErrorMessage(slot.name + tr(": the plugin has no editor that can be shown."));
             }
         }
 
         ImGui::EndDisabled();
-        ImGui::SetItemTooltip("Open the plugin editor");
+        ImGui::SetItemTooltip(tr("Open the plugin editor"));
         ImGui::SameLine();
 
         ImGui::BeginDisabled(i == 0);
@@ -5417,19 +5478,19 @@ void GUI::audioEffectChain(std::vector<EffectSlot>& slots, const char* id)
         }
 
         ImGui::EndDisabled();
-        ImGui::SetItemTooltip("Earlier in the chain");
+        ImGui::SetItemTooltip(tr("Earlier in the chain"));
         ImGui::SameLine();
 
         if (ImGui::Button(ICON_MD_DELETE)) {
             removed = slot.id;
         }
 
-        ImGui::SetItemTooltip("Remove");
+        ImGui::SetItemTooltip(tr("Remove"));
         ImGui::PopID();
     }
 
     if (slots.empty()) {
-        ImGui::TextDisabled("No effect yet.");
+        ImGui::TextDisabled(tr("No effect yet."));
     }
 
     if (moveUp > 0) {
@@ -5447,15 +5508,15 @@ void GUI::audioEffectChain(std::vector<EffectSlot>& slots, const char* id)
     ImGui::Separator();
     ImGui::SetNextItemWidth(-FLT_MIN);
 
-    if (ImGui::BeginCombo("##add", ICON_MD_ADD " Add an effect...", ImGuiComboFlags_HeightLargest)) {
+    if (ImGui::BeginCombo("##add", tr(ICON_MD_ADD " Add an effect..."), ImGuiComboFlags_HeightLargest)) {
         const std::vector<audio::PluginClass> plugins = _pluginScanner.classes();
 
         if (_pluginScanner.scanning()) {
             const std::string current = _pluginScanner.current();
-            ImGui::TextDisabled(ICON_MD_HOURGLASS_TOP " Looking for plugins... %s", current.c_str());
+            ImGui::TextDisabled(tr(ICON_MD_HOURGLASS_TOP " Looking for plugins... %s"), current.c_str());
         }
         else if (plugins.empty()) {
-            ImGui::TextDisabled("No VST3 effect found in the standard folders.");
+            ImGui::TextDisabled(tr("No VST3 effect found in the standard folders."));
         }
 
         // Filter, on the name and the vendor.
@@ -5464,7 +5525,7 @@ void GUI::audioEffectChain(std::vector<EffectSlot>& slots, const char* id)
         }
 
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::InputTextWithHint("##filter", ICON_MD_SEARCH " Search", _pluginFilter, sizeof(_pluginFilter));
+        ImGui::InputTextWithHint("##filter", tr(ICON_MD_SEARCH " Search"), _pluginFilter, sizeof(_pluginFilter));
 
         auto lower = [](std::string text) {
             std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return (char)std::tolower(c); });
@@ -5513,7 +5574,7 @@ void GUI::audioEffectChain(std::vector<EffectSlot>& slots, const char* id)
         ImGui::Separator();
         ImGui::BeginDisabled(_pluginScanner.scanning());
 
-        if (ImGui::Selectable(ICON_MD_REFRESH " Look for plugins again", false, ImGuiSelectableFlags_DontClosePopups)) {
+        if (ImGui::Selectable(tr(ICON_MD_REFRESH " Look for plugins again"), false, ImGuiSelectableFlags_DontClosePopups)) {
             _pluginScanner.start(true);
         }
 
@@ -5536,18 +5597,18 @@ void GUI::errorPopup()
     }
 
     if (open) {
-        ImGui::OpenPopup("Error");
+        ImGui::OpenPopup(tr("Error"));
     }
 
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
-    if (ImGui::BeginPopupModal("Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::BeginPopupModal(tr("Error"), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         {
             std::scoped_lock lock(_errorMutex);
             ImGui::TextUnformatted(_errorMessage.c_str());
         }
 
-        if (ImGui::Button("OK")) {
+        if (ImGui::Button(tr("OK"))) {
             ImGui::CloseCurrentPopup();
         }
 
@@ -5559,18 +5620,18 @@ void GUI::errorPopup()
 void GUI::unsavedChangesPopup()
 {
     if (std::exchange(_requestUnsavedChangesPopup, false)) {
-        ImGui::OpenPopup("Unsaved Changes");
+        ImGui::OpenPopup(tr("Unsaved Changes"));
     }
 
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
-    if (ImGui::BeginPopupModal("Unsaved Changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::BeginPopupModal(tr("Unsaved Changes"), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted(_pendingAction == PendingAction::Quit
-            ? "Save the changes to the project before closing?"
-            : "Save the changes to the current project first?");
+            ? tr("Save the changes to the project before closing?")
+            : tr("Save the changes to the current project first?"));
         ImGui::Spacing();
 
-        if (ImGui::Button(ICON_MD_SAVE " Save")) {
+        if (ImGui::Button(tr(ICON_MD_SAVE " Save"))) {
             ImGui::CloseCurrentPopup();
             _actionAfterSave = true;
             requestSaveFile();
@@ -5578,14 +5639,14 @@ void GUI::unsavedChangesPopup()
 
         ImGui::SameLine();
 
-        if (ImGui::Button("Don't Save")) {
+        if (ImGui::Button(tr("Don't Save"))) {
             ImGui::CloseCurrentPopup();
             doPendingAction(std::exchange(_pendingAction, PendingAction::None), _pendingPath);
         }
 
         ImGui::SameLine();
 
-        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        if (ImGui::Button(tr("Cancel")) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             ImGui::CloseCurrentPopup();
             _pendingAction = PendingAction::None;
         }
@@ -5605,7 +5666,7 @@ void GUI::setErrorMessage(const std::string& message)
 
 void GUI::updateWindowTitle()
 {
-    std::string title = _projectPath.empty() ? std::string("Untitled") : pathToUtf8(_projectPath.stem());
+    std::string title = _projectPath.empty() ? std::string(tr("Untitled")) : pathToUtf8(_projectPath.stem());
 
     if (_history.modified()) {
         title += " *";
@@ -5813,7 +5874,7 @@ void GUI::openProject(const std::filesystem::path& filepath)
         _timeline.requestZoomToFit();
     }
     catch (const std::exception& e) {
-        setErrorMessage(std::string("Could not open the project:\n") + e.what());
+        setErrorMessage(std::string(tr("Could not open the project:\n")) + e.what());
     }
 }
 
@@ -5830,7 +5891,7 @@ bool GUI::saveProject(const std::filesystem::path& filepath)
         return true;
     }
     catch (const std::exception& e) {
-        setErrorMessage(std::string("Could not save the project:\n") + e.what());
+        setErrorMessage(std::string(tr("Could not save the project:\n")) + e.what());
         return false;
     }
 }

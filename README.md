@@ -103,9 +103,18 @@ ctest --test-dir out/build/x64-Release
 On Windows, run these from a Visual Studio developer prompt, or open the
 folder in Visual Studio (`CMakeSettings.json`).
 
+## Languages
+
+The interface is in English and French (View > Language; the language of
+the system by default). The translations are in `lang/<code>.json`, keyed by
+the English texts. After a change of the texts of the code, run
+`python tools/update_translations.py`: it adds the new texts to every
+catalog (empty: shown in English until translated) and removes the old ones.
+A new language is a new catalog, with its name in `"_language"`.
+
 ## Where things go
 
-- Settings and caches: `%APPDATA%\QuickEdit` on Windows,
+- Settings (language) and caches: `%APPDATA%\QuickEdit` on Windows,
   `~/.config/quickedit` on Linux.
 - Recordings: a `Recordings` folder next to the project, or
   `Documents/QuickEdit/Recordings` for a project not saved yet.

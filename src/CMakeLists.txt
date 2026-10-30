@@ -106,6 +106,7 @@ set(QUICKEDIT_SRC
     app/FileDrag.cpp
     app/GUIBase.cpp
     app/GUI.cpp
+    app/I18n.cpp
     app/Inspector.cpp
     app/SubtitleGenerator.cpp
     app/KeyframeEditor.cpp
@@ -169,6 +170,11 @@ if (WIN32)
 
     install(FILES ${FFMPEG_RUNTIME_DLLS} DESTINATION .)
 endif()
+
+# Translations of the interface (app/I18n.h), next to the executable.
+add_custom_command(TARGET QuickEdit POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/lang $<TARGET_FILE_DIR:QuickEdit>/lang
+)
 
 # Speech recognition for the subtitles, when whisper.cpp was cloned (see
 # 3rdparty/CMakeLists.txt).
