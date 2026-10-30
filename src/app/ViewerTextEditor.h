@@ -16,7 +16,7 @@
 // selection with the mouse and the keyboard, copy and paste, bold and
 // italic. The text is laid out as the compositor draws it, so the caret and
 // the selection fall on the letters.
-class TextEditor
+class ViewerTextEditor
 {
 public:
     // Where the text is drawn: layer pixels to sequence pixels (as the

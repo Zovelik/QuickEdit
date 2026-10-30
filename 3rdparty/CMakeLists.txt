@@ -1,6 +1,11 @@
 add_subdirectory(SDL)
 add_subdirectory(imgui)
 
+# Code editor with syntax colors (shader editor), MIT.
+add_library(ImGuiColorTextEdit STATIC ImGuiColorTextEdit/TextEditor.cpp)
+target_include_directories(ImGuiColorTextEdit PUBLIC ImGuiColorTextEdit)
+target_link_libraries(ImGuiColorTextEdit PUBLIC imgui)
+
 # Speech recognition for the subtitles (whisper.cpp, MIT, cloned: see
 # docs/ARCHITECTURE.md), static, on the GPU through Vulkan. Optional.
 if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/whisper.cpp/CMakeLists.txt")

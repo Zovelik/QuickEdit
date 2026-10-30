@@ -864,9 +864,11 @@ void GUIBase::createImGui()
         style->Colors[ImGuiCol_CheckMark] = accentHovered;
         style->Colors[ImGuiCol_SliderGrab] = accent;
         style->Colors[ImGuiCol_SliderGrabActive] = accentHovered;
-        style->Colors[ImGuiCol_Button] = ImVec4(accent.x, accent.y, accent.z, 0.55f);
-        style->Colors[ImGuiCol_ButtonHovered] = accentHovered;
-        style->Colors[ImGuiCol_ButtonActive] = accentActive;
+        // Neutral buttons (and combo arrows); the accent for the pressed and
+        // chosen ones.
+        style->Colors[ImGuiCol_Button] = ImVec4(0.25f, 0.25f, 0.25f, 1.00f);
+        style->Colors[ImGuiCol_ButtonHovered] = ImVec4(0.32f, 0.32f, 0.32f, 1.00f);
+        style->Colors[ImGuiCol_ButtonActive] = accent;
         style->Colors[ImGuiCol_Header] = ImVec4(accent.x, accent.y, accent.z, 0.55f);
         style->Colors[ImGuiCol_HeaderHovered] = ImVec4(accent.x, accent.y, accent.z, 0.80f);
         style->Colors[ImGuiCol_HeaderActive] = accent;

@@ -1,4 +1,4 @@
-#include <app/TextEditor.h>
+#include <app/ViewerTextEditor.h>
 
 #include <core/TextEdit.h>
 
@@ -67,7 +67,7 @@ std::string toggledStyle(const std::string& style, bool bold)
 } // namespace
 
 
-ImVec2 TextEditor::Mapping::toScreen(float lx, float ly) const
+ImVec2 ViewerTextEditor::Mapping::toScreen(float lx, float ly) const
 {
     const float sx = lx * scale;
     const float sy = ly * scale;
@@ -78,7 +78,7 @@ ImVec2 TextEditor::Mapping::toScreen(float lx, float ly) const
 }
 
 
-ImVec2 TextEditor::Mapping::toLayer(const ImVec2& screen) const
+ImVec2 ViewerTextEditor::Mapping::toLayer(const ImVec2& screen) const
 {
     const float px = (screen.x - frameMin.x) * toSequence - x;
     const float py = (screen.y - frameMin.y) * toSequence - y;
@@ -92,7 +92,7 @@ ImVec2 TextEditor::Mapping::toLayer(const ImVec2& screen) const
 }
 
 
-void TextEditor::begin(const Clip& clip)
+void ViewerTextEditor::begin(const Clip& clip)
 {
     _clip = clip.id;
     _snapshot = clip.text.spans;
@@ -104,7 +104,7 @@ void TextEditor::begin(const Clip& clip)
 }
 
 
-bool TextEditor::end(Project& project)
+bool ViewerTextEditor::end(Project& project)
 {
     const Clip* clip = project.findClip(_clip);
     const bool changed = clip && !sameSpans(clip->text.spans, _snapshot);
@@ -117,7 +117,7 @@ bool TextEditor::end(Project& project)
 }
 
 
-void TextEditor::markCommitted(const Project& project)
+void ViewerTextEditor::markCommitted(const Project& project)
 {
     if (const Clip* clip = project.findClip(_clip)) {
         _snapshot = clip->text.spans;
@@ -125,7 +125,7 @@ void TextEditor::markCommitted(const Project& project)
 }
 
 
-void TextEditor::moveCaret(size_t position, bool extend)
+void ViewerTextEditor::moveCaret(size_t position, bool extend)
 {
     _caret = position;
 
@@ -137,7 +137,7 @@ void TextEditor::moveCaret(size_t position, bool extend)
 }
 
 
-size_t TextEditor::positionAt(const TextLayout& layout, const ImVec2& point) const
+size_t ViewerTextEditor::positionAt(const TextLayout& layout, const ImVec2& point) const
 {
     if (layout.characters.empty()) {
         return 0;
@@ -184,7 +184,7 @@ size_t TextEditor::positionAt(const TextLayout& layout, const ImVec2& point) con
 }
 
 
-bool TextEditor::update(Project& project, FontLibrary& fonts, const Mapping& mapping, bool hovered)
+bool ViewerTextEditor::update(Project& project, FontLibrary& fonts, const Mapping& mapping, bool hovered)
 {
     Clip* clip = project.findClip(_clip);
 

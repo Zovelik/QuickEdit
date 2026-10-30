@@ -1,4 +1,5 @@
 #include <app/Inspector.h>
+#include <app/Widgets.h>
 
 #include <fonts/IconsMaterialDesign.h>
 
@@ -315,19 +316,9 @@ void Inspector::transformSection(Clip& clip, Time localTime, std::string& edit)
                 ImGui::SameLine(0.f, spacing);
             }
 
-            const bool current = clip.fit == mode;
-
-            if (current) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            }
-
-            if (ImGui::Button(fitModeName(mode), ImVec2(width, 0.f)) && !current) {
+            if (widgets::optionButton(fitModeName(mode), clip.fit == mode, ImVec2(width, 0.f))) {
                 clip.fit = mode;
                 edit = "Change size";
-            }
-
-            if (current) {
-                ImGui::PopStyleColor();
             }
 
             ImGui::SetItemTooltip("%s", mode == FitMode::Fit ? "The whole picture, as large as the frame allows"
@@ -478,19 +469,11 @@ void Inspector::speedSection(Project& project, Clip& clip, std::string& edit)
             ImGui::SameLine(0.f, spacing);
         }
 
-        const std::string label = (presets[i] == 1.0) ? std::string("1x") : (std::to_string((int)(presets[i] * 100.0)) + "%");
+        const std::string label = std::to_string((int)(presets[i] * 100.0)) + "%";
         const bool current = std::abs(clip.speed - presets[i]) < 1e-6;
 
-        if (current) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        }
-
-        if (ImGui::Button(label.c_str(), ImVec2(width, 0.f)) && !current && project.setClipSpeed(clip.id, presets[i])) {
+        if (widgets::optionButton(label.c_str(), current, ImVec2(width, 0.f)) && project.setClipSpeed(clip.id, presets[i])) {
             edit = "Change speed";
-        }
-
-        if (current) {
-            ImGui::PopStyleColor();
         }
     }
 }
@@ -1100,17 +1083,9 @@ void Inspector::textSection(Clip& clip, FontLibrary& fonts, const TextSelection&
         for (int i = 0; i < 3; i++) {
             const bool selected = (int)text.align == i;
 
-            if (selected) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            }
-
-            if (ImGui::Button(alignIcons[i]) && !selected) {
+            if (widgets::optionButton(alignIcons[i], selected, ImVec2(ImGui::GetFrameHeight(), 0.f))) {
                 text.align = (TextAlign)i;
                 edit = "Align text";
-            }
-
-            if (selected) {
-                ImGui::PopStyleColor();
             }
 
             ImGui::SameLine();

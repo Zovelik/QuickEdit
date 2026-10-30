@@ -7,7 +7,7 @@
 #include <app/Inspector.h>
 #include <app/SubtitleGenerator.h>
 #include <app/KeyframeEditor.h>
-#include <app/TextEditor.h>
+#include <app/ViewerTextEditor.h>
 #include <app/TimelineView.h>
 
 #include <audio/AudioEngine.h>
@@ -32,6 +32,8 @@
 #include <string>
 #include <vector>
 
+
+class TextEditor;
 
 class GUI : public GUIBase
 {
@@ -303,6 +305,13 @@ private:
     std::string _shaderEditorText;
     std::string _shaderEditorSaved;
     std::string _shaderEditorError;
+
+    // The code, with syntax colors and the errors marked on their lines.
+    std::unique_ptr<TextEditor> _codeEditor;
+    size_t _codeEditorUndoIndex = 0;
+    ImFont* _codeFont = nullptr;            // Monospace font of the system, if any
+    void setCodeEditorText(const std::string& text);
+    void markShaderErrors();
     double _shaderEditorChecked = 0.;       // Last typed, or compiled
     bool _shaderEditorDirty = false;        // Typed since
     const core::ShaderDef* newShader(core::ShaderKind kind);
@@ -519,7 +528,7 @@ private:
     // timeline.
     void keyframesPanel();
     KeyframeEditor _keyframes;
-    TextEditor _textEditor;
+    ViewerTextEditor _textEditor;
 
     // Starts / stops editing a text in the viewer.
     void beginTextEditing(core::Id clipId);

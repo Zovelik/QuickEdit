@@ -109,7 +109,7 @@ set(QUICKEDIT_SRC
     app/Inspector.cpp
     app/SubtitleGenerator.cpp
     app/KeyframeEditor.cpp
-    app/TextEditor.cpp
+    app/ViewerTextEditor.cpp
     app/TimelineView.cpp
 
     audio/AudioEngine.cpp
@@ -157,7 +157,7 @@ if (MSVC)
     target_compile_options(QuickEdit PRIVATE /utf-8)
 endif()
 
-target_link_libraries(QuickEdit PRIVATE QuickEditCore QuickEditMedia SDL3::SDL3 Vulkan::Vulkan imgui
+target_link_libraries(QuickEdit PRIVATE QuickEditCore QuickEditMedia SDL3::SDL3 Vulkan::Vulkan imgui ImGuiColorTextEdit
     FFmpeg::avformat FFmpeg::avcodec FFmpeg::avutil FFmpeg::avfilter FFmpeg::avdevice FFmpeg::swresample FFmpeg::swscale vst3host)
 
 if (WIN32)

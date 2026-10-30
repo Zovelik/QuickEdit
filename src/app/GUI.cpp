@@ -5,6 +5,8 @@
 #include <fonts/icons.h>
 #include <fonts/IconsMaterialDesign.h>
 
+#include <TextEditor.h>
+
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
@@ -78,6 +80,46 @@ void toolbarSeparator()
 }
 
 
+// Flat button of the toolbars of the panels, as tall as the other widgets
+// of the line (combos, sliders); square when it is an icon alone. The
+// selected one (a tool, a toggle) is highlighted. Stays on the same line.
+bool panelButton(const char* label, const char* tooltip, bool selected = false, bool enabled = true)
+{
+    // An icon is one character of the private use area: 3 bytes in UTF-8.
+    const char* end = ImGui::FindRenderedTextEnd(label);
+    const bool iconOnly = (end - label) == 3 && (unsigned char)label[0] == 0xEE;
+    const ImVec2 size(iconOnly ? ImGui::GetFrameHeight() : 0.f, ImGui::GetFrameHeight());
+
+    ImGui::PushStyleColor(ImGuiCol_Button, selected ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive) : ImVec4(0.f, 0.f, 0.f, 0.f));
+    ImGui::BeginDisabled(!enabled);
+    const bool pressed = ImGui::Button(label, size);
+    ImGui::EndDisabled();
+    ImGui::PopStyleColor();
+
+    if (tooltip && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+
+    ImGui::SameLine();
+    return pressed;
+}
+
+
+// Space between two groups of a panel toolbar, with a thin line.
+void panelSeparator()
+{
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const float x = std::floor(pos.x + style.ItemSpacing.x) + 0.5f;
+    const float inset = 0.2f * ImGui::GetFrameHeight();
+
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(x, pos.y + inset), ImVec2(x, pos.y + ImGui::GetFrameHeight() - inset),
+        ImGui::GetColorU32(ImGuiCol_Separator));
+    ImGui::Dummy(ImVec2(2.f * style.ItemSpacing.x, ImGui::GetFrameHeight()));
+    ImGui::SameLine();
+}
+
+
 // Begins a menu of the menu bar whose highlight fills the bar from top to
 // bottom, so it joins the menu opened below without any gap.
 bool beginBarMenu(const char* label)
@@ -138,6 +180,34 @@ GUI::GUI(const std::filesystem::path& projectPath, double startSeconds, Id selec
         iconFontSize,
         &cfgIcons
     );
+
+    // A monospace font of the system for the code, if one is found.
+    {
+        std::vector<std::filesystem::path> candidates;
+
+#ifdef _WIN32
+        if (const char* windows = std::getenv("WINDIR")) {
+            candidates.push_back(std::filesystem::path(windows) / "Fonts" / "CascadiaMono.ttf");
+            candidates.push_back(std::filesystem::path(windows) / "Fonts" / "consola.ttf");
+        }
+#else
+        candidates = {
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+        };
+#endif
+
+        for (const std::filesystem::path& path : candidates) {
+            std::error_code ec;
+
+            if (std::filesystem::exists(path, ec)) {
+                _codeFont = io.Fonts->AddFontFromFileTTF(path.string().c_str(), 0.f);
+                break;
+            }
+        }
+    }
 
     _timeline.waveformOf = [this](Id mediaId) { return _media.waveform(mediaId); };
     _timeline.thumbnailsOf = [this](Id mediaId) { return thumbnailsOf(mediaId); };
@@ -1649,16 +1719,29 @@ void GUI::viewerPanel()
     ImGui::SameLine(std::max(0.f, 0.5f * (avail.x - buttonsWidth)));
     ImGui::PushStyleVarX(ImGuiStyleVar_ItemSpacing, style.ItemInnerSpacing.x);
 
+    // Flat, as the other toolbars; Play stands out.
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.f, 0.f, 0.f, 0.f));
+
     if (ImGui::Button(ICON_MD_SKIP_PREVIOUS, ImVec2(buttonWidth, 0)))   { seek(0); }
+    ImGui::SetItemTooltip("Go to Start (Home)");
     ImGui::SameLine();
     if (ImGui::Button(ICON_MD_NAVIGATE_BEFORE, ImVec2(buttonWidth, 0))) { stepFrames(-1); }
+    ImGui::SetItemTooltip("Previous Frame (Left)");
     ImGui::SameLine();
+
+    ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
     if (ImGui::Button(_playing ? ICON_MD_PAUSE : ICON_MD_PLAY_ARROW, ImVec2(buttonWidth, 0))) { togglePlayback(); }
+    ImGui::PopStyleColor();
+    ImGui::SetItemTooltip(_playing ? "Pause (Space)" : "Play (Space)");
     ImGui::SameLine();
+
     if (ImGui::Button(ICON_MD_NAVIGATE_NEXT, ImVec2(buttonWidth, 0)))   { stepFrames(1); }
+    ImGui::SetItemTooltip("Next Frame (Right)");
     ImGui::SameLine();
     if (ImGui::Button(ICON_MD_SKIP_NEXT, ImVec2(buttonWidth, 0)))       { seek(sequence.duration()); }
+    ImGui::SetItemTooltip("Go to End (End)");
 
+    ImGui::PopStyleColor();
     ImGui::PopStyleVar();
 
     const std::string duration = formatTimecode(sequence.duration(), sequence.frameRate);
@@ -1737,7 +1820,7 @@ void GUI::viewerInteraction(const ImVec2& frameMin, const ImVec2& frameSize)
             const Time localTime = _playhead - clip->start;
             const float rotation = clip->transform.rotation.at(localTime) * 3.14159265358979f / 180.f;
 
-            TextEditor::Mapping mapping;
+            ViewerTextEditor::Mapping mapping;
             mapping.scale = clip->transform.scale.at(localTime);
             mapping.cosine = std::cos(rotation);
             mapping.sine = std::sin(rotation);
@@ -2397,6 +2480,7 @@ void GUI::editShader(const std::string& shaderId)
     _shaderEditorText = readText(path);
     _shaderEditorSaved = _shaderEditorText;
     _showShaderEditor = true;
+    setCodeEditorText(_shaderEditorText);
     checkEditedShader();
     ImGui::SetWindowFocus("###shaderEditor");
 }
@@ -2417,6 +2501,62 @@ void GUI::checkEditedShader()
 
     _shaderEditorDirty = false;
     _shaderEditorChecked = ImGui::GetTime();
+    markShaderErrors();
+}
+
+
+void GUI::setCodeEditorText(const std::string& text)
+{
+    if (!_codeEditor) {
+        _codeEditor = std::make_unique<TextEditor>();
+        _codeEditor->SetLanguage(TextEditor::Language::Glsl());
+        _codeEditor->SetPalette(TextEditor::GetDarkPalette());
+        _codeEditor->SetTabSize(4);
+        _codeEditor->SetShowLineNumbersEnabled(true);
+        _codeEditor->SetShowWhitespacesEnabled(false);
+    }
+
+    _codeEditor->SetText(text);
+    _codeEditorUndoIndex = _codeEditor->GetUndoIndex();
+}
+
+
+void GUI::markShaderErrors()
+{
+    if (!_codeEditor) {
+        return;
+    }
+
+    _codeEditor->ClearMarkers();
+
+    // The messages of the compiler: "name:line: error: text", the lines of
+    // the file from 1 (the wrapping code says #line 1).
+    std::istringstream messages(_shaderEditorError);
+    std::string message;
+
+    while (std::getline(messages, message)) {
+        const size_t colon = message.find(':');
+        const size_t next = (colon == std::string::npos) ? std::string::npos : message.find(':', colon + 1);
+
+        if (next == std::string::npos) {
+            continue;
+        }
+
+        const std::string number = message.substr(colon + 1, next - colon - 1);
+
+        if (number.empty() || !std::all_of(number.begin(), number.end(), [](char c) { return c >= '0' && c <= '9'; })) {
+            continue;
+        }
+
+        const size_t line = (size_t)std::max(1, std::atoi(number.c_str())) - 1;
+        const std::string text = message.substr(std::min(message.size(), next + 2));
+        const bool warning = text.rfind("warning", 0) == 0;
+        const ImU32 color = warning ? IM_COL32(230, 170, 40, 90) : IM_COL32(220, 60, 50, 90);
+
+        if (line < _codeEditor->GetLineCount()) {
+            _codeEditor->AddMarker(line, color, color, text, text);
+        }
+    }
 }
 
 
@@ -2473,45 +2613,56 @@ void GUI::shaderEditorWindow()
         _showShaderEditor = false;
     }
 
-    // Toolbar
-    ImGui::BeginDisabled(!modified);
+    // Toolbar, flat as those of the other panels.
+    ImGui::PushStyleVarX(ImGuiStyleVar_ItemSpacing, ImGui::GetStyle().ItemInnerSpacing.x);
 
-    if (ImGui::Button(ICON_MD_SAVE " Save")) {
+    if (panelButton(ICON_MD_SAVE " Save", "Saved, and used by the clips at once (Ctrl+S)", false, modified)) {
         saveShader();
     }
 
-    ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Ctrl + S: saved, and used by the clips at once.");
-    ImGui::SameLine();
-
-    if (ImGui::Button(ICON_MD_OPEN_IN_NEW " Open in External Editor")) {
+    if (panelButton(ICON_MD_OPEN_IN_NEW " Open in External Editor", nullptr)) {
         if (modified) saveShader();
         const std::u8string path = _shaderEditorPath.generic_u8string();
         SDL_OpenURL(("file:///" + std::string(path.begin(), path.end())).c_str());
     }
 
-    ImGui::SameLine();
-
-    if (ImGui::Button(ICON_MD_REFRESH " Reload")) {
+    if (panelButton(ICON_MD_REFRESH " Reload", "Read the file again (after a change in another editor)")) {
         _shaderEditorText = readText(_shaderEditorPath);
         _shaderEditorSaved = _shaderEditorText;
+        setCodeEditorText(_shaderEditorText);
         checkEditedShader();
         reloadShaders(true);
     }
 
-    ImGui::SetItemTooltip("Read the file again (after a change in another editor).");
-    ImGui::SameLine();
-
-    if (ImGui::Button(ICON_MD_FOLDER_OPEN " Folder")) {
+    if (panelButton(ICON_MD_FOLDER_OPEN " Folder", "Open the folder of the shaders")) {
         openShaderFolder();
     }
+
+    ImGui::NewLine();
+    ImGui::PopStyleVar();
 
     // The code, with the messages of the compiler below.
     const float errorHeight = _shaderEditorError.empty() ? ImGui::GetFrameHeightWithSpacing()
                                                          : 5.f * ImGui::GetTextLineHeightWithSpacing();
 
-    if (ImGui::InputTextMultiline("##code", &_shaderEditorText, ImVec2(-FLT_MIN, -errorHeight),
-            ImGuiInputTextFlags_AllowTabInput)) {
+    if (!_codeEditor) {
+        setCodeEditorText(_shaderEditorText);
+    }
+
+    if (_codeFont) {
+        ImGui::PushFont(_codeFont, 0.f);
+    }
+
+    _codeEditor->Render("##code", ImVec2(-FLT_MIN, -errorHeight), ImGuiChildFlags_Borders);
+
+    if (_codeFont) {
+        ImGui::PopFont();
+    }
+
+    // Typed (or undone): the text follows, checked once typing pauses.
+    if (_codeEditor->GetUndoIndex() != _codeEditorUndoIndex) {
+        _codeEditorUndoIndex = _codeEditor->GetUndoIndex();
+        _shaderEditorText = _codeEditor->GetText();
         _shaderEditorDirty = true;
         _shaderEditorChecked = ImGui::GetTime();
     }
@@ -4370,58 +4521,32 @@ void GUI::timelinePanel()
     if (open) {
         sequenceTabs();
 
+        // Toolbar: tools and snapping, zoom, tracks, help.
         ImGui::PushStyleVarX(ImGuiStyleVar_ItemSpacing, ImGui::GetStyle().ItemInnerSpacing.x);
 
-        // Tools, then the snapping.
         for (const TimelineToolInfo& info : timelineTools()) {
-            const bool current = _timeline.tool() == info.tool;
+            char tooltip[256];
+            std::snprintf(tooltip, sizeof(tooltip), "%s (%s)\n%s", info.label, info.shortcut, info.help);
 
-            if (current) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            }
-
-            if (ImGui::SmallButton(info.icon)) {
+            if (panelButton(info.icon, tooltip, _timeline.tool() == info.tool)) {
                 _timeline.setTool(info.tool);
             }
-
-            if (current) {
-                ImGui::PopStyleColor();
-            }
-
-            ImGui::SetItemTooltip("%s (%s)\n%s", info.label, info.shortcut, info.help);
-            ImGui::SameLine();
         }
 
-        {
-            const bool snapping = _timeline.snapping();
+        panelSeparator();
 
-            if (snapping) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            }
-
-            if (ImGui::SmallButton(ICON_MD_VERTICAL_ALIGN_CENTER)) {
-                _timeline.setSnapping(!snapping);
-            }
-
-            if (snapping) {
-                ImGui::PopStyleColor();
-            }
-
-            ImGui::SetItemTooltip("Snapping (N)");
+        if (panelButton(ICON_MD_VERTICAL_ALIGN_CENTER, "Snapping (N)", _timeline.snapping())) {
+            _timeline.setSnapping(!_timeline.snapping());
         }
 
-        // Zoom
-        ImGui::SameLine(0.f, 3.f * ImGui::GetStyle().ItemSpacing.x);
+        panelSeparator();
 
-        if (ImGui::SmallButton(ICON_MD_REMOVE)) {
+        if (panelButton(ICON_MD_ZOOM_OUT, "Zoom Out (Ctrl+-, Ctrl+Wheel)")) {
             _timeline.setZoom(_timeline.zoom() / 1.5f);
         }
 
-        ImGui::SetItemTooltip("Zoom Out (Ctrl+-, Ctrl+Wheel)");
-        ImGui::SameLine();
-
         float zoom = _timeline.zoom();
-        ImGui::SetNextItemWidth(10.f * ImGui::GetFontSize());
+        ImGui::SetNextItemWidth(8.f * ImGui::GetFontSize());
 
         if (ImGui::SliderFloat("##zoom", &zoom, 0.5f, 2000.f, "", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoInput)) {
             _timeline.setZoom(zoom);
@@ -4430,38 +4555,40 @@ void GUI::timelinePanel()
         ImGui::SetItemTooltip("Zoom");
         ImGui::SameLine();
 
-        if (ImGui::SmallButton(ICON_MD_ADD)) {
+        if (panelButton(ICON_MD_ZOOM_IN, "Zoom In (Ctrl++, Ctrl+Wheel)")) {
             _timeline.setZoom(_timeline.zoom() * 1.5f);
         }
 
-        ImGui::SetItemTooltip("Zoom In (Ctrl++, Ctrl+Wheel)");
-        ImGui::SameLine();
-
-        if (ImGui::SmallButton(ICON_MD_FIT_SCREEN " Fit")) {
+        if (panelButton(ICON_MD_FIT_SCREEN, "Show the whole sequence (Ctrl+0)")) {
             _timeline.requestZoomToFit();
         }
 
-        ImGui::SetItemTooltip("Show the whole sequence (Ctrl+0)");
+        panelSeparator();
 
-        // Tracks
-        ImGui::SameLine(0.f, 3.f * ImGui::GetStyle().ItemSpacing.x);
-
-        if (ImGui::SmallButton(ICON_MD_LIBRARY_ADD " Video Track")) {
+        if (panelButton(ICON_MD_LIBRARY_ADD, "Add a video track (with its sound track)")) {
             addTrack(TrackType::Video);
         }
 
-        ImGui::SetItemTooltip("Add a video track (with its sound track)");
-        ImGui::SameLine();
-
-        if (ImGui::SmallButton(ICON_MD_PLAYLIST_ADD " Audio Track")) {
+        if (panelButton(ICON_MD_PLAYLIST_ADD, "Add an audio track")) {
             addTrack(TrackType::Audio);
         }
 
-        ImGui::SetItemTooltip("Add an audio track");
-        ImGui::PopStyleVar();
+        if (panelButton(ICON_MD_SUBTITLES, "Add a subtitle track")) {
+            addTrack(TrackType::Subtitle);
+        }
 
-        ImGui::SameLine();
-        ImGui::TextDisabled("  Middle button: move around   Click between clips: select a gap");
+        // The mouse, in a tooltip rather than always on screen.
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - ImGui::GetFrameHeight()));
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled(ICON_MD_HELP_OUTLINE);
+        ImGui::SetItemTooltip(
+            "Click on the ruler: move the playhead (drag to hear the sound)\n"
+            "Click between clips: select the gap (Delete closes it)\n"
+            "Drag on an empty area: select the clips in a rectangle\n"
+            "Right click: menus of the clips and of the tracks\n"
+            "Wheel: scroll in time   Ctrl+Wheel: zoom   Shift+Wheel: scroll the tracks\n"
+            "Middle button: move around");
+        ImGui::PopStyleVar();
 
         if (_recorder.recording() && !_screenRecording) {
             updateLiveWaveform();
