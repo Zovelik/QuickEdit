@@ -24,10 +24,21 @@ std::unordered_map<std::string, std::string> catalog;
 std::unordered_map<std::string, std::string> translated;
 
 
+// Next to the executable (Windows, builds), or in share/quickedit of an
+// installation following the freedesktop layout (Linux, AppImage).
 std::filesystem::path languageFolder()
 {
     const char* base = SDL_GetBasePath();
-    return std::filesystem::u8path(base ? base : "") / "lang";
+    const std::filesystem::path folder = std::filesystem::u8path(base ? base : "");
+    std::error_code error;
+
+    if (std::filesystem::is_directory(folder / "lang", error)) {
+        return folder / "lang";
+    }
+
+    // The base path ends with a separator: bin/, then its parent.
+    const std::filesystem::path bin = folder.has_filename() ? folder : folder.parent_path();
+    return bin.parent_path() / "share" / "quickedit" / "lang";
 }
 
 

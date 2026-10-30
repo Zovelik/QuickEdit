@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=QuickEdit
+GenericName=Video Editor
+GenericName[fr]=Éditeur vidéo
+Comment=Video editor, simple to use yet powerful, rendered with Vulkan
+Comment[fr]=Éditeur vidéo simple à utiliser et puissant, rendu avec Vulkan
+Exec=QuickEdit %f
+Icon=quickedit
+Terminal=false
+Categories=AudioVideo;Video;AudioVideoEditing;
+MimeType=application/x-quickedit-project;
+Keywords=video;editor;montage;timeline;subtitles;

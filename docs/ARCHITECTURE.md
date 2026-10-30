@@ -182,8 +182,7 @@ recording, video effects, user shaders, nested sequences, subtitles with
 automatic transcription, clip speed, timeline tools, loudness normalization,
 interface in English and French.
 
-Next: packages (Windows installer, Linux AppImage)
-built by GitHub Actions, Linux check of the capture and the plugin editors,
+Next: Linux check of the capture and the plugin editors,
 spectrum display of the sound.
 
 ## Building

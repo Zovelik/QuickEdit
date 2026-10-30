@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>quickedit</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <name>QuickEdit</name>
+  <summary>Video editor, simple to use yet powerful, rendered with Vulkan</summary>
+
+  <description>
+    <p>
+      QuickEdit is a video editor made for videos built around a voice-over:
+      record and clean the voice quickly, put music under it, and screen
+      captures, videos and animated texts over it. Decoding, compositing,
+      effects and encoding run on the GPU with Vulkan.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">quickedit.desktop</launchable>
+
+  <url type="homepage">https://github.com/Zovelik/QuickEdit</url>
+  <url type="bugtracker">https://github.com/Zovelik/QuickEdit/issues</url>
+
+  <provides>
+    <binary>QuickEdit</binary>
+    <mediatype>application/x-quickedit-project</mediatype>
+  </provides>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Video</category>
+  </categories>
+
+  <content_rating type="oars-1.1"/>
+</component>

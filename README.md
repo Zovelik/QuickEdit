@@ -103,6 +103,26 @@ ctest --test-dir out/build/x64-Release
 On Windows, run these from a Visual Studio developer prompt, or open the
 folder in Visual Studio (`CMakeSettings.json`).
 
+### Packages
+
+```
+cpack -C Release --config out/build/x64-Release/CPackConfig.cmake
+```
+
+- Windows: an installer (NSIS, which must be installed) and a zip. The
+  installer puts QuickEdit in `Program Files\QuickEdit` with a Start menu
+  shortcut and an optional desktop shortcut, opens the `.qep` projects with
+  it, and registers an uninstaller. The settings of the users stay in their
+  own folders (see below), the uninstaller leaves them.
+- Linux: an AppImage (CMake 4.1 or newer, with `linuxdeploy` and
+  `appimagetool` on the `PATH`), with a desktop entry, the `.qep` file type
+  and AppStream data.
+
+The GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests
+every push to `master`; a published release (or a manual run of the
+workflow) also builds the packages and attaches them to the release. The
+version is the last git tag (`v1.2.0` gives 1.2.0).
+
 ## Languages
 
 The interface is in English and French (View > Language; the language of
@@ -114,7 +134,7 @@ A new language is a new catalog, with its name in `"_language"`.
 
 ## Where things go
 
-- Settings (language) and caches: `%APPDATA%\QuickEdit` on Windows,
+- Settings (language, window layout) and caches: `%APPDATA%\QuickEdit` on Windows,
   `~/.config/quickedit` on Linux.
 - Recordings: a `Recordings` folder next to the project, or
   `Documents/QuickEdit/Recordings` for a project not saved yet.

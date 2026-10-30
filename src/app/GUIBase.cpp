@@ -1,5 +1,6 @@
 #include <app/GUIBase.h>
 #include <app/BorderlessWindow.h>
+#include <core/Paths.h>
 
 #include <fonts/icons.h>
 #include <fonts/inter.h>
@@ -793,6 +794,11 @@ void GUIBase::createImGui()
     ImGui::CreateContext();
 
     ImGuiIO& io = ImGui::GetIO();
+
+    // The layout of the windows with the other settings of the user, not
+    // next to the executable (not writable once installed).
+    static const std::string iniPath = (core::configDirectory() / "imgui.ini").string();
+    io.IniFilename = iniPath.c_str();
 
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls

@@ -6,7 +6,9 @@
 #   3rdparty/ffmpeg/win64 (https://github.com/BtbN/FFmpeg-Builds, the
 #   "win64-lgpl-shared" archive). FFMPEG_RUNTIME_DLLS lists the DLLs to copy
 #   next to the executable.
-# Linux: the system libraries, through pkg-config.
+# Linux: the prebuilt shared build of FFMPEG_ROOT when given (the
+#   "linux64-lgpl-shared" archive), else the system libraries, through
+#   pkg-config.
 #
 # FFmpeg 7.1 or newer is required (Vulkan hardware decoding and encoding).
 
@@ -37,6 +39,25 @@ if (WIN32)
         )
 
         list(APPEND FFMPEG_RUNTIME_DLLS "${dll}")
+    endforeach()
+elseif (FFMPEG_ROOT)
+    # A prebuilt shared build (the "linux64-lgpl-shared" archive), when the
+    # system has an older FFmpeg.
+    set(FFmpeg_FOUND TRUE)
+
+    foreach(component ${FFMPEG_COMPONENTS})
+        find_library(FFMPEG_${component}_LIBRARY NAMES ${component} PATHS "${FFMPEG_ROOT}/lib" NO_DEFAULT_PATH)
+
+        if (NOT FFMPEG_${component}_LIBRARY)
+            set(FFmpeg_FOUND FALSE)
+            continue()
+        endif()
+
+        add_library(FFmpeg::${component} SHARED IMPORTED)
+        set_target_properties(FFmpeg::${component} PROPERTIES
+            IMPORTED_LOCATION "${FFMPEG_${component}_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${FFMPEG_ROOT}/include"
+        )
     endforeach()
 else()
     find_package(PkgConfig REQUIRED)

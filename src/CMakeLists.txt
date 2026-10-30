@@ -208,4 +208,41 @@ if (WIN32)
     target_link_libraries(QuickEdit PRIVATE comctl32 dwmapi strmiids ole32 oleaut32)
 endif()
 
-install(TARGETS QuickEdit DESTINATION .)
+# Licenses of the libraries in the packages.
+set(QUICKEDIT_LICENSE_DIR "licenses")
+
+if (NOT WIN32)
+    set(QUICKEDIT_LICENSE_DIR "${CMAKE_INSTALL_DATADIR}/quickedit/licenses")
+endif()
+
+foreach(license
+        "SDL3|${CMAKE_SOURCE_DIR}/3rdparty/SDL/LICENSE.txt"
+        "Dear ImGui|${CMAKE_SOURCE_DIR}/3rdparty/imgui/imgui/LICENSE.txt"
+        "ImGuiColorTextEdit|${CMAKE_SOURCE_DIR}/3rdparty/ImGuiColorTextEdit/LICENSE"
+        "VST3 SDK|${CMAKE_SOURCE_DIR}/3rdparty/vst3sdk/LICENSE.txt"
+        "whisper.cpp|${CMAKE_SOURCE_DIR}/3rdparty/whisper.cpp/LICENSE"
+        "FFmpeg|${FFMPEG_ROOT}/LICENSE.txt")
+    string(REPLACE "|" ";" license "${license}")
+    list(GET license 0 name)
+    list(GET license 1 file)
+
+    if (EXISTS "${file}")
+        install(FILES "${file}" DESTINATION ${QUICKEDIT_LICENSE_DIR} RENAME "${name}.txt")
+    endif()
+endforeach()
+
+# Installation: everything beside the executable on Windows; the
+# freedesktop layout elsewhere (the translations in share/quickedit).
+if (WIN32)
+    install(TARGETS QuickEdit DESTINATION .)
+    install(DIRECTORY ${CMAKE_SOURCE_DIR}/lang DESTINATION .)
+    install(FILES ${CMAKE_SOURCE_DIR}/README.md DESTINATION .)
+else()
+    install(TARGETS QuickEdit DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(DIRECTORY ${CMAKE_SOURCE_DIR}/lang DESTINATION ${CMAKE_INSTALL_DATADIR}/quickedit)
+    install(FILES ${CMAKE_SOURCE_DIR}/package/linux/quickedit.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES ${CMAKE_SOURCE_DIR}/package/linux/quickedit.metainfo.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+    install(FILES ${CMAKE_SOURCE_DIR}/package/linux/quickedit-mime.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/mime/packages)
+    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/resources/icon.png
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps RENAME quickedit.png)
+endif()
