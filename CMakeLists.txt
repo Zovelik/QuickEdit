@@ -73,9 +73,10 @@ if (WIN32)
     set(CPACK_GENERATOR "NSIS;ZIP")
     include(package/windows/Installer.cmake)
 elseif (UNIX AND NOT APPLE)
-    # Native AppImage generator of CPack (CMake 4.1 or newer), driving
-    # linuxdeploy: the desktop entry, icon and AppStream data are installed
-    # in the freedesktop layout (src/CMakeLists.txt).
+    # Native AppImage generator of CPack (a recent CMake, 4.3 in the
+    # workflow, with appimagetool and patchelf): the desktop entry, icon and AppStream data
+    # are installed in the freedesktop layout, FFmpeg and shaderc in lib/
+    # (src/CMakeLists.txt).
     set(CPACK_GENERATOR "AppImage")
     set(CPACK_PACKAGE_ICON "quickedit.png")
 endif()

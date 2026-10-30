@@ -175,6 +175,10 @@ private:
 
     static void* allocRequiredFeatures(bool videoMaintenance1);
     static void freeRequiredFeatures(void* features);
+
+    // Leaves out of the features those the device does not have (some
+    // drivers lack a few, used only when there), logged.
+    static void keepSupportedFeatures(VkPhysicalDevice physicalDevice, void* features);
     static SDL_HitTestResult SDLCALL sdlHitTest(SDL_Window* win, const SDL_Point* area, void* data);
 
     // On Windows the main loop is blocked in the OS modal loop while the

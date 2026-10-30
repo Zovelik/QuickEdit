@@ -121,9 +121,18 @@ cpack -C Release --config out/build/x64-Release/CPackConfig.cmake
   shortcut and an optional desktop shortcut, opens the `.qep` projects with
   it, and registers an uninstaller. The settings of the users stay in their
   own folders (see below), the uninstaller leaves them.
-- Linux: an AppImage (CMake 4.1 or newer, with `linuxdeploy` and
-  `appimagetool` on the `PATH`), with a desktop entry, the `.qep` file type
-  and AppStream data.
+- Linux: an AppImage (a recent CMake, 4.3 in the workflow, with
+  `appimagetool` and `patchelf` on the `PATH`), with a desktop entry, the
+  `.qep` file type and AppStream data. FFmpeg and shaderc are inside it; the
+  Vulkan loader is the one of the system.
+
+The Linux build of the workflow runs locally in Docker (Ubuntu 22.04, the
+same compiler, SDKs and AppImage tools), from any system:
+
+```
+docker build -t quickedit-linux tools/linux
+docker run --rm -e PACKAGE=1 -v "$PWD:/src:ro" -v quickedit-build:/work quickedit-linux bash /src/tools/linux/build.sh
+```
 
 The GitHub Actions workflow (`.github/workflows/build.yml`) runs for a
 published release: it builds, tests and packages QuickEdit, and attaches the

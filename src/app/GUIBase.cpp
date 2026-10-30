@@ -587,6 +587,7 @@ void GUIBase::createVulkanDevice()
 
     // The features stay allocated: FFmpeg reads them, see deviceFeatures().
     _deviceFeatures = GUIBase::allocRequiredFeatures(_hasVideoEncodeQueue);
+    keepSupportedFeatures(physicalDevice, _deviceFeatures);
     _pDevice = new GPU::Device(_pInstance->instance(), physicalDevice, queueFlags, deviceExtensions, _deviceFeatures);
     _deviceExtensions = deviceExtensions;
 
@@ -1090,6 +1091,55 @@ VKAPI_ATTR VkBool32 VKAPI_CALL GUIBase::debugCallback(
     std::memset(_Var, 0, sizeof(_Type)); \
     _Prev->pNext = (void*)_Var; \
     _Prev = (VkPhysicalDeviceFeatures2*)_Var;
+
+
+void GUIBase::keepSupportedFeatures(VkPhysicalDevice physicalDevice, void* features)
+{
+    // The structures of the chain: a header, then only VkBool32 fields.
+    auto sizeOf = [](VkStructureType type) -> size_t {
+        switch (type) {
+            case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2:                     return sizeof(VkPhysicalDeviceFeatures2);
+            case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES:            return sizeof(VkPhysicalDeviceVulkan11Features);
+            case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES:            return sizeof(VkPhysicalDeviceVulkan12Features);
+            case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES:            return sizeof(VkPhysicalDeviceVulkan13Features);
+            case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_MAINTENANCE_1_FEATURES_KHR: return sizeof(VkPhysicalDeviceVideoMaintenance1FeaturesKHR);
+            default:                                                                return 0;
+        }
+    };
+
+    // The same chain, filled by the device.
+    std::vector<std::vector<uint8_t>> supported;
+
+    for (const VkBaseOutStructure* s = (const VkBaseOutStructure*)features; s; s = s->pNext) {
+        std::vector<uint8_t>& copy = supported.emplace_back(std::max(sizeOf(s->sType), sizeof(VkBaseOutStructure)), (uint8_t)0);
+        ((VkBaseOutStructure*)copy.data())->sType = s->sType;
+    }
+
+    for (size_t i = 0; i + 1 < supported.size(); i++) {
+        ((VkBaseOutStructure*)supported[i].data())->pNext = (VkBaseOutStructure*)supported[i + 1].data();
+    }
+
+    if (supported.empty()) {
+        return;
+    }
+
+    vkGetPhysicalDeviceFeatures2(physicalDevice, (VkPhysicalDeviceFeatures2*)supported.front().data());
+
+    size_t index = 0;
+
+    for (VkBaseOutStructure* s = (VkBaseOutStructure*)features; s; s = s->pNext, index++) {
+        const size_t count = (sizeOf(s->sType) > sizeof(VkBaseOutStructure)) ? (sizeOf(s->sType) - sizeof(VkBaseOutStructure)) / sizeof(VkBool32) : 0;
+        VkBool32* wanted = (VkBool32*)((uint8_t*)s + sizeof(VkBaseOutStructure));
+        const VkBool32* available = (const VkBool32*)(supported[index].data() + sizeof(VkBaseOutStructure));
+
+        for (size_t field = 0; field < count; field++) {
+            if (wanted[field] && !available[field]) {
+                SDL_Log("Vulkan: feature %zu of structure %d not supported by the device, not asked for", field, (int)s->sType);
+                wanted[field] = VK_FALSE;
+            }
+        }
+    }
+}
 
 
 void* GUIBase::allocRequiredFeatures(bool videoMaintenance1)

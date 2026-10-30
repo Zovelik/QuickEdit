@@ -191,7 +191,7 @@ std::string Inspector::drawClip(Project& project, const std::vector<Id>& selecti
     if (!clip) {
         sequenceSection(project, edit);
         ImGui::Spacing();
-        ImGui::TextDisabled(tr("Select a clip to edit its properties."));
+        ImGui::TextDisabled("%s", tr("Select a clip to edit its properties."));
         return edit;
     }
 
@@ -314,7 +314,7 @@ std::string Inspector::drawClip(Project& project, const std::vector<Id>& selecti
         }
         finishedEdit(edit, "Change fade");
 
-        ImGui::TextDisabled(tr("Or drag the handles at the top corners of the clip."));
+        ImGui::TextDisabled("%s", tr("Or drag the handles at the top corners of the clip."));
     }
 
     if (selection.size() > 1) {
@@ -352,7 +352,7 @@ bool Inspector::animatedRow(const char* label, AnimatedValue& value, Time localT
     ImGui::PopStyleColor();
 
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip)) {
-        ImGui::SetTooltip(atKey ? tr("Remove the keyframe") : tr("Add a keyframe at the playhead"));
+        ImGui::SetTooltip("%s", atKey ? tr("Remove the keyframe") : tr("Add a keyframe at the playhead"));
     }
 
     if (toggled) {
@@ -511,7 +511,7 @@ void Inspector::frameSection(Clip& clip, std::string& edit)
         edit = "Crop";
     }
 
-    ImGui::SetItemTooltip(tr("Keep the left half of the picture, in place"));
+    ImGui::SetItemTooltip("%s", tr("Keep the left half of the picture, in place"));
     ImGui::SameLine();
 
     if (ImGui::Button(tr("Right Half"), ImVec2(third, 0.f))) {
@@ -520,7 +520,7 @@ void Inspector::frameSection(Clip& clip, std::string& edit)
         edit = "Crop";
     }
 
-    ImGui::SetItemTooltip(tr("Keep the right half of the picture, in place"));
+    ImGui::SetItemTooltip("%s", tr("Keep the right half of the picture, in place"));
     ImGui::SameLine();
 
     if (ImGui::Button(tr("No Crop"), ImVec2(third, 0.f))) {
@@ -610,7 +610,7 @@ void Inspector::speedSection(Project& project, Clip& clip, std::string& edit)
         project.setClipSpeed(clip.id, (double)percent / 100.0);
     }
 
-    ImGui::SetItemTooltip(tr("Playback speed: the clip gets shorter or longer, the clips after it follow.\n"
+    ImGui::SetItemTooltip("%s", tr("Playback speed: the clip gets shorter or longer, the clips after it follow.\n"
         "The sound plays faster or slower (higher or lower)."));
     finishedEdit(edit, "Change speed");
 
@@ -656,7 +656,7 @@ void Inspector::videoEffectsSection(Project& project, std::vector<VideoEffect>& 
             edit = effect.enabled ? "Enable effect" : "Disable effect";
         }
 
-        ImGui::SetItemTooltip(tr("On / off"));
+        ImGui::SetItemTooltip("%s", tr("On / off"));
         ImGui::SameLine();
 
         const std::string title = std::string(info->icon) + " " + tr(info->name);
@@ -672,14 +672,14 @@ void Inspector::videoEffectsSection(Project& project, std::vector<VideoEffect>& 
         }
 
         ImGui::EndDisabled();
-        ImGui::SetItemTooltip(tr("Earlier in the chain"));
+        ImGui::SetItemTooltip("%s", tr("Earlier in the chain"));
         ImGui::SameLine();
 
         if (ImGui::SmallButton(ICON_MD_DELETE)) {
             removed = i;
         }
 
-        ImGui::SetItemTooltip(tr("Remove"));
+        ImGui::SetItemTooltip("%s", tr("Remove"));
 
         if (open && ImGui::BeginTable("##parameters", 2)) {
             ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed);
@@ -698,7 +698,7 @@ void Inspector::videoEffectsSection(Project& project, std::vector<VideoEffect>& 
 
                 finishedEdit(edit, "Change effect");
                 ImGui::SameLine();
-                ImGui::TextDisabled(tr("Pick the key color with the dropper."));
+                ImGui::TextDisabled("%s", tr("Pick the key color with the dropper."));
                 first = 3;
             }
 
@@ -771,7 +771,7 @@ void Inspector::presetsSection(Clip& clip, std::string& edit)
         edit = "Zoom in preset";
     }
 
-    ImGui::SetItemTooltip(tr("Appears by growing into place, then stays."));
+    ImGui::SetItemTooltip("%s", tr("Appears by growing into place, then stays."));
 
     ImGui::SameLine();
 
@@ -783,7 +783,7 @@ void Inspector::presetsSection(Clip& clip, std::string& edit)
         edit = "Slow zoom preset";
     }
 
-    ImGui::SetItemTooltip(tr("Zooms slowly into the picture over the whole clip (Ken Burns)."));
+    ImGui::SetItemTooltip("%s", tr("Zooms slowly into the picture over the whole clip (Ken Burns)."));
 
     if (ImGui::Button(tr("Fade In"), ImVec2(width, 0))) {
         const float end = t.opacity.at(half);
@@ -793,7 +793,7 @@ void Inspector::presetsSection(Clip& clip, std::string& edit)
         edit = "Fade in preset";
     }
 
-    ImGui::SetItemTooltip(tr("Fades in over the first half second."));
+    ImGui::SetItemTooltip("%s", tr("Fades in over the first half second."));
 
     ImGui::SameLine();
 
@@ -805,7 +805,7 @@ void Inspector::presetsSection(Clip& clip, std::string& edit)
         edit = "Fade out preset";
     }
 
-    ImGui::SetItemTooltip(tr("Fades out over the last half second."));
+    ImGui::SetItemTooltip("%s", tr("Fades out over the last half second."));
 
     if (ImGui::Button(tr(ICON_MD_CLEAR " Remove Animation"), ImVec2(-FLT_MIN, 0))) {
         for (AnimatedValue* value : { &t.x, &t.y, &t.scale, &t.rotation, &t.opacity }) {
@@ -898,7 +898,7 @@ void Inspector::subtitleStyleSection(Project& project, std::string& edit)
     propertyLabel("Margin");
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::DragFloat("##subtitleMargin", &style.bottomMargin, 0.5f, -2000.f, 2000.f, "%.0f px");
-    ImGui::SetItemTooltip(tr("From the bottom of the frame"));
+    ImGui::SetItemTooltip("%s", tr("From the bottom of the frame"));
     finishedEdit(edit, "Change subtitles");
 
     ImGui::EndTable();
@@ -911,7 +911,7 @@ void Inspector::generatorSection(Project& project, Clip& clip, Time localTime, s
     ImGui::SeparatorText((std::string(ICON_MD_AUTO_AWESOME " ") + (shader ? shader->name : clip.shader)).c_str());
 
     if (!shader) {
-        ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), tr(ICON_MD_WARNING " Shader not found"));
+        ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), "%s", tr(ICON_MD_WARNING " Shader not found"));
         return;
     }
 
@@ -1081,7 +1081,7 @@ void Inspector::transitionSection(Project& project, Clip& clip, std::string& edi
     ImGui::EndDisabled();
     ImGui::EndTable();
 
-    ImGui::TextDisabled(tr("Centered on the start of the clip."));
+    ImGui::TextDisabled("%s", tr("Centered on the start of the clip."));
 }
 
 
@@ -1119,7 +1119,7 @@ bool Inspector::fontCombo(const char* label, std::string& font, FontLibrary& fon
         }
 
         if (systemFonts.empty()) {
-            ImGui::TextDisabled(tr("Looking for the fonts of the system..."));
+            ImGui::TextDisabled("%s", tr("Looking for the fonts of the system..."));
         }
 
         for (const FontLibrary::FontInfo& info : systemFonts) {
@@ -1235,7 +1235,7 @@ void Inspector::textSection(Clip& clip, FontLibrary& fonts, const TextSelection&
         const bool range = textSelection.from != textSelection.to;
 
         ImGui::SeparatorText(range ? tr(ICON_MD_FORMAT_COLOR_TEXT " Selected Letters") : tr(ICON_MD_FORMAT_COLOR_TEXT " Whole Text"));
-        ImGui::TextDisabled(range ? tr("Changes apply to the selection.") : tr("Select letters in the viewer to style them."));
+        ImGui::TextDisabled("%s", range ? tr("Changes apply to the selection.") : tr("Select letters in the viewer to style them."));
 
         const TextStyle before = styleAt(text, textSelection.from + (range ? 1 : 0));
         TextStyle after = before;
@@ -1431,7 +1431,7 @@ void Inspector::sequenceSection(Project& project, std::string& edit)
     char resolution[64];
     std::snprintf(resolution, sizeof(resolution), "%u x %u", sequence.width, sequence.height);
 
-    ImGui::TextDisabled(tr("Resolution"));
+    ImGui::TextDisabled("%s", tr("Resolution"));
     ImGui::SetNextItemWidth(-FLT_MIN);
 
     if (ImGui::BeginCombo("##resolution", resolution)) {
@@ -1455,7 +1455,7 @@ void Inspector::sequenceSection(Project& project, std::string& edit)
         if (preset.rate == sequence.frameRate) frameRateLabel = tr(preset.label);
     }
 
-    ImGui::TextDisabled(tr("Frame rate"));
+    ImGui::TextDisabled("%s", tr("Frame rate"));
     ImGui::SetNextItemWidth(-FLT_MIN);
 
     if (ImGui::BeginCombo("##frameRate", frameRateLabel)) {
@@ -1475,7 +1475,7 @@ void Inspector::sequenceSection(Project& project, std::string& edit)
     char sampleRate[32];
     std::snprintf(sampleRate, sizeof(sampleRate), "%u Hz", sequence.sampleRate);
 
-    ImGui::TextDisabled(tr("Audio sample rate"));
+    ImGui::TextDisabled("%s", tr("Audio sample rate"));
     ImGui::SetNextItemWidth(-FLT_MIN);
 
     if (ImGui::BeginCombo("##sampleRate", sampleRate)) {

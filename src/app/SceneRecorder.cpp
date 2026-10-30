@@ -624,7 +624,7 @@ void GUI::sceneRecorderWindow()
     ImGui::SeparatorText(tr("Sound"));
     ImGui::Checkbox(tr("Computer sound"), &_captureSound);
     ImGui::Checkbox(tr("Microphone"), &_captureMicrophone);
-    ImGui::SetItemTooltip(tr("Recorded on an audio track of its own."));
+    ImGui::SetItemTooltip("%s", tr("Recorded on an audio track of its own."));
     ImGui::EndDisabled();
 
     if (_captureMicrophone) {

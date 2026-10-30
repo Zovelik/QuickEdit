@@ -93,7 +93,7 @@ namespace core
         const int64_t mm = (totalSeconds / 60) % 60;
         const int64_t hh = totalSeconds / 3600;
 
-        char buffer[32];
+        char buffer[96];        // Any int64 fits
         std::snprintf(buffer, sizeof(buffer), "%s%02lld:%02lld:%02lld:%02lld",
             negative ? "-" : "", (long long)hh, (long long)mm, (long long)ss, (long long)ff);
 

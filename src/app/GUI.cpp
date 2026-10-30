@@ -1185,7 +1185,7 @@ void GUI::mediaPanel()
         newFolder = true;
     }
 
-    ImGui::SetItemTooltip(tr("New folder (in the selected one)"));
+    ImGui::SetItemTooltip("%s", tr("New folder (in the selected one)"));
     ImGui::SameLine();
     ImGui::TextDisabled(tr("%zu item(s)"), _project.media().size());
 
@@ -1304,13 +1304,13 @@ void GUI::mediaPanel()
                 ImGui::TextUnformatted(pathToUtf8(item.path).c_str());
 
                 if (missing) {
-                    ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), tr(ICON_MD_WARNING " File not found"));
+                    ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), "%s", tr(ICON_MD_WARNING " File not found"));
                 }
                 else if (state.status == media::MediaStatus::Error) {
                     ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " %s", state.error.c_str());
                 }
                 else if (!item.probed) {
-                    ImGui::TextDisabled(tr("Analyzing..."));
+                    ImGui::TextDisabled("%s", tr("Analyzing..."));
                 }
                 else {
                     if (item.type != MediaType::Audio) {
@@ -1367,7 +1367,7 @@ void GUI::mediaPanel()
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + std::round(0.5f * (pictureHeight - ImGui::GetTextLineHeight())));
 
             if (state.status == media::MediaStatus::Error || missing) {
-                ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), tr(ICON_MD_WARNING " Error"));
+                ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), "%s", tr(ICON_MD_WARNING " Error"));
             }
             else if (!item.probed) {
                 ImGui::TextDisabled("...");
@@ -1814,23 +1814,23 @@ void GUI::viewerPanel()
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.f, 0.f, 0.f, 0.f));
 
     if (ImGui::Button(ICON_MD_SKIP_PREVIOUS, ImVec2(buttonWidth, 0)))   { seek(0); }
-    ImGui::SetItemTooltip(tr("Go to Start (Home)"));
+    ImGui::SetItemTooltip("%s", tr("Go to Start (Home)"));
     ImGui::SameLine();
     if (ImGui::Button(ICON_MD_NAVIGATE_BEFORE, ImVec2(buttonWidth, 0))) { stepFrames(-1); }
-    ImGui::SetItemTooltip(tr("Previous Frame (Left)"));
+    ImGui::SetItemTooltip("%s", tr("Previous Frame (Left)"));
     ImGui::SameLine();
 
     ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
     if (ImGui::Button(_playing ? ICON_MD_PAUSE : ICON_MD_PLAY_ARROW, ImVec2(buttonWidth, 0))) { togglePlayback(); }
     ImGui::PopStyleColor();
-    ImGui::SetItemTooltip(_playing ? tr("Pause (Space)") : tr("Play (Space)"));
+    ImGui::SetItemTooltip("%s", _playing ? tr("Pause (Space)") : tr("Play (Space)"));
     ImGui::SameLine();
 
     if (ImGui::Button(ICON_MD_NAVIGATE_NEXT, ImVec2(buttonWidth, 0)))   { stepFrames(1); }
-    ImGui::SetItemTooltip(tr("Next Frame (Right)"));
+    ImGui::SetItemTooltip("%s", tr("Next Frame (Right)"));
     ImGui::SameLine();
     if (ImGui::Button(ICON_MD_SKIP_NEXT, ImVec2(buttonWidth, 0)))       { seek(sequence.duration()); }
-    ImGui::SetItemTooltip(tr("Go to End (End)"));
+    ImGui::SetItemTooltip("%s", tr("Go to End (End)"));
 
     ImGui::PopStyleColor();
     ImGui::PopStyleVar();
@@ -3150,7 +3150,7 @@ void GUI::subtitleGeneratorWindow()
     }
 
     if (!speechRecognitionAvailable()) {
-        ImGui::TextWrapped(tr("This build has no speech recognition: whisper.cpp was not found when it was built (see docs/ARCHITECTURE.md)."));
+        ImGui::TextWrapped("%s", tr("This build has no speech recognition: whisper.cpp was not found when it was built (see docs/ARCHITECTURE.md)."));
         ImGui::End();
         return;
     }
@@ -3165,7 +3165,7 @@ void GUI::subtitleGeneratorWindow()
     }
 
     ImGui::SeparatorText(tr("Model"));
-    ImGui::TextDisabled(tr("The larger, the more accurate; the large ones want a GPU."));
+    ImGui::TextDisabled("%s", tr("The larger, the more accurate; the large ones want a GPU."));
     ImGui::BeginDisabled(busy);
 
     // Columns: after the longest name, after the largest size.
@@ -3197,7 +3197,7 @@ void GUI::subtitleGeneratorWindow()
         ImGui::SameLine(stateColumn);
 
         if (downloaded) {
-            ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.5f, 1.f), tr(ICON_MD_CHECK " Ready"));
+            ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.5f, 1.f), "%s", tr(ICON_MD_CHECK " Ready"));
         }
         else if (downloading) {
             ImGui::ProgressBar(_modelDownload.progress(), ImVec2(-3.f * ImGui::GetFontSize(), 0.f));
@@ -3268,7 +3268,7 @@ void GUI::subtitleGeneratorWindow()
     }
 
     ImGui::Checkbox(tr("Use the GPU"), &_whisperGpu);
-    ImGui::SetItemTooltip(tr("Off: on the processor only, much slower with the large models."));
+    ImGui::SetItemTooltip("%s", tr("Off: on the processor only, much slower with the large models."));
     ImGui::EndDisabled();
 
     ImGui::Spacing();
@@ -3307,7 +3307,7 @@ void GUI::subtitleGeneratorWindow()
         ImGui::EndDisabled();
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled(chosen ? tr("Onto a new subtitle track.") : tr("Download a model first."));
+        ImGui::TextDisabled("%s", chosen ? tr("Onto a new subtitle track.") : tr("Download a model first."));
     }
     else {
         ImGui::ProgressBar(_subtitleGenerator.progress(), ImVec2(-6.f * ImGui::GetFontSize(), 0.f), tr("Listening..."));
@@ -3587,7 +3587,7 @@ void GUI::inputDeviceCombo(bool enabled)
         _inputDevicesListed = false;
     }
 
-    ImGui::SetItemTooltip(tr("Look for inputs again"));
+    ImGui::SetItemTooltip("%s", tr("Look for inputs again"));
     ImGui::EndDisabled();
 
     if (!_recorderError.empty()) {
@@ -3639,7 +3639,7 @@ void GUI::recorderWindow()
 
     // The microphone records with the screen.
     if (_screenRecording && !_screenMicrophonePath.empty()) {
-        ImGui::TextDisabled(tr(ICON_MD_SCREEN_SHARE " The microphone is recording with the screen."));
+        ImGui::TextDisabled("%s", tr(ICON_MD_SCREEN_SHARE " The microphone is recording with the screen."));
         ImGui::End();
         return;
     }
@@ -3658,7 +3658,7 @@ void GUI::recorderWindow()
     ImGui::EndDisabled();
 
     if (_playWhileRecording) {
-        ImGui::TextDisabled(tr("Use headphones, or the speakers will be recorded too."));
+        ImGui::TextDisabled("%s", tr("Use headphones, or the speakers will be recorded too."));
     }
 
     ImGui::Spacing();
@@ -3768,7 +3768,7 @@ void GUI::levelMeter(const char* id, float peak, LevelMeter& meter)
 
     ImGui::PushID(id);
     ImGui::Dummy(ImVec2(width, height));
-    ImGui::SetItemTooltip(tr("Aim for peaks between -12 and -6 dB."));
+    ImGui::SetItemTooltip("%s", tr("Aim for peaks between -12 and -6 dB."));
 
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
@@ -3777,7 +3777,7 @@ void GUI::levelMeter(const char* id, float peak, LevelMeter& meter)
         ImGui::Text(tr("%5.1f dB"), meter.peakDb);
     }
     else {
-        ImGui::TextDisabled(tr(" -inf dB"));
+        ImGui::TextDisabled("%s", tr(" -inf dB"));
     }
 
     // Clipping lamp
@@ -3789,7 +3789,7 @@ void GUI::levelMeter(const char* id, float peak, LevelMeter& meter)
     drawList->AddText(ImVec2(lampMin.x + style.FramePadding.x, lampMin.y + style.FramePadding.y),
         clipping ? IM_COL32(255, 255, 255, 255) : ImGui::GetColorU32(ImGuiCol_TextDisabled), clipLabel);
     ImGui::Dummy(ImVec2(clipWidth, height));
-    ImGui::SetItemTooltip(tr("The input saturates: lower its gain."));
+    ImGui::SetItemTooltip("%s", tr("The input saturates: lower its gain."));
     ImGui::PopID();
 }
 
@@ -4089,7 +4089,7 @@ void GUI::screenRecorderWindow()
         _cameraFormats.clear();
     }
 
-    ImGui::SetItemTooltip(tr("Look for screens and windows again"));
+    ImGui::SetItemTooltip("%s", tr("Look for screens and windows again"));
 
     if (isCamera) {
         cameraFormatOptions(_captureSource, false);
@@ -4131,7 +4131,7 @@ void GUI::screenRecorderWindow()
 
     ImGui::BeginDisabled(recording);
     ImGui::Checkbox(tr("Microphone"), &_captureMicrophone);
-    ImGui::SetItemTooltip(tr("Recorded on an audio track of its own."));
+    ImGui::SetItemTooltip("%s", tr("Recorded on an audio track of its own."));
     ImGui::EndDisabled();
 
     if (_captureMicrophone) {
@@ -4229,7 +4229,7 @@ bool GUI::cameraFormatOptions(capture::CaptureSource& source, bool stacked)
             changed = true;
         }
 
-        ImGui::SetItemTooltip(tr("The largest size the camera gives in MJPEG, up to 1080p"));
+        ImGui::SetItemTooltip("%s", tr("The largest size the camera gives in MJPEG, up to 1080p"));
 
         for (const capture::CameraFormat& format : formats) {
             ImGui::PushID(&format);
@@ -4253,7 +4253,7 @@ bool GUI::cameraFormatOptions(capture::CaptureSource& source, bool stacked)
     }
 
     if (formats.empty()) {
-        ImGui::SetItemTooltip(tr("The formats of this camera are not known: it gives its default one"));
+        ImGui::SetItemTooltip("%s", tr("The formats of this camera are not known: it gives its default one"));
     }
 
     // Frame rate, of the chosen format.
@@ -4956,7 +4956,7 @@ void GUI::timelinePanel()
             _timeline.setZoom(zoom);
         }
 
-        ImGui::SetItemTooltip(tr("Zoom"));
+        ImGui::SetItemTooltip("%s", tr("Zoom"));
         ImGui::SameLine();
 
         if (widgets::panelButton(ICON_MD_ZOOM_IN, "Zoom In (Ctrl++, Ctrl+Wheel)")) {
@@ -4985,8 +4985,7 @@ void GUI::timelinePanel()
         ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - ImGui::GetFrameHeight()));
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled(ICON_MD_HELP_OUTLINE);
-        ImGui::SetItemTooltip(
-            tr("Click on the ruler: move the playhead (drag to hear the sound)\n"
+        ImGui::SetItemTooltip("%s", tr("Click on the ruler: move the playhead (drag to hear the sound)\n"
             "Click between clips: select the gap (Delete closes it)\n"
             "Drag a clip over others: it replaces what it covers (Alt: not)\n"
             "Drag on an empty area: select the clips in a rectangle\n"
@@ -5211,7 +5210,7 @@ void GUI::sequenceTabs()
             ImGui::EndDragDropSource();
         }
 
-        ImGui::SetItemTooltip(tr("Drag into the timeline of another sequence to nest it"));
+        ImGui::SetItemTooltip("%s", tr("Drag into the timeline of another sequence to nest it"));
 
         if (ImGui::BeginPopupContextItem()) {
             if (ImGui::MenuItem(tr(ICON_MD_EDIT " Rename"))) {
@@ -5250,7 +5249,7 @@ void GUI::sequenceTabs()
         showSequence(id);
     }
 
-    ImGui::SetItemTooltip(tr("New sequence"));
+    ImGui::SetItemTooltip("%s", tr("New sequence"));
     ImGui::EndTabBar();
 
     if (show != InvalidId) {
@@ -5377,7 +5376,7 @@ void GUI::projectPropertiesPopup()
     }
 
     ImGui::Spacing();
-    ImGui::TextDisabled(tr("The export can use another size or frame rate."));
+    ImGui::TextDisabled("%s", tr("The export can use another size or frame rate."));
     ImGui::Spacing();
 
     if (ImGui::Button(tr("Close"), ImVec2(8.f * ImGui::GetFontSize(), 0.f)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
@@ -5441,7 +5440,7 @@ void GUI::exportPopup()
                 ImGui::TextUnformatted(tr("Export cancelled."));
             }
             else {
-                ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), tr(ICON_MD_WARNING " Export failed"));
+                ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), "%s", tr(ICON_MD_WARNING " Export failed"));
                 ImGui::TextWrapped("%s", exporter.error().c_str());
             }
 
@@ -5466,7 +5465,7 @@ void GUI::exportPopup()
 
     // Settings
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled(tr("File"));
+    ImGui::TextDisabled("%s", tr("File"));
     ImGui::SameLine(labelWidth);
 
     const float browseWidth = ImGui::CalcTextSize(tr("Browse...")).x + 2.f * ImGui::GetStyle().FramePadding.x;
@@ -5479,7 +5478,7 @@ void GUI::exportPopup()
     }
 
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled(tr("Codec"));
+    ImGui::TextDisabled("%s", tr("Codec"));
     ImGui::SameLine(labelWidth);
 
     const char* codecs[] = { tr("H.264 (most compatible)"), tr("H.265 / HEVC"), tr("AV1") };
@@ -5491,23 +5490,23 @@ void GUI::exportPopup()
     }
 
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled(tr("Quality"));
+    ImGui::TextDisabled("%s", tr("Quality"));
     ImGui::SameLine(labelWidth);
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::SliderFloat("##bitrate", &_exportSettings.bitrateMbps, 2.f, 100.f, "%.0f Mbit/s", ImGuiSliderFlags_Logarithmic);
 
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled(tr("Audio"));
+    ImGui::TextDisabled("%s", tr("Audio"));
     ImGui::SameLine(labelWidth);
     ImGui::Checkbox(tr("AAC, 192 kbit/s"), &_exportSettings.audio);
 
     // Loudness: the usual targets, or any.
     ImGui::BeginDisabled(!_exportSettings.audio);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled(tr("Loudness"));
+    ImGui::TextDisabled("%s", tr("Loudness"));
     ImGui::SameLine(labelWidth);
     ImGui::Checkbox(tr("Normalize to##loudness"), &_exportSettings.normalizeLoudness);
-    ImGui::SetItemTooltip(tr("The whole sound is measured first (EBU R128), then brought to this loudness,\n"
+    ImGui::SetItemTooltip("%s", tr("The whole sound is measured first (EBU R128), then brought to this loudness,\n"
         "its peaks kept under -1 dB."));
     ImGui::SameLine();
     ImGui::BeginDisabled(!_exportSettings.normalizeLoudness);
@@ -5552,7 +5551,7 @@ void GUI::exportPopup()
     // Subtitles: in the picture, and in a file beside it.
     if (!subtitleCues(_project.sequence()).empty()) {
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled(tr("Subtitles"));
+        ImGui::TextDisabled("%s", tr("Subtitles"));
         ImGui::SameLine(labelWidth);
         ImGui::Checkbox(tr("In the picture, and a .srt file beside the video"), &_exportSubtitles);
     }
@@ -5565,7 +5564,7 @@ void GUI::exportPopup()
     };
 
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled(tr("Size"));
+    ImGui::TextDisabled("%s", tr("Size"));
     ImGui::SameLine(labelWidth);
     ImGui::SetNextItemWidth(-FLT_MIN);
 
@@ -5595,11 +5594,11 @@ void GUI::exportPopup()
 
     if (_exportSettings.height > sequence.height) {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + labelWidth);
-        ImGui::TextDisabled(tr("Larger than the sequence: the videos smaller than this are enlarged."));
+        ImGui::TextDisabled("%s", tr("Larger than the sequence: the videos smaller than this are enlarged."));
     }
 
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled(tr("Frame rate"));
+    ImGui::TextDisabled("%s", tr("Frame rate"));
     ImGui::SameLine(labelWidth);
     ImGui::SetNextItemWidth(-FLT_MIN);
 
@@ -5632,7 +5631,7 @@ void GUI::exportPopup()
     ImGui::TextDisabled(tr("%s long"), formatTimecode(sequence.duration(), sequence.frameRate).c_str());
 
     if (hasVideoEncodeQueue()) {
-        ImGui::TextDisabled(tr(ICON_MD_BOLT " Encoded on the GPU with Vulkan Video when the codec allows it"));
+        ImGui::TextDisabled("%s", tr(ICON_MD_BOLT " Encoded on the GPU with Vulkan Video when the codec allows it"));
     }
 
     const int analyzing = mediaInAnalysis();
@@ -5749,7 +5748,7 @@ void GUI::effectsTab()
     track = _project.findTrack(_effectsTrack);
 
     if (!track) {
-        ImGui::TextDisabled(tr("Select a clip, or choose a track."));
+        ImGui::TextDisabled("%s", tr("Select a clip, or choose a track."));
         return;
     }
 
@@ -5790,7 +5789,7 @@ void GUI::effectsTab()
 
     if (pictureShown) {
         ImGui::SeparatorText((std::string(tr(ICON_MD_TUNE " Track ")) + track->name).c_str());
-        ImGui::TextDisabled(video ? tr("On each clip of the track, after its own.") : tr("Applied in order, to the whole track."));
+        ImGui::TextDisabled("%s", video ? tr("On each clip of the track, after its own.") : tr("Applied in order, to the whole track."));
     }
 
     if (video && pictureShown) {
@@ -5871,7 +5870,7 @@ void GUI::audioEffectChain(std::vector<EffectSlot>& slots, const char* id)
             commit(active ? "Enable effect" : "Bypass effect");
         }
 
-        ImGui::SetItemTooltip(tr("On / bypassed"));
+        ImGui::SetItemTooltip("%s", tr("On / bypassed"));
         ImGui::SameLine();
 
         audio::Vst3Plugin* plugin = _effects.plugin(slot.id);
@@ -5898,7 +5897,7 @@ void GUI::audioEffectChain(std::vector<EffectSlot>& slots, const char* id)
         }
 
         ImGui::EndDisabled();
-        ImGui::SetItemTooltip(tr("Open the plugin editor"));
+        ImGui::SetItemTooltip("%s", tr("Open the plugin editor"));
         ImGui::SameLine();
 
         ImGui::BeginDisabled(i == 0);
@@ -5908,19 +5907,19 @@ void GUI::audioEffectChain(std::vector<EffectSlot>& slots, const char* id)
         }
 
         ImGui::EndDisabled();
-        ImGui::SetItemTooltip(tr("Earlier in the chain"));
+        ImGui::SetItemTooltip("%s", tr("Earlier in the chain"));
         ImGui::SameLine();
 
         if (ImGui::Button(ICON_MD_DELETE)) {
             removed = slot.id;
         }
 
-        ImGui::SetItemTooltip(tr("Remove"));
+        ImGui::SetItemTooltip("%s", tr("Remove"));
         ImGui::PopID();
     }
 
     if (slots.empty()) {
-        ImGui::TextDisabled(tr("No effect yet."));
+        ImGui::TextDisabled("%s", tr("No effect yet."));
     }
 
     if (moveUp > 0) {
@@ -5946,7 +5945,7 @@ void GUI::audioEffectChain(std::vector<EffectSlot>& slots, const char* id)
             ImGui::TextDisabled(tr(ICON_MD_HOURGLASS_TOP " Looking for plugins... %s"), current.c_str());
         }
         else if (plugins.empty()) {
-            ImGui::TextDisabled(tr("No VST3 effect found in the standard folders."));
+            ImGui::TextDisabled("%s", tr("No VST3 effect found in the standard folders."));
         }
 
         // Filter, on the name and the vendor.

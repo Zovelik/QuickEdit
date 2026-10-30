@@ -16,6 +16,7 @@
 #include <core/Paths.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -694,7 +695,7 @@ bool Vst3Plugin::loadState(const std::vector<uint8_t>& state)
             return false;
         }
 
-        out.assign(state.begin() + (ptrdiff_t)offset, state.begin() + (ptrdiff_t)(offset + size));
+        out.assign(state.begin() + (std::ptrdiff_t)offset, state.begin() + (std::ptrdiff_t)(offset + size));
         offset += size;
         return true;
     };

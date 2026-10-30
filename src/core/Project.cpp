@@ -1,6 +1,7 @@
 #include <core/Project.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <utility>
 #include <fstream>
 #include <limits>
@@ -795,8 +796,8 @@ bool Sequence::removeTrack(Id trackId)
                 return false;
             }
 
-            if (index < videoTracks.size()) videoTracks.erase(videoTracks.begin() + (ptrdiff_t)index);
-            if (index < soundTracks.size()) soundTracks.erase(soundTracks.begin() + (ptrdiff_t)index);
+            if (index < videoTracks.size()) videoTracks.erase(videoTracks.begin() + (std::ptrdiff_t)index);
+            if (index < soundTracks.size()) soundTracks.erase(soundTracks.begin() + (std::ptrdiff_t)index);
         }
         else {
             list.erase(it);
@@ -807,7 +808,7 @@ bool Sequence::removeTrack(Id trackId)
             for (size_t i = 0; i < renamed.size(); i++) {
                 std::string& name = renamed[i].name;
                 const bool isDefault = name.size() > prefix.size() && name.compare(0, prefix.size(), prefix) == 0 &&
-                    std::all_of(name.begin() + (ptrdiff_t)prefix.size(), name.end(), [](char c) { return c >= '0' && c <= '9'; });
+                    std::all_of(name.begin() + (std::ptrdiff_t)prefix.size(), name.end(), [](char c) { return c >= '0' && c <= '9'; });
 
                 if (isDefault) {
                     name = prefix + std::to_string(i + 1);
@@ -2259,7 +2260,7 @@ void Project::fromJson(const Json& json, const std::filesystem::path& projectDir
                         for (size_t c = 0; c < audio.clips.size(); c++) {
                             if (audio.clips[c].linkGroup == video.linkGroup) {
                                 sequence.soundTracks[v].clips.push_back(audio.clips[c]);
-                                audio.clips.erase(audio.clips.begin() + (ptrdiff_t)c);
+                                audio.clips.erase(audio.clips.begin() + (std::ptrdiff_t)c);
                                 break;
                             }
                         }

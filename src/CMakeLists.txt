@@ -249,6 +249,20 @@ if (WIN32)
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/lang DESTINATION .)
     install(FILES ${CMAKE_SOURCE_DIR}/README.md DESTINATION .)
 else()
+    # The libraries the systems may not have, beside it in lib/: FFmpeg (a
+    # prebuilt one, when FFMPEG_ROOT is given) and shaderc. The Vulkan loader
+    # comes with the drivers of the system.
+    set_target_properties(QuickEdit PROPERTIES INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+
+    if (FFMPEG_ROOT)
+        file(GLOB FFMPEG_SHARED_LIBRARIES "${FFMPEG_ROOT}/lib/lib*.so*")
+        install(FILES ${FFMPEG_SHARED_LIBRARIES} DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    endif()
+
+    get_filename_component(SHADERC_DIR "${SHADERC_LIBRARY}" DIRECTORY)
+    file(GLOB SHADERC_SHARED_LIBRARIES "${SHADERC_DIR}/libshaderc_shared.so*")
+    install(FILES ${SHADERC_SHARED_LIBRARIES} DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
     install(TARGETS QuickEdit DESTINATION ${CMAKE_INSTALL_BINDIR})
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/lang DESTINATION ${CMAKE_INSTALL_DATADIR}/quickedit)
     install(FILES ${CMAKE_SOURCE_DIR}/package/linux/quickedit.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)

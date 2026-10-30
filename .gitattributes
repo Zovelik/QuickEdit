@@ -1,0 +1,5 @@
+# The files of the Linux packages keep Unix line endings on every checkout
+# (a desktop file with carriage returns is refused by appimagetool).
+package/linux/* text eol=lf
+*.sh text eol=lf
+tools/linux/* text eol=lf

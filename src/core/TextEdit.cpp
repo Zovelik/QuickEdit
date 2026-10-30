@@ -1,6 +1,7 @@
 #include <core/TextEdit.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <vector>
 
 
@@ -146,7 +147,7 @@ size_t insertText(TextContent& text, size_t pos, const std::string& utf8)
         }
     }
 
-    characters.insert(characters.begin() + (ptrdiff_t)pos, inserted.begin(), inserted.end());
+    characters.insert(characters.begin() + (std::ptrdiff_t)pos, inserted.begin(), inserted.end());
     rebuild(text, characters, styles, style);
 
     return pos + inserted.size();
@@ -163,7 +164,7 @@ void eraseText(TextContent& text, size_t from, size_t to)
     to = std::clamp(to, from, characters.size());
 
     const int style = styleIndexAt(characters, from + 1);
-    characters.erase(characters.begin() + (ptrdiff_t)from, characters.begin() + (ptrdiff_t)to);
+    characters.erase(characters.begin() + (std::ptrdiff_t)from, characters.begin() + (std::ptrdiff_t)to);
     rebuild(text, characters, styles, style);
 }
 

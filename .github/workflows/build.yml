@@ -157,20 +157,21 @@ jobs:
           choco install nsis -y --no-progress
           "${env:ProgramFiles(x86)}\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
-      # linuxdeploy and appimagetool, driven by CPack; appstreamcli lets
-      # appimagetool check the AppStream data.
+      # appimagetool and patchelf, driven by CPack; appstreamcli lets
+      # appimagetool check the AppStream data. A fixed version: the
+      # continuous builds change what they accept (a newer appimagetool
+      # refuses the AppRun of CPack). tools/linux builds the same locally.
       - name: Install AppImage tools
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get install -y appstream
-          sudo wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage -O /usr/local/bin/linuxdeploy
-          sudo wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage -O /usr/local/bin/appimagetool
-          sudo chmod +x /usr/local/bin/linuxdeploy /usr/local/bin/appimagetool
+          sudo apt-get install -y appstream patchelf
+          sudo wget -q https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage -O /usr/local/bin/appimagetool
+          sudo chmod +x /usr/local/bin/appimagetool
 
       - name: Package
         working-directory: build
         env:
-          # linuxdeploy without FUSE on the runners.
+          # appimagetool without FUSE on the runners.
           APPIMAGE_EXTRACT_AND_RUN: 1
         run: cpack -C Release
 

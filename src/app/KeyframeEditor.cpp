@@ -84,7 +84,7 @@ KeyframeEditor::Result KeyframeEditor::draw(Project& project, const std::vector<
     const Track* track = clip ? project.findTrackOfClip(clip->id) : nullptr;
 
     if (!clip || !track || track->type != TrackType::Video) {
-        ImGui::TextDisabled(tr("Select a video, image, text or generator clip to edit the curves of its animations."));
+        ImGui::TextDisabled("%s", tr("Select a video, image, text or generator clip to edit the curves of its animations."));
         return result;
     }
 
@@ -198,7 +198,7 @@ void KeyframeEditor::drawCurve(const Clip& clip, Property& property, const Seque
         _selectedKeys.clear();
     }
 
-    ImGui::SetItemTooltip(tr("At the playhead"));
+    ImGui::SetItemTooltip("%s", tr("At the playhead"));
     ImGui::SameLine();
 
     if (ImGui::SmallButton(tr(ICON_MD_FIT_SCREEN " Fit"))) {
@@ -206,7 +206,7 @@ void KeyframeEditor::drawCurve(const Clip& clip, Property& property, const Seque
     }
 
     ImGui::SameLine();
-    ImGui::TextDisabled(tr("Double click: add   Drag: move (Shift: value only, Alt: time only)   Right click: easing   Del: remove"));
+    ImGui::TextDisabled("%s", tr("Double click: add   Drag: move (Shift: value only, Alt: time only)   Right click: easing   Del: remove"));
 
     // The area of the curve.
     const ImVec2 min = ImGui::GetCursorScreenPos();
