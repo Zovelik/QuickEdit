@@ -40,8 +40,8 @@ namespace audio
         core::Time position() const;
 
         // While stopped: plays a short piece of the sound at time t (the
-        // playhead dragged, a frame step), cutting the previous one. Nothing
-        // when t is the time of the last piece.
+        // playhead dragged, a frame step). A piece still playing goes on
+        // from t. Nothing when t is the time of the last piece.
         void scrub(core::Time t);
 
         bool hasDevice() const { return _stream != nullptr; }
@@ -71,6 +71,7 @@ namespace audio
         // scrubLength (audio thread), and the time of the last piece.
         std::atomic<int64_t> _scrubFrame = 0;
         std::atomic<int64_t> _scrubLeft = 0;
+        std::atomic<int64_t> _scrubPlayed = 0;      // Frames since the sound started, for its fade in
         int64_t _scrubLength = 0;
         core::Time _lastScrub = -1;
 

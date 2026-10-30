@@ -92,6 +92,7 @@ void AudioEngine::play(Time from)
 {
     stop();
     _lastScrub = -1;
+    _scrubLeft = 0;
 
     _startTime = from;
     _startNS = SDL_GetTicksNS();
@@ -123,13 +124,15 @@ void AudioEngine::scrub(Time t)
 
     _lastScrub = t;
 
-    // The piece before cut: what is queued, and what the audio thread had
-    // left of it.
-    _scrubLeft = 0;
-    SDL_ClearAudioStream(_stream);
-
+    // A piece still playing goes on from the new time, without a new fade
+    // in: moving the playhead sounds continuous.
     _scrubLength = std::max<int64_t>(1, (int64_t)(ScrubSeconds * _sampleRate));
     _scrubFrame = mulDivFloor(t, _sampleRate, TicksPerSecond);
+
+    if (_scrubLeft.load() <= 0) {
+        _scrubPlayed = 0;
+    }
+
     _scrubLeft = _scrubLength;
 
     SDL_ResumeAudioStreamDevice(_stream);
@@ -183,7 +186,6 @@ void AudioEngine::scrubCallback(SDL_AudioStream* stream, int additionalAmount)
     constexpr int64_t channels = media::AudioBuffer::Channels;
 
     const std::shared_ptr<const MixGraph> graph = _graph.load();
-    const int64_t length = _scrubLength;
     const int64_t fade = std::max<int64_t>(1, (int64_t)(ScrubFadeSeconds * _sampleRate));
     int64_t frames = additionalAmount / BytesPerFrame;
 
@@ -194,9 +196,11 @@ void AudioEngine::scrubCallback(SDL_AudioStream* stream, int additionalAmount)
 
         mix(*graph, first, chunk, _scratch.data());
 
-        // Faded in and out: no click at the cuts.
+        // Faded in at the start of the sound, out at its end: no click.
+        const int64_t played = _scrubPlayed.load();
+
         for (int64_t i = 0; i < chunk; i++) {
-            const int64_t fromStart = length - left + i;
+            const int64_t fromStart = played + i;
             const int64_t fromEnd = left - 1 - i;
             const float gain = std::min(1.f, (float)std::min(fromStart, fromEnd) / (float)fade);
 
@@ -207,8 +211,12 @@ void AudioEngine::scrubCallback(SDL_AudioStream* stream, int additionalAmount)
 
         SDL_PutAudioStreamData(stream, _scratch.data(), (int)(chunk * BytesPerFrame));
 
-        _scrubFrame = first + chunk;
-        _scrubLeft = left - chunk;
+        // Retargeted meanwhile by scrub(): kept.
+        int64_t expected = first;
+        _scrubFrame.compare_exchange_strong(expected, first + chunk);
+        int64_t expectedLeft = left;
+        _scrubLeft.compare_exchange_strong(expectedLeft, left - chunk);
+        _scrubPlayed = played + chunk;
         frames -= chunk;
     }
 }

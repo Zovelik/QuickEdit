@@ -4498,9 +4498,17 @@ void GUI::timelinePanel()
             _dropStart = result.dropStart;
         }
 
+        // Moved during playback: it plays again from there once released.
         if (result.seeked) {
+            _resumeAfterScrub = _resumeAfterScrub || _playing;
             stopPlayback();
             _audio.scrub(_playhead);
+        }
+
+        if (_resumeAfterScrub && !_timeline.scrubbing()) {
+            _resumeAfterScrub = false;
+            _playing = true;
+            _audio.play(_playhead);
         }
 
         if (result.edited) {

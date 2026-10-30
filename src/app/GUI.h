@@ -442,6 +442,9 @@ private:
 
     // Format and frame rate of the camera being the capture source.
     void cameraFormatOptions();
+
+    // The playhead was moved on the ruler during playback.
+    bool _resumeAfterScrub = false;
     std::vector<capture::CameraFormat> _cameraFormats;
     std::string _cameraFormatsDevice;
     void startScreenRecording();

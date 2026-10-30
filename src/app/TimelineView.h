@@ -163,6 +163,9 @@ public:
     // Zooms to show the whole sequence on the next frame.
     void requestZoomToFit() { _zoomToFitRequested = true; }
 
+    // True while the playhead is dragged on the ruler.
+    bool scrubbing() const { return _dragMode == DragMode::Scrub; }
+
     // Keeps the playhead visible during playback.
     void followPlayhead(core::Time playhead);
 

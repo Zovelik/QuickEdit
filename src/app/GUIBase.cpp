@@ -1175,15 +1175,22 @@ bool GUIBase::windowOverTitlebar(float x, float y) const
         return false;
     }
 
+    // A window being moved by ImGui keeps the mouse, wherever it is.
+    if (context->MovingWindow) {
+        return true;
+    }
+
     const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
     const ImVec2 point(mainViewport->Pos.x + x, mainViewport->Pos.y + y);
 
     // Windows are in display order, back to front. The title bar window is
-    // the background, so any other one under the point is in front of it.
+    // the background, so any other one under the point is in front of it,
+    // in the main viewport or in one of its own (a platform window over the
+    // main one, which may get the mouse while ImGui moves it).
     for (int i = context->Windows.Size - 1; i >= 0; --i) {
         const ImGuiWindow* window = context->Windows[i];
 
-        if (!window->WasActive || window->Hidden || window->Viewport != mainViewport ||
+        if (!window->WasActive || window->Hidden ||
             (window->Flags & (ImGuiWindowFlags_ChildWindow | ImGuiWindowFlags_Tooltip))) {
             continue;
         }
