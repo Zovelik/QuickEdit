@@ -20,6 +20,20 @@ void main()
 {
     const Glyph glyph = glyphs[inGlyph];
 
+    // A box behind the text: a rounded rectangle of params.yz output pixels,
+    // corners of params.x, inUV across it from 0 to 1.
+    if (glyph.params.w > 1.5) {
+        const vec2 size = glyph.params.yz;
+        const vec2 p = (inUV - 0.5) * size;
+        const float r = min(glyph.params.x, 0.5 * min(size.x, size.y));
+        const vec2 d = abs(p) - 0.5 * size + r;
+        const float distance = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
+        const float coverage = clamp(0.5 - distance, 0.0, 1.0);
+
+        outColor = vec4(glyph.color.rgb, glyph.color.a * coverage);
+        return;
+    }
+
     // Distance to the outline in pixels of the output, positive inside.
     const float field = texture(atlas, inUV).r * 255.0;
     const float distance = (field - OnEdgeValue) / PixelDistScale * glyph.params.z;

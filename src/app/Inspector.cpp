@@ -1278,6 +1278,57 @@ void Inspector::textSection(Clip& clip, FontLibrary& fonts, const TextSelection&
         finishedEdit(edit, "Change text width");
     }
 
+    // Movement over the clip: end credits, news ticker.
+    {
+        const char* motions[] = { tr("Still"), tr("Roll Up (End Credits)"), tr("Crawl Left (Ticker)") };
+        const float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+        const float width = (ImGui::GetContentRegionAvail().x - 2.f * spacing) / 3.f;
+
+        for (int i = 0; i < 3; i++) {
+            if (i > 0) {
+                ImGui::SameLine(0.f, spacing);
+            }
+
+            if (widgets::optionButton(motions[i], (int)text.motion == i, ImVec2(width, 0.f))) {
+                text.motion = (TextMotion)i;
+                edit = "Change text motion";
+            }
+        }
+
+        ImGui::SetItemTooltip("%s", tr("The text moves over the whole clip: make the clip longer to slow it down."));
+    }
+
+    // A box behind the text, or a bar across the frame.
+    {
+        TextBackground& background = text.background;
+
+        if (ImGui::Checkbox(tr("Background"), &background.enabled)) {
+            edit = "Change text background";
+        }
+
+        if (background.enabled) {
+            ImGui::SameLine();
+
+            colorEdit("##backgroundColor", background.color);
+            finishedEdit(edit, "Change text background");
+
+            ImGui::SameLine();
+
+            if (ImGui::Checkbox(tr("Full width"), &background.fullWidth)) {
+                edit = "Change text background";
+            }
+
+            const float half = 0.5f * (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x);
+            ImGui::SetNextItemWidth(half);
+            ImGui::DragFloat("##backgroundPadding", &background.padding, 0.5f, 0.f, 400.f, tr("Margin %.0f px"));
+            finishedEdit(edit, "Change text background");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::DragFloat("##backgroundCorners", &background.cornerRadius, 0.5f, 0.f, 200.f, tr("Corners %.0f px"));
+            finishedEdit(edit, "Change text background");
+        }
+    }
+
     // Spans: the text, cut in parts that each have their style.
     int removeSpan = -1;
 

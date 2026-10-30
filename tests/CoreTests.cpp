@@ -791,6 +791,25 @@ void testSpeedAndTracks()
     CHECK(native.sequence().videoTracks[0].blend == BlendMode::Multiply);
     CHECK(native.sequence().videoTracks[0].height == 4.5f);
 
+    // A text rolling up on a box, saved and loaded.
+    {
+        const Id textClip = project.addTextClip(sequence.videoTracks[0].id, 40 * TicksPerSecond, TicksPerSecond, "Credits");
+        Clip* clip = project.findClip(textClip);
+        CHECK(clip != nullptr);
+        clip->text.motion = TextMotion::Roll;
+        clip->text.background.enabled = true;
+        clip->text.background.fullWidth = true;
+        clip->text.background.padding = 12.f;
+
+        Project texts;
+        texts.fromJson(project.toJson({}), {});
+        const Clip* loaded = texts.findClip(textClip);
+        CHECK(loaded && loaded->text.motion == TextMotion::Roll);
+        CHECK(loaded && loaded->text.background == clip->text.background);
+
+        project.removeClips({ textClip });
+    }
+
     // A file of two audio streams: one clip each, then mixed again.
     project.findMedia(video)->audioStreams = { "Computer sound", "Microphone" };
     const Id soundClip = sequence.soundTracks[0].clips[0].id;

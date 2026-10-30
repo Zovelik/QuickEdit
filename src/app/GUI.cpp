@@ -786,6 +786,16 @@ void GUI::menuBar()
             ImGui::Separator();
 
             if (ImGui::MenuItem(tr(ICON_MD_TEXT_FIELDS " Add Text"), "T")) { addText(); }
+
+            if (ImGui::BeginMenu(tr(ICON_MD_TITLE " Add Title"))) {
+                if (ImGui::MenuItem(tr(ICON_MD_MOVIE_FILTER " End Credits"))) { addTitle(TitlePreset::EndCredits); }
+                ImGui::SetItemTooltip("%s", tr("The credits roll up over the clip: make it longer to slow them down."));
+                if (ImGui::MenuItem(tr(ICON_MD_PERSON " Lower Third"))) { addTitle(TitlePreset::LowerThird); }
+                ImGui::SetItemTooltip("%s", tr("A name and a role on a box, at the bottom left."));
+                if (ImGui::MenuItem(tr(ICON_MD_NEWSPAPER " News Bar"))) { addTitle(TitlePreset::NewsBar); }
+                ImGui::SetItemTooltip("%s", tr("A title above a bar where headlines crawl."));
+                ImGui::EndMenu();
+            }
             if (ImGui::MenuItem(tr(ICON_MD_SUBTITLES " Add Subtitle"), "Shift+T")) { addSubtitle(); }
             if (ImGui::MenuItem(tr(ICON_MD_RECORD_VOICE_OVER " Generate Subtitles..."))) { _showSubtitleGenerator = true; }
 
@@ -2345,6 +2355,123 @@ void GUI::endTextEditing()
     SDL_StopTextInput(window());
 
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+}
+
+
+Id GUI::placeText(Time start, Time duration, const TextContent& text, float x, float y)
+{
+    Sequence& sequence = _project.sequence();
+    Id clipId = InvalidId;
+
+    // The top track free over the whole clip.
+    for (int i = (int)sequence.videoTracks.size() - 1; i >= 0 && clipId == InvalidId; i--) {
+        const Track& track = sequence.videoTracks[(size_t)i];
+        const bool free = !track.locked && std::none_of(track.clips.begin(), track.clips.end(),
+            [&](const Clip& c) { return c.start < start + duration && c.end() > start; });
+
+        if (free) {
+            clipId = _project.addTextClip(track.id, start, duration, "");
+        }
+    }
+
+    if (clipId == InvalidId) {
+        const Id trackId = _project.newId();
+        sequence.addTrack(TrackType::Video, trackId, _project.newId());
+        clipId = _project.addTextClip(trackId, start, duration, "");
+    }
+
+    if (Clip* clip = _project.findClip(clipId)) {
+        clip->text = text;
+        clip->transform.x = x;
+        clip->transform.y = y;
+    }
+
+    return clipId;
+}
+
+
+void GUI::addTitle(TitlePreset preset)
+{
+    Sequence& sequence = _project.sequence();
+    const Time start = snapToFrame(_playhead, sequence.frameRate);
+    const float w = (float)sequence.width;
+    const float h = (float)sequence.height;
+    const float k = h / 1080.f;     // Sizes made for 1080p
+
+    auto style = [&](float size, Color color = {}) {
+        TextStyle s;
+        s.size = size * k;
+        s.color = color;
+        return s;
+    };
+
+    const Color dim = { 0.78f, 0.78f, 0.78f, 1.f };
+    std::vector<Id> added;
+
+    if (preset == TitlePreset::EndCredits) {
+        TextContent text;
+        text.align = TextAlign::Center;
+        text.lineSpacing = 1.25f;
+        text.motion = TextMotion::Roll;
+        text.spans = {
+            { std::string(tr("The End")) + "\n\n", style(110.f) },
+            { std::string(tr("Directed by")) + "\n", style(44.f, dim) },
+            { std::string(tr("Your Name")) + "\n\n", style(64.f) },
+            { std::string(tr("Music")) + "\n", style(44.f, dim) },
+            { std::string(tr("Artist Name")) + "\n\n", style(64.f) },
+            { std::string(tr("Special Thanks")) + "\n", style(44.f, dim) },
+            { std::string(tr("Everyone who watched")) + "\n\n\n", style(64.f) },
+            { tr("Thanks for watching"), style(56.f) },
+        };
+
+        added.push_back(placeText(start, 15 * TicksPerSecond, text, 0.f, 0.f));
+    }
+    else if (preset == TitlePreset::LowerThird) {
+        TextContent text;
+        text.align = TextAlign::Left;
+        text.animation.in = LetterAnimation::Rise;
+        text.animation.out = LetterAnimation::Fade;
+        text.background.enabled = true;
+        text.background.padding = 28.f * k;
+        text.background.cornerRadius = 10.f * k;
+        text.spans = {
+            { std::string(tr("Your Name")) + "\n", style(64.f) },
+            { tr("Role or topic"), style(40.f, dim) },
+        };
+
+        added.push_back(placeText(start, 6 * TicksPerSecond, text, -0.5f * w + 420.f * k, 0.5f * h - 200.f * k));
+    }
+    else {
+        // The title on a red box, above the ticker bar.
+        TextContent title;
+        title.align = TextAlign::Left;
+        title.background.enabled = true;
+        title.background.color = { 0.78f, 0.1f, 0.1f, 1.f };
+        title.background.padding = 18.f * k;
+        title.background.cornerRadius = 0.f;
+        title.spans = { { tr("Breaking News"), style(52.f) } };
+
+        TextContent ticker;
+        ticker.motion = TextMotion::Crawl;
+        ticker.background.enabled = true;
+        ticker.background.fullWidth = true;
+        ticker.background.color = { 0.05f, 0.05f, 0.08f, 0.85f };
+        ticker.background.padding = 16.f * k;
+        ticker.spans = { { tr("First headline   \xe2\x80\xa2   Second headline   \xe2\x80\xa2   Third headline"), style(44.f) } };
+
+        const Time duration = 15 * TicksPerSecond;
+        added.push_back(placeText(start, duration, ticker, 0.f, 0.5f * h - 70.f * k));
+        added.push_back(placeText(start, duration, title, -0.5f * w + 300.f * k, 0.5f * h - 165.f * k));
+    }
+
+    std::erase(added, InvalidId);
+
+    if (!added.empty()) {
+        _selection = added;
+        if (preset == TitlePreset::EndCredits) commit("Add end credits");
+        else if (preset == TitlePreset::LowerThird) commit("Add lower third");
+        else commit("Add news bar");
+    }
 }
 
 

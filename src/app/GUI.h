@@ -322,6 +322,22 @@ private:
     bool _shaderEditorDirty = false;        // Typed since
     std::optional<core::ShaderDef> newShader(core::ShaderKind kind);
 
+    // Ready-made texts at the playhead: end credits rolling up, a lower
+    // third (name and role on a box), a news bar (a title and a ticker
+    // crawling on a bar across the frame).
+    enum class TitlePreset
+    {
+        EndCredits,
+        LowerThird,
+        NewsBar
+    };
+
+    void addTitle(TitlePreset preset);
+
+    // A text clip on the top video track with room from start to its end
+    // (a new track when none has), with its content and placement.
+    core::Id placeText(core::Time start, core::Time duration, const core::TextContent& text, float x, float y);
+
     // A new shader of the user from the source of another (a built-in one),
     // opened in the editor.
     std::optional<core::ShaderDef> duplicateShader(const core::ShaderDef& shader);

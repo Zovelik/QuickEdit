@@ -83,6 +83,28 @@ namespace core
     };
 
 
+    // Movement of a whole text over its clip.
+    enum class TextMotion
+    {
+        None,
+        Roll,       // From below the frame to above it (end credits)
+        Crawl       // From the right of the frame to its left (news ticker)
+    };
+
+
+    // A box behind a text.
+    struct TextBackground
+    {
+        bool enabled = false;
+        Color color = { 0.f, 0.f, 0.f, 0.65f };
+        float padding = 24.f;           // Pixels around the text
+        float cornerRadius = 8.f;
+        bool fullWidth = false;         // Across the whole frame (a bar)
+
+        bool operator==(const TextBackground& other) const = default;
+    };
+
+
     struct TextContent
     {
         std::vector<TextSpan> spans;
@@ -93,6 +115,9 @@ namespace core
         float boxWidth = 0.f;
 
         TextAnimation animation;
+
+        TextMotion motion = TextMotion::None;
+        TextBackground background;
 
         // Text without the styles.
         std::string plainText() const;

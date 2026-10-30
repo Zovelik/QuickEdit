@@ -724,6 +724,66 @@ uint32_t Compositor::buildText(const Layer& layer, uint32_t width, uint32_t heig
     const TextAnimation& animation = text.animation;
     const double letterDuration = (double)std::max<Time>(1, animation.letterDuration);
 
+    // The movement of the whole text: from out of the frame on one side to
+    // out of it on the other, over the clip, in pixels of the sequence.
+    const float pad = text.background.enabled ? text.background.padding : 0.f;
+    const ImVec2 center = place.apply(0.f, 0.f);
+    const float progress = (float)std::clamp((double)t / (double)std::max<Time>(1, clip.duration), 0.0, 1.0);
+    ImVec2 motion(0.f, 0.f);
+
+    if (text.motion == TextMotion::Roll) {
+        const float half = (hh + pad) * place.scale;
+        motion.y = ((float)height + half) + (-half - ((float)height + half)) * progress - center.y;
+    }
+    else if (text.motion == TextMotion::Crawl) {
+        const float half = (hw + pad) * place.scale;
+        motion.x = ((float)width + half) + (-half - ((float)width + half)) * progress - center.x;
+    }
+
+    // The box behind the text, under its shadows. A full width bar stays in
+    // place while the text crawls along it.
+    if (text.background.enabled) {
+        const float boxScale = place.scale;
+        ImVec2 corners[4];
+
+        if (text.background.fullWidth) {
+            const float top = center.y + motion.y - (hh + pad) * boxScale;
+            const float bottom = center.y + motion.y + (hh + pad) * boxScale;
+            corners[0] = ImVec2(0.f, top);
+            corners[1] = ImVec2((float)width, top);
+            corners[2] = ImVec2(0.f, bottom);
+            corners[3] = ImVec2((float)width, bottom);
+        }
+        else {
+            const ImVec2 points[4] = {
+                place.apply(-hw - pad, -hh - pad), place.apply(hw + pad, -hh - pad),
+                place.apply(-hw - pad, hh + pad), place.apply(hw + pad, hh + pad) };
+
+            for (int i = 0; i < 4; i++) {
+                corners[i] = ImVec2(points[i].x + motion.x, points[i].y + motion.y);
+            }
+        }
+
+        GlyphInstance box = {};
+        toNdc(corners[0], width, height, box.corners01);
+        toNdc(corners[1], width, height, box.corners01 + 2);
+        toNdc(corners[2], width, height, box.corners23);
+        toNdc(corners[3], width, height, box.corners23 + 2);
+
+        box.uv[0] = 0.f;
+        box.uv[1] = 0.f;
+        box.uv[2] = 1.f;
+        box.uv[3] = 1.f;
+
+        setColor(box.color, text.background.color, opacityOfLayer);
+        box.params[0] = text.background.fullWidth ? 0.f : text.background.cornerRadius * boxScale;
+        box.params[1] = std::hypot(corners[1].x - corners[0].x, corners[1].y - corners[0].y);
+        box.params[2] = std::hypot(corners[2].x - corners[0].x, corners[2].y - corners[0].y);
+        box.params[3] = 2.f;
+
+        instances.push_back(box);
+    }
+
     // Shadows first, under every letter, then the letters.
     for (int pass = 0; pass < 2; pass++) {
         const bool shadowPass = pass == 0;
@@ -765,7 +825,8 @@ uint32_t Compositor::buildText(const Layer& layer, uint32_t width, uint32_t heig
             auto corner = [&](float x, float y) {
                 const float lx = glyph.pivotX + (x - glyph.pivotX) * letterScale + offsetX;
                 const float ly = glyph.pivotY + (y - glyph.pivotY) * letterScale + rise + offsetY;
-                return place.apply(lx, ly);
+                const ImVec2 p = place.apply(lx, ly);
+                return ImVec2(p.x + motion.x, p.y + motion.y);
             };
 
             GlyphInstance instance = {};

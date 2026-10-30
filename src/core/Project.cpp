@@ -209,6 +209,19 @@ Json textToJson(const TextContent& text)
     json["lineSpacing"] = (double)text.lineSpacing;
     json["boxWidth"] = (double)text.boxWidth;
 
+    if (text.motion != TextMotion::None) {
+        json["motion"] = (text.motion == TextMotion::Roll) ? "roll" : "crawl";
+    }
+
+    if (text.background.enabled) {
+        Json background = Json::object();
+        background["color"] = colorToJson(text.background.color);
+        background["padding"] = (double)text.background.padding;
+        background["cornerRadius"] = (double)text.background.cornerRadius;
+        background["fullWidth"] = text.background.fullWidth;
+        json["background"] = background;
+    }
+
     Json animation = Json::object();
     animation["in"] = (int)text.animation.in;
     animation["out"] = (int)text.animation.out;
@@ -237,6 +250,17 @@ TextContent textFromJson(const Json& json)
     text.align = (TextAlign)std::clamp<int64_t>(json["align"].toInt((int)defaults.align), 0, (int64_t)TextAlign::Right);
     text.lineSpacing = (float)json["lineSpacing"].toDouble(defaults.lineSpacing);
     text.boxWidth = (float)std::max(0.0, json["boxWidth"].toDouble(0.0));
+
+    const std::string motion = json["motion"].toString();
+    text.motion = (motion == "roll") ? TextMotion::Roll : (motion == "crawl") ? TextMotion::Crawl : TextMotion::None;
+
+    if (const Json& background = json["background"]; background.isObject()) {
+        text.background.enabled = true;
+        text.background.color = colorFromJson(background["color"], defaults.background.color);
+        text.background.padding = (float)std::max(0.0, background["padding"].toDouble(defaults.background.padding));
+        text.background.cornerRadius = (float)std::max(0.0, background["cornerRadius"].toDouble(defaults.background.cornerRadius));
+        text.background.fullWidth = background["fullWidth"].toBool();
+    }
 
     const Json& animation = json["animation"];
     text.animation.in = (LetterAnimation)std::clamp<int64_t>(animation["in"].toInt(), 0, (int64_t)LetterAnimation::Pop);
