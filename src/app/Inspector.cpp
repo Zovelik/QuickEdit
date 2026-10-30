@@ -106,6 +106,85 @@ void finishedEdit(std::string& edit, const char* label)
 
 std::string Inspector::draw(Project& project, const std::vector<Id>& selection, Time playhead, FontLibrary& fonts, const TextSelection& textSelection)
 {
+    Clip* clip = selection.empty() ? nullptr : project.findClip(selection.front());
+
+    if (!clip || selection.size() < 2) {
+        return drawClip(project, selection, playhead, fonts, textSelection);
+    }
+
+    // Several clips: the first one is shown, its changes go to the others of
+    // the same kind (pictures, or sounds).
+    const Track* track = project.findTrackOfClip(clip->id);
+    const bool video = track && track->type == TrackType::Video;
+    std::vector<Id> others;
+
+    for (size_t i = 1; i < selection.size(); i++) {
+        const Clip* other = project.findClip(selection[i]);
+        const Track* otherTrack = other ? project.findTrackOfClip(other->id) : nullptr;
+
+        if (other && otherTrack && other->kind == clip->kind && (otherTrack->type == TrackType::Video) == video &&
+            otherTrack->type != TrackType::Subtitle) {
+            others.push_back(other->id);
+        }
+    }
+
+    if (!others.empty()) {
+        ImGui::TextColored(ImGui::GetStyleColorVec4(ImGuiCol_CheckMark), ICON_MD_LIBRARY_ADD_CHECK " %s",
+            (std::to_string(others.size() + 1) + " " + tr("clips: the changes apply to all of them.")).c_str());
+    }
+
+    const Clip before = *clip;
+    const Id clipId = clip->id;
+    const std::string edit = drawClip(project, selection, playhead, fonts, textSelection);
+
+    if (const Clip* after = project.findClip(clipId); after && !others.empty()) {
+        copyChanges(project, before, *after, others);
+    }
+
+    return edit;
+}
+
+
+void Inspector::copyChanges(Project& project, const Clip& before, const Clip& after, const std::vector<Id>& others)
+{
+    for (Id id : others) {
+        Clip* other = project.findClip(id);
+
+        if (!other) {
+            continue;
+        }
+
+        if (after.fit != before.fit) other->fit = after.fit;
+        if (after.filter != before.filter) other->filter = after.filter;
+        if (after.blend != before.blend) other->blend = after.blend;
+        if (!(after.frame == before.frame)) other->frame = after.frame;
+        if (after.gainDb != before.gainDb) other->gainDb = after.gainDb;
+        if (after.fadeIn != before.fadeIn) other->fadeIn = std::min(after.fadeIn, other->duration);
+        if (after.fadeOut != before.fadeOut) other->fadeOut = std::min(after.fadeOut, other->duration - other->fadeIn);
+
+        // The placement, when it is not animated (keyframes belong to a clip).
+        auto copyValue = [](const AnimatedValue& was, const AnimatedValue& now, AnimatedValue& target) {
+            if (!was.animated() && !now.animated() && was.value != now.value && !target.animated()) {
+                target.value = now.value;
+            }
+        };
+
+        copyValue(before.transform.x, after.transform.x, other->transform.x);
+        copyValue(before.transform.y, after.transform.y, other->transform.y);
+        copyValue(before.transform.scale, after.transform.scale, other->transform.scale);
+        copyValue(before.transform.rotation, after.transform.rotation, other->transform.rotation);
+        copyValue(before.transform.opacity, after.transform.opacity, other->transform.opacity);
+
+        // Last: a speed moves the clips after it.
+        if (after.speed != before.speed) {
+            project.setClipSpeed(id, after.speed);
+        }
+    }
+}
+
+
+std::string Inspector::drawClip(Project& project, const std::vector<Id>& selection, Time playhead, FontLibrary& fonts, const TextSelection& textSelection)
+{
     std::string edit;
     Clip* clip = selection.empty() ? nullptr : project.findClip(selection.front());
 
@@ -862,6 +941,15 @@ void Inspector::generatorSection(Project& project, Clip& clip, Time localTime, s
     if (shader->id.rfind("file:", 0) == 0 && editShader && ImGui::Button(tr(ICON_MD_EDIT " Edit Shader"))) {
         editShader(shader->id);
     }
+
+    // A built-in one stays as it is: a copy to change.
+    if (shader->id.rfind("builtin:", 0) == 0 && duplicateShader && ImGui::Button(tr(ICON_MD_CONTENT_COPY " Duplicate to Edit"))) {
+        if (const std::optional<ShaderDef> copy = duplicateShader(*shader)) {
+            clip.shader = copy->id;
+            project.storeShader(*copy);
+            edit = "Duplicate shader";
+        }
+    }
 }
 
 
@@ -944,6 +1032,19 @@ void Inspector::transitionSection(Project& project, Clip& clip, std::string& edi
 
         if (ImGui::Button(tr(ICON_MD_EDIT " Edit Shader"))) {
             editShader(current->id);
+        }
+    }
+    else if (current && current->id.rfind("builtin:", 0) == 0 && duplicateShader) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TableNextColumn();
+
+        if (ImGui::Button(tr(ICON_MD_CONTENT_COPY " Duplicate to Edit"))) {
+            if (const std::optional<ShaderDef> copy = duplicateShader(*current)) {
+                clip.transitionIn.shader = copy->id;
+                project.storeShader(*copy);
+                edit = "Duplicate shader";
+            }
         }
     }
 

@@ -66,6 +66,11 @@ void saveSetting(const std::string& key, const Json& value)
 }
 
 
+// Tooltip of the toolbar button under the mouse, shown once the toolbar
+// font (larger, for the icons) is popped: as large as the other tooltips.
+std::string toolbarTooltip;
+
+
 // Flat, square toolbar button with a tooltip (also shown when disabled).
 // Stays on the same line for the next toolbar item.
 bool toolbarButton(
@@ -92,17 +97,7 @@ bool toolbarButton(
     ImGui::EndDisabled();
 
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled)) {
-        // Tooltips use the regular font size, not the toolbar's.
-        ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase);
-
-        if (shortcut) {
-            ImGui::SetTooltip("%s (%s)", tooltip, shortcut);
-        }
-        else {
-            ImGui::SetTooltip("%s", tooltip);
-        }
-
-        ImGui::PopFont();
+        toolbarTooltip = shortcut ? std::string(tooltip) + " (" + shortcut + ")" : std::string(tooltip);
     }
 
     ImGui::SameLine();
@@ -264,6 +259,7 @@ GUI::GUI(const std::filesystem::path& projectPath, double startSeconds, Id selec
     _inspector.openShaderFolder = [this]() { openShaderFolder(); };
     _inspector.editShader = [this](const std::string& id) { editShader(id); };
     _inspector.newShader = [this](ShaderKind kind) { return newShader(kind); };
+    _inspector.duplicateShader = [this](const ShaderDef& shader) { return duplicateShader(shader); };
     applyShaderReload();
 
     createVideo();
@@ -824,6 +820,17 @@ void GUI::menuBar()
                     ImGui::EndMenu();
                 }
 
+                // The built-in shaders are not changed: copies are.
+                if (ImGui::BeginMenu(tr(ICON_MD_CONTENT_COPY " New from a Built-in Shader"))) {
+                    for (const ShaderDef& shader : builtinShaders()) {
+                        if (ImGui::MenuItem(shader.name.c_str(), shader.kind == ShaderKind::Generator ? "Generator" : "Transition")) {
+                            duplicateShader(shader);
+                        }
+                    }
+
+                    ImGui::EndMenu();
+                }
+
                 if (ImGui::MenuItem(tr(ICON_MD_FOLDER_OPEN " Open Shaders Folder"))) { openShaderFolder(); }
                 if (ImGui::MenuItem(tr(ICON_MD_REFRESH " Reload Shaders"))) { reloadShaders(true); }
                 ImGui::EndMenu();
@@ -1049,6 +1056,11 @@ void GUI::toolbar()
 
     ImGui::PopFont();
 
+    if (!toolbarTooltip.empty()) {
+        ImGui::SetTooltip("%s", toolbarTooltip.c_str());
+        toolbarTooltip.clear();
+    }
+
     ImGui::EndChild();
 
     ImGui::PopStyleColor();
@@ -1223,26 +1235,16 @@ void GUI::mediaPanel()
             const bool missing = !std::filesystem::exists(item.path);
             const media::MediaState state = _media.state(item.id);
 
-            if (missing) {
-                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(230, 90, 80, 255));
-            }
-
-            // The picture of a video or an image, before its name.
+            // Every row as tall as a picture; the picture (or a placeholder
+            // with the icon of the media) and the name are drawn over the
+            // row once it is laid out.
             const TimelineView::Thumbnails thumbnails = thumbnailsOf(item.id);
             const float pictureHeight = 2.f * ImGui::GetTextLineHeight();
+            const ImVec2 pictureSize(std::round(pictureHeight * 16.f / 9.f), pictureHeight);
+            const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+            const float columnRight = rowMin.x + ImGui::GetContentRegionAvail().x;
 
-            if (thumbnails.ready > 0) {
-                const int index = thumbnails.image ? 0 : std::min(thumbnails.ready, thumbnails.count) / 3;
-                const float u = (float)(index % thumbnails.columns) * thumbnails.tileU;
-                const float v = (float)(index / thumbnails.columns) * thumbnails.tileV;
-
-                ImGui::Image(thumbnails.texture, ImVec2(pictureHeight * 16.f / 9.f, pictureHeight),
-                    ImVec2(u, v), ImVec2(u + thumbnails.tileU, v + thumbnails.tileV));
-                ImGui::SameLine();
-            }
-
-            if (ImGui::Selectable(label.c_str(), mediaSelected(item.id), ImGuiSelectableFlags_SpanAllColumns,
-                    ImVec2(0.f, thumbnails.ready > 0 ? pictureHeight : 0.f))) {
+            if (ImGui::Selectable("##media", mediaSelected(item.id), ImGuiSelectableFlags_SpanAllColumns, ImVec2(0.f, pictureHeight))) {
                 // Ctrl: added to the selection, or taken out of it.
                 if (ImGui::GetIO().KeyCtrl) {
                     if (mediaSelected(item.id)) {
@@ -1263,8 +1265,33 @@ void GUI::mediaPanel()
             // Where it is, for the rectangle selection.
             itemRows.push_back({ item.id, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().y });
 
-            if (missing) {
-                ImGui::PopStyleColor();
+            {
+                ImDrawList* drawList = ImGui::GetWindowDrawList();
+                const ImVec2 pictureMax(rowMin.x + pictureSize.x, rowMin.y + pictureSize.y);
+
+                if (thumbnails.ready > 0) {
+                    const int index = thumbnails.image ? 0 : std::min(thumbnails.ready, thumbnails.count) / 3;
+                    const float u = (float)(index % thumbnails.columns) * thumbnails.tileU;
+                    const float v = (float)(index / thumbnails.columns) * thumbnails.tileV;
+
+                    drawList->AddImage(thumbnails.texture, rowMin, pictureMax, ImVec2(u, v), ImVec2(u + thumbnails.tileU, v + thumbnails.tileV));
+                }
+                else {
+                    const char* icon = mediaIcon(item.type);
+                    const ImVec2 iconSize = ImGui::CalcTextSize(icon);
+
+                    drawList->AddRectFilled(rowMin, pictureMax, ImGui::GetColorU32(ImGuiCol_FrameBg), ImGui::GetStyle().FrameRounding);
+                    drawList->AddText(ImVec2(std::round(0.5f * (rowMin.x + pictureMax.x - iconSize.x)), std::round(0.5f * (rowMin.y + pictureMax.y - iconSize.y))),
+                        ImGui::GetColorU32(ImGuiCol_TextDisabled), icon);
+                }
+
+                const ImU32 textColor = missing ? IM_COL32(230, 90, 80, 255) : ImGui::GetColorU32(ImGuiCol_Text);
+                const float textY = std::round(rowMin.y + 0.5f * (pictureHeight - ImGui::GetFontSize()));
+                const float textX = pictureMax.x + ImGui::GetStyle().ItemInnerSpacing.x;
+
+                drawList->PushClipRect(ImVec2(textX, rowMin.y), ImVec2(columnRight, pictureMax.y), true);
+                drawList->AddText(ImVec2(textX, textY), textColor, item.name().c_str());
+                drawList->PopClipRect();
             }
 
             // Placed on the timeline once its real duration is known.
@@ -1337,6 +1364,9 @@ void GUI::mediaPanel()
             }
 
             ImGui::TableNextColumn();
+
+            // Centered on the row, as the name.
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + std::round(0.5f * (pictureHeight - ImGui::GetTextLineHeight())));
 
             if (state.status == media::MediaStatus::Error || missing) {
                 ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), tr(ICON_MD_WARNING " Error"));
@@ -2483,6 +2513,35 @@ std::string readText(const std::filesystem::path& path)
 }
 
 } // namespace
+
+
+std::optional<ShaderDef> GUI::duplicateShader(const ShaderDef& shader)
+{
+    const std::filesystem::path folder = shaderFolder();
+    std::error_code ec;
+    std::filesystem::create_directories(folder, ec);
+
+    // "Plasma copy", "Plasma copy 2"...
+    const std::string base = shader.name + " copy";
+    std::string name = base;
+
+    for (int i = 2; std::filesystem::exists(folder / std::filesystem::u8path(name + ".glsl"), ec); i++) {
+        name = base + " " + std::to_string(i);
+    }
+
+    if (!(std::ofstream(folder / std::filesystem::u8path(name + ".glsl"), std::ios::binary) << shader.source)) {
+        return std::nullopt;
+    }
+
+    reloadShaders(false);
+    editShader("file:" + name);
+
+    for (const ShaderDef& copy : loadShaderFolder(folder)) {
+        if (copy.id == "file:" + name) return copy;
+    }
+
+    return std::nullopt;
+}
 
 
 std::optional<ShaderDef> GUI::newShader(ShaderKind kind)
@@ -5420,8 +5479,27 @@ void GUI::effectsTab()
     const Time localTime = clip ? std::clamp<Time>(_playhead - clip->start, 0, clip->duration) : 0;
     std::string edit;
 
+    // A video track: its picture and its sound in two tabs.
+    bool pictureShown = true;
+
+    if (video && ImGui::BeginTabBar("##effectKinds")) {
+        if (ImGui::BeginTabItem(tr(ICON_MD_MOVIE " Video"))) {
+            ImGui::EndTabItem();
+        }
+        else {
+            pictureShown = false;
+        }
+
+        if (ImGui::BeginTabItem(tr(ICON_MD_AUDIOTRACK " Audio"))) {
+            pictureShown = false;
+            ImGui::EndTabItem();
+        }
+
+        ImGui::EndTabBar();
+    }
+
     // The clip first: its effects come before those of its track.
-    if (clip && clip->kind == ClipKind::Media) {
+    if (pictureShown && clip && clip->kind == ClipKind::Media) {
         ImGui::SeparatorText(video ? tr(ICON_MD_MOVIE " Clip") : tr(ICON_MD_AUDIOTRACK " Clip"));
 
         if (video) {
@@ -5432,10 +5510,12 @@ void GUI::effectsTab()
         }
     }
 
-    ImGui::SeparatorText((std::string(tr(ICON_MD_TUNE " Track ")) + track->name).c_str());
-    ImGui::TextDisabled(video ? tr("On each clip of the track, after its own.") : tr("Applied in order, to the whole track."));
+    if (pictureShown) {
+        ImGui::SeparatorText((std::string(tr(ICON_MD_TUNE " Track ")) + track->name).c_str());
+        ImGui::TextDisabled(video ? tr("On each clip of the track, after its own.") : tr("Applied in order, to the whole track."));
+    }
 
-    if (video) {
+    if (video && pictureShown) {
         // Blending of the clips of the track with the tracks below.
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("%s", tr("Blend"));
@@ -5456,13 +5536,13 @@ void GUI::effectsTab()
         // Keyframes of track effects: in the time of the sequence.
         _inspector.videoEffectsSection(_project, track->videoEffects, _playhead, edit);
     }
-    else {
+    else if (!video) {
         audioEffectChain(track->effects, "track");
     }
 
-    // A video track: the sound of the clip and its sound track too, so that
-    // the effects of a video are all in one place.
-    if (video) {
+    // A video track: the sound of the clip and its sound track, in the
+    // Audio tab.
+    if (video && !pictureShown) {
         const size_t index = (size_t)(track - sequence.videoTracks.data());
         Track* soundTrack = (index < sequence.soundTracks.size()) ? &sequence.soundTracks[index] : nullptr;
         Clip* sound = nullptr;

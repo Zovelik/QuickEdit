@@ -294,12 +294,16 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
         _scrollSeconds = 0.0;
     }
 
-    // The tracks may be taller than the panel: clamp the vertical scrolling.
+    // The tracks may be taller than the panel: clamp the vertical scrolling,
+    // and a scrollbar at the right.
     layoutRows(sequence, _tracksTop);
 
+    float contentHeight = 0.f;
+    const float viewHeight = _tracksBottom - _tracksTop;
+
     if (!_rows.empty()) {
-        const float contentHeight = (_rows.back().top + _rows.back().height) - (_rows.front().top);
-        const float maxScrollY = std::max(0.f, contentHeight - (_tracksBottom - _tracksTop));
+        contentHeight = (_rows.back().top + _rows.back().height) - (_rows.front().top);
+        const float maxScrollY = std::max(0.f, contentHeight - viewHeight);
         const float clamped = std::clamp(_scrollY, 0.f, maxScrollY);
 
         if (clamped != _scrollY) {
@@ -308,8 +312,24 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
         }
     }
 
+    const bool verticalScrollbar = contentHeight > viewHeight + 0.5f;
+    const float scrollbarWidth = verticalScrollbar ? ImGui::GetStyle().ScrollbarSize : 0.f;
+    _timelineRight -= scrollbarWidth;
+
+    if (verticalScrollbar) {
+        const ImRect bar(ImVec2(_timelineRight, _tracksTop), ImVec2(_timelineRight + scrollbarWidth, _tracksBottom));
+        ImS64 scroll = (ImS64)_scrollY;
+
+        if (ImGui::ScrollbarEx(bar, ImGui::GetID("##tracksScroll"), ImGuiAxis_Y, &scroll, (ImS64)viewHeight, (ImS64)contentHeight, ImDrawFlags_None)) {
+            _scrollY = (float)scroll;
+            layoutRows(sequence, _tracksTop);
+        }
+    }
+
     // A single item covers the whole timeline: the mouse is handled below.
-    ImGui::InvisibleButton("##timeline", avail, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+    ImGui::SetCursorScreenPos(origin);
+    ImGui::InvisibleButton("##timeline", ImVec2(avail.x - scrollbarWidth, avail.y),
+        ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
     const bool hovered = ImGui::IsItemHovered();
     const ImVec2 mouse = io.MousePos;
 

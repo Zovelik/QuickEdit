@@ -321,6 +321,10 @@ private:
     double _shaderEditorChecked = 0.;       // Last typed, or compiled
     bool _shaderEditorDirty = false;        // Typed since
     std::optional<core::ShaderDef> newShader(core::ShaderKind kind);
+
+    // A new shader of the user from the source of another (a built-in one),
+    // opened in the editor.
+    std::optional<core::ShaderDef> duplicateShader(const core::ShaderDef& shader);
     void editShader(const std::string& shaderId);
     void saveShader();
     void checkEditedShader();

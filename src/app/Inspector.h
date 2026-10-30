@@ -27,6 +27,17 @@ public:
     std::string draw(core::Project& project, const std::vector<core::Id>& selection, core::Time playhead,
         FontLibrary& fonts, const TextSelection& textSelection = {});
 
+private:
+    // The inspector of one clip (the first of the selection).
+    std::string drawClip(core::Project& project, const std::vector<core::Id>& selection, core::Time playhead,
+        FontLibrary& fonts, const TextSelection& textSelection);
+
+    // The properties changed on the first clip of a selection, copied to the
+    // other clips of the same kind.
+    static void copyChanges(core::Project& project, const core::Clip& before, const core::Clip& after, const std::vector<core::Id>& others);
+
+public:
+
     // The shaders of the user (offered with the built-in ones), why one does
     // not compile, and the folder they are in.
     const std::vector<core::ShaderDef>* userShaders = nullptr;
@@ -37,6 +48,10 @@ public:
     // from an example (nullptr when it could not be written).
     std::function<void(const std::string& shaderId)> editShader;
     std::function<std::optional<core::ShaderDef>(core::ShaderKind kind)> newShader;
+
+    // A copy of a built-in shader (read only) in the folder of the user,
+    // opened in the editor.
+    std::function<std::optional<core::ShaderDef>(const core::ShaderDef& shader)> duplicateShader;
 
     // Name, resolution, frame rate and sample rate of the sequence (also
     // in the Project Properties window).

@@ -161,6 +161,8 @@
   "Download a model first.": "Téléchargez d'abord un modèle.",
   "Drag into the timeline of another sequence to nest it": "Glisser dans la timeline d'une autre séquence pour l'imbriquer",
   "Drag the media inside a clip: the clip stays in place, it shows another part.": "Fait glisser le média dans un clip : le clip reste en place et montre une autre partie.",
+  "Duplicate shader": "Dupliquer le shader",
+  "Duplicate to Edit": "Dupliquer pour modifier",
   "Duration": "Durée",
   "Earlier in the chain": "Plus tôt dans la chaîne",
   "Ease In": "Accélération",
@@ -282,6 +284,7 @@
   "New Transition Shader...": "Nouveau shader de transition...",
   "New folder": "Nouveau dossier",
   "New folder (in the selected one)": "Nouveau dossier (dans celui sélectionné)",
+  "New from a Built-in Shader": "Nouveau à partir d'un shader intégré",
   "New sequence": "Nouvelle séquence",
   "Next Frame": "Image suivante",
   "Next Frame (Right)": "Image suivante (Droite)",
@@ -486,6 +489,7 @@
   "Untitled": "Sans titre",
   "Use headphones, or the speakers will be recorded too.": "Utilisez un casque, sinon les haut-parleurs seront enregistrés aussi.",
   "Use the GPU": "Utiliser le GPU",
+  "Video": "Vidéo",
   "Video Clip": "Clip vidéo",
   "Video sound": "Son vidéo",
   "View": "Affichage",
@@ -505,5 +509,6 @@
   "Zoom Out Timeline": "Zoom arrière sur la timeline",
   "Zoom in preset": "Préréglage zoom avant",
   "Zooms slowly into the picture over the whole clip (Ken Burns).": "Zoome lentement dans l'image sur toute la durée du clip (Ken Burns).",
+  "clips: the changes apply to all of them.": "clips : les changements s'appliquent à tous.",
   "the Recordings folder next to the project": "le dossier Recordings à côté du projet"
 }
