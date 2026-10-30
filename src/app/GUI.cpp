@@ -3481,11 +3481,65 @@ void GUI::fileDropped()
 }
 
 
+// The input of the microphone, the same for the voice-over and the screen
+// and scene recordings, with its error.
+void GUI::inputDeviceCombo(bool enabled)
+{
+    if (!_inputDevicesListed) {
+        _inputDevices = audio::Recorder::devices();
+        _inputDevicesListed = true;
+    }
+
+    std::string current = tr("Default input");
+
+    for (const audio::InputDevice& device : _inputDevices) {
+        if (device.id == _inputDevice) current = device.name;
+    }
+
+    ImGui::BeginDisabled(!enabled);
+    ImGui::SetNextItemWidth(-ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
+
+    if (ImGui::BeginCombo("##input", (std::string(ICON_MD_MIC " ") + current).c_str())) {
+        auto choose = [&](SDL_AudioDeviceID id, const std::string& name) {
+            if (ImGui::Selectable(name.c_str(), id == _inputDevice) && (id != _inputDevice || !_recorder.isOpen())) {
+                _inputDevice = id;
+                _recorderError.clear();
+                _recorder.open(_inputDevice, _recorderError);
+            }
+        };
+
+        choose(0, tr("Default input"));
+
+        for (const audio::InputDevice& device : _inputDevices) {
+            choose(device.id, device.name);
+        }
+
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine();
+
+    if (ImGui::Button(ICON_MD_REFRESH "##inputs", ImVec2(ImGui::GetFrameHeight(), 0.f))) {
+        _inputDevicesListed = false;
+    }
+
+    ImGui::SetItemTooltip(tr("Look for inputs again"));
+    ImGui::EndDisabled();
+
+    if (!_recorderError.empty()) {
+        ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " %s", _recorderError.c_str());
+    }
+}
+
+
 void GUI::recorderWindow()
 {
     // Closed: the input too (the system shows it in use while open), unless
-    // the screen recording uses it.
-    if (!_showRecorder && !_screenRecording && !(_showScreenRecorder && _captureMicrophone)) {
+    // the screen or scene recorders use it.
+    const bool microphoneUsed = _screenRecording || _sceneRecording ||
+        ((_showScreenRecorder || _showSceneRecorder) && _captureMicrophone);
+
+    if (!_showRecorder && !microphoneUsed) {
         if (_recorder.isOpen()) {
             if (_recorder.recording()) {
                 stopRecording();
@@ -3528,46 +3582,7 @@ void GUI::recorderWindow()
 
     const bool recording = _recorder.recording();
 
-    // Input
-    std::string current = tr("Default input");
-
-    for (const audio::InputDevice& device : _inputDevices) {
-        if (device.id == _inputDevice) current = device.name;
-    }
-
-    ImGui::BeginDisabled(recording);
-    ImGui::SetNextItemWidth(-ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
-
-    if (ImGui::BeginCombo("##input", (std::string(ICON_MD_MIC " ") + current).c_str())) {
-        auto choose = [&](SDL_AudioDeviceID id, const std::string& name) {
-            if (ImGui::Selectable(name.c_str(), id == _inputDevice) && (id != _inputDevice || !_recorder.isOpen())) {
-                _inputDevice = id;
-                _recorderError.clear();
-                _recorder.open(_inputDevice, _recorderError);
-            }
-        };
-
-        choose(0, tr("Default input"));
-
-        for (const audio::InputDevice& device : _inputDevices) {
-            choose(device.id, device.name);
-        }
-
-        ImGui::EndCombo();
-    }
-
-    ImGui::SameLine();
-
-    if (ImGui::Button(ICON_MD_REFRESH, ImVec2(ImGui::GetFrameHeight(), 0.f))) {
-        _inputDevicesListed = false;
-    }
-
-    ImGui::SetItemTooltip(tr("Look for inputs again"));
-    ImGui::EndDisabled();
-
-    if (!_recorderError.empty()) {
-        ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " %s", _recorderError.c_str());
-    }
+    inputDeviceCombo(!recording);
 
     // Level
     ImGui::Spacing();
@@ -4047,23 +4062,14 @@ void GUI::screenRecorderWindow()
         levelMeter("##system", _screenRecorder.takeAudioPeak(), _systemMeter);
     }
 
-    std::string microphone = tr("Default input");
-
-    for (const audio::InputDevice& device : _inputDevices) {
-        if (device.id == _inputDevice) microphone = device.name;
-    }
-
     ImGui::BeginDisabled(recording);
-    ImGui::Checkbox((tr("Microphone: ") + microphone + "##microphone").c_str(), &_captureMicrophone);
-    ImGui::SetItemTooltip(tr("The input chosen in the Record Voice-Over window. Recorded on an audio track of its own."));
+    ImGui::Checkbox(tr("Microphone"), &_captureMicrophone);
+    ImGui::SetItemTooltip(tr("Recorded on an audio track of its own."));
     ImGui::EndDisabled();
 
     if (_captureMicrophone) {
+        inputDeviceCombo(!recording);
         levelMeter("##microphone", _recorder.takePeak(), _microphoneMeter);
-
-        if (!_recorderError.empty()) {
-            ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " %s", _recorderError.c_str());
-        }
     }
 
     ImGui::Spacing();

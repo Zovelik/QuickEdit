@@ -1515,14 +1515,27 @@ void previewLoop(std::shared_ptr<SourcePreview::State> state, CaptureSource sour
     int streamIndex = -1;
     std::string error;
 
+    // Of the source, when the pictures are reduced before they get here.
+    int sourceWidth = 0;
+    int sourceHeight = 0;
+
+    // Not more pictures than the preview shows (the screens give one per
+    // refresh of the display).
+    Uint64 last = 0;
+
     auto publish = [&]() {
+        if (SDL_GetTicks() - last < 1000 / SourcePreview::FrameRate) {
+            return;
+        }
+
+        last = SDL_GetTicks();
         toPreview(sws, frame, rgba, SourcePreview::Width, SourcePreview::Height);
 
         std::scoped_lock lock(state->mutex);
         state->rgba.swap(rgba);
         state->fresh = true;
-        state->frameWidth = frame->width;
-        state->frameHeight = frame->height;
+        state->frameWidth = (sourceWidth > 0) ? sourceWidth : frame->width;
+        state->frameHeight = (sourceHeight > 0) ? sourceHeight : frame->height;
     };
 
     bool opened = false;
@@ -1531,8 +1544,26 @@ void previewLoop(std::shared_ptr<SourcePreview::State> state, CaptureSource sour
         opened = openCamera(source, false, input, decoder, streamIndex, error);
     }
     else {
+        // Reduced on the GPU to the size of the preview, then downloaded:
+        // a whole screen downloaded and reduced on the CPU is too slow for
+        // a fluid preview. Without that filter, the whole pictures, fewer.
         int result = 0;
-        graph = openGraph(captureFilter(source, 5, true) + ",hwdownload,format=bgra", sink, result);
+        const std::string fit = "scale_d3d11=width='min(" + std::to_string(SourcePreview::Width) + ",iw*" + std::to_string(SourcePreview::Height) + "/ih)'"
+            ":height='min(" + std::to_string(SourcePreview::Height) + ",ih*" + std::to_string(SourcePreview::Width) + "/iw)'";
+        graph = openGraph(captureFilter(source, SourcePreview::FrameRate, true) + "," + fit + ",hwdownload,format=bgra", sink, result);
+
+        if (graph) {
+            const AVFilterContext* capture = avfilter_graph_get_filter(graph, "Parsed_gfxcapture_0");
+
+            if (capture && capture->nb_outputs > 0) {
+                sourceWidth = capture->outputs[0]->w;
+                sourceHeight = capture->outputs[0]->h;
+            }
+        }
+        else {
+            graph = openGraph(captureFilter(source, 5, true) + ",hwdownload,format=bgra", sink, result);
+        }
+
         opened = graph != nullptr;
 
         if (!opened) {
@@ -1558,16 +1589,9 @@ void previewLoop(std::shared_ptr<SourcePreview::State> state, CaptureSource sour
                 break;
             }
 
-            // A few pictures a second are enough.
-            static thread_local Uint64 last = 0;
-
             if (packet->stream_index == streamIndex && avcodec_send_packet(decoder, packet) >= 0) {
                 while (avcodec_receive_frame(decoder, frame) >= 0) {
-                    if (SDL_GetTicks() - last > 150) {
-                        last = SDL_GetTicks();
-                        publish();
-                    }
-
+                    publish();
                     av_frame_unref(frame);
                 }
             }

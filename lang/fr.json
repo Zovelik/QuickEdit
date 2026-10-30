@@ -289,7 +289,6 @@
   "Margin %.0f px": "Marge %.0f px",
   "Media": "Médias",
   "Microphone": "Microphone",
-  "Microphone:": "Microphone :",
   "Mix the Audio Streams": "Mixer les flux audio",
   "Mix the audio streams": "Mixer les flux audio",
   "Model": "Modèle",
@@ -502,7 +501,6 @@
   "The credits roll up over the clip: make it longer to slow them down.": "Le générique monte pendant le clip : allongez-le pour le ralentir.",
   "The export can use another size or frame rate.": "L'export peut utiliser une autre taille ou cadence.",
   "The formats of this camera are not known: it gives its default one": "Les formats de cette caméra sont inconnus : elle donne celui par défaut",
-  "The input chosen in the Record Voice-Over window. Recorded on an audio track of its own.": "L'entrée choisie dans la fenêtre Enregistrer une voix off. Enregistrée sur sa propre piste audio.",
   "The input saturates: lower its gain.": "L'entrée sature : baissez son gain.",
   "The larger, the more accurate; the large ones want a GPU.": "Plus il est grand, plus il est précis ; les grands modèles demandent un GPU.",
   "The largest size the camera gives in MJPEG, up to 1080p": "La plus grande taille que la caméra donne en MJPEG, jusqu'à 1080p",
@@ -559,5 +557,6 @@
   "Zoom in preset": "Préréglage zoom avant",
   "Zooms slowly into the picture over the whole clip (Ken Burns).": "Zoome lentement dans l'image sur toute la durée du clip (Ken Burns).",
   "clips: the changes apply to all of them.": "clips : les changements s'appliquent à tous.",
-  "the Recordings folder next to the project": "le dossier Recordings à côté du projet"
+  "the Recordings folder next to the project": "le dossier Recordings à côté du projet",
+  "Recorded on an audio track of its own.": "Enregistré sur sa propre piste audio."
 }

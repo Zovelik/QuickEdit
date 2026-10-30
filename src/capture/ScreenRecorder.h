@@ -94,6 +94,7 @@ namespace capture
     public:
         static constexpr int Width = 480;
         static constexpr int Height = 270;
+        static constexpr int FrameRate = 30;
 
         ~SourcePreview() { stop(); }
 

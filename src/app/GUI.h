@@ -435,6 +435,7 @@ private:
 
     // Voice-over recording, in a window of its own.
     void recorderWindow();
+    void inputDeviceCombo(bool enabled);
     // Peak meter of an input, the level falling back slowly.
     struct LevelMeter
     {
