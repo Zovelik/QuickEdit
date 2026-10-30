@@ -852,6 +852,7 @@ bool ScreenRecorder::start(const std::filesystem::path& path, const ScreenRecord
 #else
     _error.clear();
     _stop = false;
+    _paused = settings.startPaused;
     _videoStarted = false;
     _seconds = 0.0;
     _frameRateNum = std::clamp(settings.frameRateNum, 1, 240000);
@@ -1138,6 +1139,12 @@ void ScreenRecorder::videoLoop()
                 break;
             }
 
+            // Paused: the pictures read, not kept.
+            if (_paused) {
+                av_packet_unref(input);
+                continue;
+            }
+
             if (input->stream_index == video.streamIndex && avcodec_send_packet(video.decoder, input) >= 0) {
                 while (avcodec_receive_frame(video.decoder, frame) >= 0) {
                     encode(frame);
@@ -1162,7 +1169,10 @@ void ScreenRecorder::videoLoop()
             break;
         }
 
-        encode(frame);
+        if (!_paused) {
+            encode(frame);
+        }
+
         av_frame_unref(frame);
     }
 
@@ -1501,8 +1511,21 @@ struct SourcePreview::State
 
 namespace {
 
-void previewLoop(std::shared_ptr<SourcePreview::State> state, CaptureSource source)
+// Waits until a preview let its source go (a camera opens once).
+void waitReleased(const std::shared_ptr<SourcePreview::State>& state)
 {
+    for (int i = 0; state && i < 300 && !state->done; i++) {
+        SDL_Delay(10);
+    }
+}
+
+
+void previewLoop(std::shared_ptr<SourcePreview::State> state, CaptureSource source, std::shared_ptr<SourcePreview::State> previous)
+{
+    // Another format of the same camera: once the previous preview let it
+    // go, here rather than on the thread of the window.
+    waitReleased(previous);
+
     AVFrame* frame = av_frame_alloc();
     AVPacket* packet = av_packet_alloc();
     SwsContext* sws = nullptr;
@@ -1634,8 +1657,10 @@ void SourcePreview::show(const CaptureSource& source)
         return;
     }
 
-    // Another format of the same camera: released first, it opens once.
-    stop(_state && source.kind == CaptureSource::Kind::Camera && source.sameDevice(_source));
+    // Another format of the same camera: released first, it opens once (the
+    // new preview waits for it on its thread).
+    std::shared_ptr<State> previous = (_state && source.kind == CaptureSource::Kind::Camera && source.sameDevice(_source)) ? _state : nullptr;
+    stop();
     _source = source;
 
     if (!source.handle) {
@@ -1645,7 +1670,7 @@ void SourcePreview::show(const CaptureSource& source)
     // The thread owns the state with this object: stopping never waits for
     // a capture that has nothing new to give.
     _state = std::make_shared<State>();
-    std::thread(previewLoop, _state, source).detach();
+    std::thread(previewLoop, _state, source, std::move(previous)).detach();
 }
 
 
@@ -1663,6 +1688,20 @@ void SourcePreview::stop(bool wait)
 
     _state.reset();
     _source = CaptureSource();
+}
+
+
+std::function<void()> SourcePreview::release()
+{
+    std::shared_ptr<State> state = std::move(_state);
+    _source = CaptureSource();
+
+    if (!state) {
+        return [] {};
+    }
+
+    state->stop = true;
+    return [state] { waitReleased(state); };
 }
 
 

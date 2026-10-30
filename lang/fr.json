@@ -569,5 +569,16 @@
   "Each clip is then selected and moved alone": "Chaque clip est alors sélectionné et déplacé seul",
   "Link": "Lier",
   "Link clips": "Lier les clips",
-  "The selected clips are then selected and moved together": "Les clips sélectionnés sont alors sélectionnés et déplacés ensemble"
+  "The selected clips are then selected and moved together": "Les clips sélectionnés sont alors sélectionnés et déplacés ensemble",
+  "Audio streams": "Pistes audio",
+  "Finishing...": "Finalisation...",
+  "Mix the audio streams again in one clip": "Remixer les pistes audio en un seul clip",
+  "Mute": "Couper le son",
+  "Mute clips": "Couper le son des clips",
+  "Opening the sources": "Ouverture des sources",
+  "Show each audio stream, on audio tracks": "Afficher chaque piste audio, sur des pistes audio",
+  "Starting...": "Démarrage...",
+  "Unmute": "Rétablir le son",
+  "Unmute clips": "Rétablir le son des clips",
+  "Writing the files": "Écriture des fichiers"
 }

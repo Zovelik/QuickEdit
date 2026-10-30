@@ -545,11 +545,14 @@ void GUI::render(
         _testScreenSource = -1;
     }
 
-    if (_testScreenSeconds > 0.0 && SDL_GetTicks() > _testScreenStartTicks) {
-        if (!_screenRecording) {
-            startScreenRecording();
+    if (_testScreenSeconds > 0.0 && SDL_GetTicks() > _testScreenStartTicks && !_screenFinishing) {
+        updateScreenRecording();
 
-            if (!_screenRecording) {
+        if (!_screenRecording && !_screenStarting) {
+            if (_screenError.empty()) {
+                startScreenRecording();
+            }
+            else {
                 _testScreenSeconds = 0.0;
                 _testQuitTicks = SDL_GetTicks() + 3000;
             }
@@ -2035,11 +2038,66 @@ void GUI::viewerInteraction(const ImVec2& frameMin, const ImVec2& frameSize)
 
     const bool cropKey = ImGui::GetIO().KeyAlt && croppable;
 
+    // The arrows of a resize cursor along a direction on screen, from the
+    // center of the layer to the handle: they turn with the layer.
+    auto resizeCursor = [](const ImVec2& direction) {
+        float angle = std::atan2(direction.y, direction.x) * 180.f / 3.14159265358979f;
+        angle = std::fmod(angle + 360.f, 180.f);
+
+        return (angle < 22.5f || angle >= 157.5f) ? ImGuiMouseCursor_ResizeEW
+            : (angle < 67.5f) ? ImGuiMouseCursor_ResizeNWSE
+            : (angle < 112.5f) ? ImGuiMouseCursor_ResizeNS
+            : ImGuiMouseCursor_ResizeNESW;
+    };
+
+    auto handleCursor = [&](int handle) {
+        const ImVec2 at = (handle < 4) ? handleBounds->corners[(size_t)handle] : edgeHandles[handle - 5];
+        return resizeCursor(ImVec2(at.x - layerCenter.x, at.y - layerCenter.y));
+    };
+
+    // Rotation: no such cursor in the system ones, a drawn one.
+    auto rotationCursor = [&]() {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+        ImDrawList* foreground = ImGui::GetForegroundDrawList();
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        const ImVec2 size = ImGui::CalcTextSize(ICON_MD_ROTATE_RIGHT);
+        const ImVec2 at(mouse.x - 0.5f * size.x, mouse.y - 0.5f * size.y);
+
+        for (const ImVec2& offset : { ImVec2(-1.f, 0.f), ImVec2(1.f, 0.f), ImVec2(0.f, -1.f), ImVec2(0.f, 1.f) }) {
+            foreground->AddText(ImVec2(at.x + offset.x, at.y + offset.y), IM_COL32(0, 0, 0, 220), ICON_MD_ROTATE_RIGHT);
+        }
+
+        foreground->AddText(at, IM_COL32(255, 255, 255, 255), ICON_MD_ROTATE_RIGHT);
+    };
+
     if (hovered && hoveredHandle >= 0 && _draggedLayer == InvalidId) {
-        ImGui::SetMouseCursor(hoveredHandle == 4 ? ImGuiMouseCursor_Hand
-            : (hoveredHandle == 5 || hoveredHandle == 7) ? ImGuiMouseCursor_ResizeNS
-            : (hoveredHandle == 6 || hoveredHandle == 8) ? ImGuiMouseCursor_ResizeEW
-            : ImGuiMouseCursor_ResizeNWSE);
+        if (hoveredHandle == 4) {
+            rotationCursor();
+        }
+        else {
+            ImGui::SetMouseCursor(handleCursor(hoveredHandle));
+        }
+    }
+
+    // The layers under the mouse, the top one first (subtitles are not
+    // moved).
+    std::vector<Id> underMouse;
+
+    if (hovered) {
+        for (const Compositor::LayerBounds& bounds : _compositor->bounds()) {
+            if (inside(bounds.corners, point)) {
+                underMouse.push_back(bounds.clipId);
+            }
+        }
+    }
+
+    // A layer that can be moved: the cross of arrows.
+    if (hovered && hoveredHandle < 0 && _draggedLayer == InvalidId && !underMouse.empty()) {
+        const Track* track = _project.findTrackOfClip(underMouse.front());
+
+        if (!(track && track->type == TrackType::Subtitle)) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+        }
     }
 
     if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hoveredHandle >= 0) {
@@ -2058,25 +2116,24 @@ void GUI::viewerInteraction(const ImVec2& frameMin, const ImVec2& frameSize)
         _cropBottom = hoveredHandle == 2 || hoveredHandle == 3 || hoveredHandle == 7;
         _dragStartMouse = point;
         _dragCenter = layerCenter;
+        _dragCursor = (hoveredHandle == 4) ? ImGuiMouseCursor_None : handleCursor(hoveredHandle);
         _dragStartScale = clip->transform.scale.at(localTime);
         _dragStartRotation = clip->transform.rotation.at(localTime);
         _dragMoved = false;
         stopPlayback();
     }
     else if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        // The top layer under the mouse; the selected one first, so that a
-        // layer under another can still be dragged once selected.
-        Id picked = InvalidId;
+        // The top layer under the mouse. Ctrl: the one below the selected
+        // layer there, to reach a layer hidden by another (again and again
+        // to go down, around to the top).
+        Id picked = underMouse.empty() ? InvalidId : underMouse.front();
 
-        for (const Compositor::LayerBounds& bounds : _compositor->bounds()) {
-            if (inside(bounds.corners, point) && std::find(_selection.begin(), _selection.end(), bounds.clipId) != _selection.end()) {
-                picked = bounds.clipId;
-            }
-        }
-
-        for (const Compositor::LayerBounds& bounds : _compositor->bounds()) {
-            if (picked == InvalidId && inside(bounds.corners, point)) {
-                picked = bounds.clipId;
+        if (ImGui::GetIO().KeyCtrl && underMouse.size() > 1) {
+            for (size_t i = 0; i < underMouse.size(); i++) {
+                if (std::find(_selection.begin(), _selection.end(), underMouse[i]) != _selection.end()) {
+                    picked = underMouse[(i + 1) % underMouse.size()];
+                    break;
+                }
             }
         }
 
@@ -2143,7 +2200,7 @@ void GUI::viewerInteraction(const ImVec2& frameMin, const ImVec2& frameSize)
 
             clip->transform.scale.set(localTime, scale);
             _dragMoved = true;
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE);
+            ImGui::SetMouseCursor(_dragCursor);
         }
         else if (_layerDrag == LayerDrag::Crop) {
             // The side follows the mouse, in the picture; the rest of it
@@ -2185,8 +2242,7 @@ void GUI::viewerInteraction(const ImVec2& frameMin, const ImVec2& frameSize)
                 _dragMoved = true;
             }
 
-            ImGui::SetMouseCursor((_cropLeft || _cropRight) && (_cropTop || _cropBottom) ? ImGuiMouseCursor_ResizeNWSE
-                : (_cropLeft || _cropRight) ? ImGuiMouseCursor_ResizeEW : ImGuiMouseCursor_ResizeNS);
+            ImGui::SetMouseCursor(_dragCursor);
         }
         else if (_layerDrag == LayerDrag::Rotate) {
             const Time localTime = std::clamp<Time>(_playhead - clip->start, 0, clip->duration);
@@ -2201,7 +2257,7 @@ void GUI::viewerInteraction(const ImVec2& frameMin, const ImVec2& frameSize)
 
             clip->transform.rotation.set(localTime, rotation);
             _dragMoved = true;
-            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            rotationCursor();
         }
         else {
             const float dx = point.x - _dragStartMouse.x;
@@ -3922,6 +3978,8 @@ void GUI::stopRecording()
 
 void GUI::screenRecorderWindow()
 {
+    updateScreenRecording();
+
     // The windows of QuickEdit stay out of the capture, the ones opened
     // during it too.
     if (_screenRecording && _hideFromCapture) {
@@ -3974,7 +4032,7 @@ void GUI::screenRecorderWindow()
         return;
     }
 
-    const bool recording = _screenRecording;
+    const bool recording = _screenRecording || _screenStarting || _screenFinishing;
     const bool isMonitor = _captureSource.kind == capture::CaptureSource::Kind::Monitor;
     const bool isCamera = _captureSource.kind == capture::CaptureSource::Kind::Camera;
 
@@ -4079,8 +4137,16 @@ void GUI::screenRecorderWindow()
     // Record / Stop
     const float width = 8.f * ImGui::GetFontSize();
 
-    if (!recording) {
-        ImGui::BeginDisabled(_captureSource.handle == 0);
+    if (_screenStarting || _screenFinishing) {
+        ImGui::BeginDisabled();
+        ImGui::Button(_screenStarting ? tr(ICON_MD_HOURGLASS_EMPTY " Starting...") : tr(ICON_MD_HOURGLASS_EMPTY " Finishing..."), ImVec2(width, 0.f));
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", _screenStarting ? tr("Opening the sources") : tr("Writing the files"));
+    }
+    else if (!recording) {
+        ImGui::BeginDisabled(_captureSource.handle == 0 || _sceneRecording || _sceneStarting || _sceneFinishing);
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.18f, 0.16f, 1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.25f, 0.22f, 1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.65f, 0.14f, 0.12f, 1.f));
@@ -4233,7 +4299,7 @@ void GUI::sourcePreview()
     constexpr int Height = capture::SourcePreview::Height;
 
     // Live while choosing; the capture has the source while recording.
-    if (_screenRecording) {
+    if (_screenRecording || _screenStarting || _screenFinishing) {
         _sourcePreview.stop();
     }
     else {
@@ -4328,17 +4394,48 @@ void GUI::startScreenRecording()
         capture::excludeFromCapture(true);
     }
 
-    // The camera opens once: its preview first lets it go.
-    _sourcePreview.stop(camera);
+    // Opened on a thread (the window goes on meanwhile), once the preview let
+    // the source go (a camera opens once). The recorder is the thread's
+    // until it is done.
+    _screenPath = recordingPath(camera ? "Camera" : "Screen", ".mkv");
+    _screenStarting = true;
+    _screenJob = std::async(std::launch::async, [this, path = _screenPath, settings, released = _sourcePreview.release()]() {
+        released();
 
-    const std::filesystem::path path = recordingPath(camera ? "Camera" : "Screen", ".mkv");
+        ScreenJob job;
+        job.ok = _screenRecorder.start(path, settings, job.error);
+        return job;
+    });
+}
 
-    if (!_screenRecorder.start(path, settings, _screenError)) {
+
+void GUI::updateScreenRecording()
+{
+    if (!_screenJob.valid() || _screenJob.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+        return;
+    }
+
+    ScreenJob job = _screenJob.get();
+
+    if (_screenStarting) {
+        _screenStarting = false;
+        beginScreenRecording(std::move(job));
+    }
+    else if (_screenFinishing) {
+        _screenFinishing = false;
+        placeScreenRecording(std::move(job));
+    }
+}
+
+
+void GUI::beginScreenRecording(ScreenJob job)
+{
+    if (!job.ok) {
+        _screenError = job.error;
         capture::excludeFromCapture(false);
         return;
     }
 
-    _screenPath = path;
     _screenStart = snapToFrame(_playhead, _project.sequence().frameRate);
     _screenRecording = true;
     _screenMicrophonePath.clear();
@@ -4410,14 +4507,47 @@ void GUI::stopScreenRecording()
 
     _screenRecording = false;
 
-    const double seconds = _screenRecorder.seconds();
-    const bool ok = _screenRecorder.stop();
+    // The picture and the microphone stop now; finishing the file (the last
+    // pictures encoded, the microphone added) is done on a thread.
+    _screenRecorder.requestStop();
     const int64_t microphoneFrames = _screenMicrophonePath.empty() ? 0 : _recorder.stop();
-
     capture::excludeFromCapture(false);
 
-    if (!ok) {
-        _screenError = _screenRecorder.error();
+    _screenFinishing = true;
+    _screenJob = std::async(std::launch::async, [this, path = _screenPath, microphonePath = _screenMicrophonePath, microphoneFrames]() {
+        ScreenJob job;
+        job.ok = _screenRecorder.stop();
+        job.error = job.ok ? std::string() : _screenRecorder.error();
+        job.seconds = _screenRecorder.seconds();
+        job.microphoneFrames = microphoneFrames;
+
+        // The microphone in the file of the recording, as its second audio
+        // stream: the clip plays both, and can show each one.
+        if (job.seconds > 0.0 && microphoneFrames > 0) {
+            std::string error;
+            job.microphoneInFile = capture::addAudioStream(path, microphonePath, "Microphone", error);
+
+            if (job.microphoneInFile) {
+                std::error_code ec;
+                std::filesystem::remove(microphonePath, ec);
+            }
+            else {
+                SDL_Log("Screen recording: the microphone stays apart: %s", error.c_str());
+            }
+        }
+
+        return job;
+    });
+}
+
+
+void GUI::placeScreenRecording(ScreenJob job)
+{
+    const double seconds = job.seconds;
+    const int64_t microphoneFrames = job.microphoneFrames;
+
+    if (!job.ok) {
+        _screenError = job.error;
     }
 
     std::error_code ec;
@@ -4460,21 +4590,8 @@ void GUI::stopScreenRecording()
 
     const Time start = _screenStart;
 
-    // The microphone in the file of the recording, as its second audio
-    // stream: the clip plays both, and can show each one.
-    bool microphoneInFile = false;
-
-    if (microphoneFrames > 0) {
-        std::string error;
-
-        if (capture::addAudioStream(_screenPath, _screenMicrophonePath, "Microphone", error)) {
-            std::filesystem::remove(_screenMicrophonePath, ec);
-            microphoneInFile = true;
-        }
-        else {
-            SDL_Log("Screen recording: the microphone stays apart: %s", error.c_str());
-        }
-    }
+    // The microphone joined the file on the thread, when it could.
+    const bool microphoneInFile = job.microphoneInFile;
 
     // The picture: the video track chosen at the start while it is still
     // free, else the first free one, or a new one.
@@ -4707,7 +4824,7 @@ void GUI::requestDeleteTrack(Id trackId)
     Sequence& sequence = _project.sequence();
     const Track* track = sequence.findTrack(trackId);
 
-    if (!track || _recorder.recording() || _screenRecording || _sceneRecording) {
+    if (!track || _recorder.recording() || _screenRecording || _screenStarting || _screenFinishing || _sceneRecording || _sceneStarting || _sceneFinishing) {
         return;
     }
 
@@ -4899,7 +5016,7 @@ void GUI::timelinePanel()
             }
         }
 
-        // Scene recording: each source on its track.
+        // Scene recording: each source on its track, until placed.
         if (_sceneRecording) {
             for (const SceneTake& take : _sceneTakes) {
                 TimelineView::LiveRecording live;
@@ -4908,6 +5025,14 @@ void GUI::timelinePanel()
                 live.length = secondsToTime(take.recorder->seconds());
                 _timeline.addLiveRecording(std::move(live));
             }
+        }
+
+        for (const auto& [trackId, length] : _sceneFinishingLive) {
+            TimelineView::LiveRecording live;
+            live.trackId = trackId;
+            live.start = _sceneStart;
+            live.length = length;
+            _timeline.addLiveRecording(std::move(live));
         }
 
         const TimelineView::Result result = _timeline.draw(_project, _playhead, _selection);

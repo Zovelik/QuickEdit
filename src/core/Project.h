@@ -224,6 +224,10 @@ namespace core
         // Shows the frame at sourceIn for the whole clip (freeze frame).
         bool frozen = false;
 
+        // A sound or audio clip not heard (an audio stream of a file, kept
+        // aside).
+        bool muted = false;
+
         // Media clips: playback speed, 2 shows the media twice as fast (its
         // sound higher). The clip shows duration * speed of the media.
         double speed = 1.0;

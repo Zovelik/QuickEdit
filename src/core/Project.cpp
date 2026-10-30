@@ -384,6 +384,8 @@ Json clipToJson(const Clip& clip)
     json["gainDb"] = (double)clip.gainDb;
     json["frozen"] = clip.frozen;
 
+    if (clip.muted) json["muted"] = true;
+
     if (clip.speed != 1.0) json["speed"] = clip.speed;
     if (clip.audioStream >= 0) json["audioStream"] = clip.audioStream;
     if (clip.fit != FitMode::Fit) json["fit"] = clip.fit == FitMode::Fill ? "fill" : "native";
@@ -473,6 +475,7 @@ Clip clipFromJson(const Json& json)
     clip.linkGroup = (Id)json["link"].toInt();
     clip.gainDb = (float)json["gainDb"].toDouble(0.0);
     clip.frozen = json["frozen"].toBool();
+    clip.muted = json["muted"].toBool();
     clip.speed = std::clamp(json["speed"].toDouble(1.0), Project::MinSpeed, Project::MaxSpeed);
     clip.audioStream = (int)std::max<int64_t>(-1, json["audioStream"].toInt(-1));
 

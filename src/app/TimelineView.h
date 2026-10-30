@@ -262,6 +262,11 @@ private:
 
     static bool isSelected(const std::vector<core::Id>& selection, core::Id clipId);
 
+    // The button of the audio streams of a clip (its icon, nullptr when it
+    // has none), and whether the mouse is over it.
+    static const char* streamsButton(const core::Project& project, const core::Clip& clip, core::TrackType type);
+    bool overStreamsButton(const core::Clip& clip, const Row& row, const char* icon, const ImVec2& mouse) const;
+
     // View
     float _pixelsPerSecond = 50.f;
     double _scrollSeconds = 0.0;

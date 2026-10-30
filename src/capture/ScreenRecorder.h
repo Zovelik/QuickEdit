@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -105,6 +106,10 @@ namespace capture
         // be opened once) when asked.
         void stop(bool wait = false);
 
+        // Stops without waiting: the function returned waits until the
+        // source is let go (a camera opens once), for another thread.
+        std::function<void()> release();
+
         const CaptureSource& source() const { return _source; }
 
         // The last picture, when a new one came since the previous call.
@@ -135,6 +140,10 @@ namespace capture
         int frameRateDen = 1;
         bool cursor = true;
         bool systemAudio = true;    // What the computer plays
+
+        // Captures without recording until resume(): several recorders
+        // opened one after the other start together.
+        bool startPaused = false;
     };
 
 
@@ -157,6 +166,13 @@ namespace capture
         // Opens the capture and the encoders, then records on threads of
         // its own until stop(). False with error set when it cannot start.
         bool start(const std::filesystem::path& path, const ScreenRecordSettings& settings, std::string& error);
+
+        // Starts recording, after a start() paused.
+        void resume() { _paused = false; }
+
+        // Stops recording at once, without waiting: stop() finishes the
+        // file. Several recorders stop together this way.
+        void requestStop() { _stop = true; }
 
         // Finishes the file. Returns false when the recording failed on
         // the way (see error()).
@@ -199,6 +215,7 @@ namespace capture
 
         std::atomic<bool> _recording = false;
         std::atomic<bool> _stop = false;
+        std::atomic<bool> _paused = false;
         std::atomic<bool> _videoStarted = false;
         std::atomic<double> _seconds = 0.0;
         std::atomic<float> _audioPeak = 0.f;

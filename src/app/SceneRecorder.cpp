@@ -19,6 +19,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 
@@ -75,7 +76,7 @@ void GUI::syncScenePreviews(bool show)
         const SceneSource& source = scene->sources[i];
 
         // While recording, the recorders have the sources.
-        if (_sceneRecording || !source.available) {
+        if (_sceneRecording || _sceneStarting || _sceneFinishing || !source.available) {
             preview.preview.stop();
         }
         else {
@@ -126,6 +127,8 @@ void GUI::syncScenePreviews(bool show)
 
 void GUI::sceneRecorderWindow()
 {
+    updateSceneRecording();
+
     if (!_showSceneRecorder) {
         if (_sceneRecording) {
             stopSceneRecording();
@@ -167,7 +170,7 @@ void GUI::sceneRecorderWindow()
         return;
     }
 
-    const bool recording = _sceneRecording;
+    const bool recording = _sceneRecording || _sceneStarting || _sceneFinishing;
     const Sequence& sequence = _project.sequence();
     const ImGuiStyle& style = ImGui::GetStyle();
     bool changed = false;
@@ -643,10 +646,18 @@ void GUI::sceneRecorderWindow()
     ImGui::Separator();
 
     const float width = 8.f * fontSize;
-    const bool busy = _screenRecording || (_recorder.recording() && !_sceneRecording);
+    const bool busy = _screenRecording || _screenStarting || _screenFinishing || (_recorder.recording() && !_sceneRecording);
     const bool any = std::any_of(scene->sources.begin(), scene->sources.end(), [](const SceneSource& s) { return s.available; });
 
-    if (!recording) {
+    if (_sceneStarting || _sceneFinishing) {
+        ImGui::BeginDisabled();
+        ImGui::Button(_sceneStarting ? tr(ICON_MD_HOURGLASS_EMPTY " Starting...") : tr(ICON_MD_HOURGLASS_EMPTY " Finishing..."), ImVec2(width, 0.f));
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", _sceneStarting ? tr("Opening the sources") : tr("Writing the files"));
+    }
+    else if (!recording) {
         ImGui::BeginDisabled(busy || !any);
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.18f, 0.16f, 1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.25f, 0.22f, 1.f));
@@ -694,7 +705,7 @@ void GUI::startSceneRecording()
 {
     RecordingScene* scene = currentScene();
 
-    if (!scene || _sceneRecording || _screenRecording) {
+    if (!scene || _sceneRecording || _sceneStarting || _sceneFinishing || _screenRecording || _screenStarting || _screenFinishing) {
         return;
     }
 
@@ -706,13 +717,16 @@ void GUI::startSceneRecording()
         capture::excludeFromCapture(true);
     }
 
-    // The sources let go by their previews (a camera opens once).
+    // The sources let go by their previews (a camera opens once): waited
+    // for on the thread of the start.
+    std::vector<std::function<void()>> released;
+
     for (const std::unique_ptr<ScenePreview>& preview : _scenePreviews) {
-        preview->preview.stop(true);
+        released.push_back(preview->preview.release());
     }
 
     const Sequence& sequence = _project.sequence();
-    bool first = true;
+    std::vector<SceneTake> takes;
 
     for (size_t i = 0; i < scene->sources.size(); i++) {
         const SceneSource& source = scene->sources[i];
@@ -722,57 +736,122 @@ void GUI::startSceneRecording()
         }
 
         // The frame rate chosen for the screens and windows (the one of the
-        // sequence by default); a camera has its own.
-        capture::ScreenRecordSettings settings;
-        settings.source = source.source;
-        settings.frameRateNum = (_captureFrameRate > 0) ? _captureFrameRate : (int)sequence.frameRate.num;
-        settings.frameRateDen = (_captureFrameRate > 0) ? 1 : (int)sequence.frameRate.den;
-        settings.cursor = _captureCursor;
-        settings.systemAudio = first && _captureSound;
+        // sequence by default); a camera has its own. Opened paused: they
+        // all start together once all are open.
+        SceneTake& take = takes.emplace_back();
+        take.settings.source = source.source;
+        take.settings.frameRateNum = (_captureFrameRate > 0) ? _captureFrameRate : (int)sequence.frameRate.num;
+        take.settings.frameRateDen = (_captureFrameRate > 0) ? 1 : (int)sequence.frameRate.den;
+        take.settings.cursor = _captureCursor;
+        take.settings.systemAudio = takes.size() == 1 && _captureSound;
+        take.settings.startPaused = true;
 
         const std::string prefix = scene->name + " - " + std::to_string(i + 1);
-        const std::filesystem::path path = recordingPath(prefix.c_str(), ".mkv");
-        std::error_code ec;
-        std::filesystem::create_directories(path.parent_path(), ec);
-
-        SceneTake take;
+        take.path = recordingPath(prefix.c_str(), ".mkv");
         take.recorder = std::make_unique<capture::ScreenRecorder>();
-        take.path = path;
         take.sourceIndex = i;
         take.source = source;
-
-        std::string error;
-
-        if (!take.recorder->start(path, settings, error)) {
-            _sceneError = source.source.name + ": " + error;
-            break;
-        }
-
-        _sceneTakes.push_back(std::move(take));
-        first = false;
     }
 
-    // A source that could not start: nothing is recorded.
-    if (!_sceneError.empty() || _sceneTakes.empty()) {
-        for (SceneTake& take : _sceneTakes) {
-            take.recorder->stop();
-            std::error_code ec;
-            std::filesystem::remove(take.path, ec);
-        }
-
-        _sceneTakes.clear();
+    if (takes.empty()) {
         capture::excludeFromCapture(false);
         return;
     }
 
-    _sceneStart = snapToFrame(_playhead, sequence.frameRate);
+    // Opening the captures and the encoders takes a while: on a thread, the
+    // window going on meanwhile (updateSceneRecording() goes on).
+    _sceneStarting = true;
+    _sceneJob = std::async(std::launch::async, [takes = std::move(takes), released = std::move(released)]() mutable {
+        SceneJob job;
+
+        for (const std::function<void()>& wait : released) {
+            wait();
+        }
+
+        for (SceneTake& take : takes) {
+            std::error_code ec;
+            std::filesystem::create_directories(take.path.parent_path(), ec);
+            std::string error;
+
+            if (!take.recorder->start(take.path, take.settings, error)) {
+                job.error = take.source.source.name + ": " + error;
+                break;
+            }
+
+            job.takes.push_back(std::move(take));
+        }
+
+        // A source that could not start: nothing is recorded.
+        if (!job.error.empty()) {
+            for (SceneTake& take : job.takes) {
+                take.recorder->stop();
+                std::error_code ec;
+                std::filesystem::remove(take.path, ec);
+            }
+
+            job.takes.clear();
+        }
+
+        return job;
+    });
+}
+
+
+void GUI::updateSceneRecording()
+{
+    if (!_sceneJob.valid() || _sceneJob.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+        return;
+    }
+
+    SceneJob job = _sceneJob.get();
+
+    if (_sceneStarting) {
+        _sceneStarting = false;
+        beginSceneRecording(std::move(job));
+    }
+    else if (_sceneFinishing) {
+        _sceneFinishing = false;
+        placeSceneRecording(std::move(job));
+    }
+}
+
+
+void GUI::beginSceneRecording(SceneJob job)
+{
+    if (!job.error.empty() || job.takes.empty()) {
+        _sceneError = job.error;
+        capture::excludeFromCapture(false);
+        return;
+    }
+
+    RecordingScene* scene = currentScene();
+    _sceneTakes = std::move(job.takes);
+    _sceneStart = snapToFrame(_playhead, _project.sequence().frameRate);
     _sceneRecording = true;
     _sceneMicrophonePath.clear();
+
+    // The microphone, added to the file of the first source at the end.
+    if (_captureMicrophone) {
+        if (!_recorder.isOpen()) {
+            _recorder.open(_inputDevice, _recorderError);
+        }
+
+        const std::filesystem::path microphonePath = recordingPath(((scene ? scene->name : std::string("Scene")) + " - voice").c_str(), ".wav");
+
+        if (_recorder.isOpen() && _recorder.start(microphonePath, _recorderError)) {
+            _sceneMicrophonePath = microphonePath;
+        }
+    }
+
+    // All the sources from now on, together.
+    for (SceneTake& take : _sceneTakes) {
+        take.recorder->resume();
+    }
 
     // A video track per source, free from the start (with its sound track):
     // the lower ones for the first sources, new ones on top when needed.
     // Chosen now, so that the recording shows on them while it lasts.
-    Sequence& tracksOf = _project.sequence();
+    Sequence& sequence = _project.sequence();
     const Time start = _sceneStart;
 
     auto freeFrom = [&](const Track& track) {
@@ -782,30 +861,17 @@ void GUI::startSceneRecording()
     size_t next = 0;
     _sceneNewTracks.clear();
 
-    for (size_t i = 0; i < tracksOf.videoTracks.size() && next < _sceneTakes.size(); i++) {
-        if (freeFrom(tracksOf.videoTracks[i]) && (i >= tracksOf.soundTracks.size() || freeFrom(tracksOf.soundTracks[i]))) {
-            _sceneTakes[next++].trackId = tracksOf.videoTracks[i].id;
+    for (size_t i = 0; i < sequence.videoTracks.size() && next < _sceneTakes.size(); i++) {
+        if (freeFrom(sequence.videoTracks[i]) && (i >= sequence.soundTracks.size() || freeFrom(sequence.soundTracks[i]))) {
+            _sceneTakes[next++].trackId = sequence.videoTracks[i].id;
         }
     }
 
     while (next < _sceneTakes.size()) {
         const Id track = _project.newId();
-        tracksOf.addTrack(TrackType::Video, track, _project.newId());
+        sequence.addTrack(TrackType::Video, track, _project.newId());
         _sceneNewTracks.push_back(track);
         _sceneTakes[next++].trackId = track;
-    }
-
-    // The microphone, added to the file of the first source at the end.
-    if (_captureMicrophone) {
-        if (!_recorder.isOpen()) {
-            _recorder.open(_inputDevice, _recorderError);
-        }
-
-        const std::filesystem::path microphonePath = recordingPath((scene->name + " - voice").c_str(), ".wav");
-
-        if (_recorder.isOpen() && _recorder.start(microphonePath, _recorderError)) {
-            _sceneMicrophonePath = microphonePath;
-        }
     }
 }
 
@@ -830,27 +896,72 @@ void GUI::stopSceneRecording()
 
     _sceneRecording = false;
 
-    double seconds = 0.0;
-    std::vector<SceneTake> takes = std::move(_sceneTakes);
-    _sceneTakes.clear();
-
-    for (SceneTake& take : takes) {
-        seconds = std::max(seconds, take.recorder->seconds());
-
-        if (!take.recorder->stop()) {
-            _sceneError = take.source.source.name + ": " + take.recorder->error();
-        }
+    // Every source stops now, the microphone too: the same length for all.
+    for (SceneTake& take : _sceneTakes) {
+        take.recorder->requestStop();
     }
 
     const int64_t microphoneFrames = _sceneMicrophonePath.empty() ? 0 : _recorder.stop();
     capture::excludeFromCapture(false);
 
-    std::error_code ec;
+    // Shown on the timeline until placed.
+    _sceneFinishingLive.clear();
 
-    if (seconds <= 0.0 || takes.empty()) {
-        for (SceneTake& take : takes) std::filesystem::remove(take.path, ec);
-        if (!_sceneMicrophonePath.empty()) std::filesystem::remove(_sceneMicrophonePath, ec);
+    for (const SceneTake& take : _sceneTakes) {
+        _sceneFinishingLive.push_back({ take.trackId, secondsToTime(take.recorder->seconds()) });
+    }
 
+    // Finishing the files (the last pictures encoded, the microphone added)
+    // takes a while: on a thread too.
+    _sceneFinishing = true;
+    _sceneJob = std::async(std::launch::async, [takes = std::move(_sceneTakes), microphonePath = _sceneMicrophonePath, microphoneFrames]() mutable {
+        SceneJob job;
+
+        for (SceneTake& take : takes) {
+            job.seconds = std::max(job.seconds, take.recorder->seconds());
+
+            if (!take.recorder->stop() && job.error.empty()) {
+                job.error = take.source.source.name + ": " + take.recorder->error();
+            }
+        }
+
+        std::error_code ec;
+
+        if (job.seconds <= 0.0) {
+            for (SceneTake& take : takes) std::filesystem::remove(take.path, ec);
+            if (!microphonePath.empty()) std::filesystem::remove(microphonePath, ec);
+            return job;
+        }
+
+        // The microphone in the file of the first source.
+        if (microphoneFrames > 0) {
+            std::string error;
+
+            if (capture::addAudioStream(takes.front().path, microphonePath, "Microphone", error)) {
+                std::filesystem::remove(microphonePath, ec);
+            }
+            else {
+                SDL_Log("Scene recording: the microphone stays apart in %s: %s", microphonePath.string().c_str(), error.c_str());
+            }
+        }
+
+        job.takes = std::move(takes);
+        return job;
+    });
+
+    _sceneTakes.clear();
+}
+
+
+void GUI::placeSceneRecording(SceneJob job)
+{
+    _sceneFinishingLive.clear();
+
+    if (!job.error.empty()) {
+        _sceneError = job.error;
+    }
+
+    if (job.seconds <= 0.0 || job.takes.empty()) {
         // The tracks added for it go too.
         for (Id track : _sceneNewTracks) {
             _project.sequence().removeTrack(track);
@@ -862,18 +973,6 @@ void GUI::stopSceneRecording()
 
     _sceneNewTracks.clear();
 
-    // The microphone in the file of the first source.
-    if (microphoneFrames > 0) {
-        std::string error;
-
-        if (capture::addAudioStream(takes.front().path, _sceneMicrophonePath, "Microphone", error)) {
-            std::filesystem::remove(_sceneMicrophonePath, ec);
-        }
-        else {
-            SDL_Log("Scene recording: the microphone stays apart in %s: %s", _sceneMicrophonePath.string().c_str(), error.c_str());
-        }
-    }
-
     // On the tracks chosen at the start.
     Sequence& sequence = _project.sequence();
     const Time start = _sceneStart;
@@ -881,8 +980,7 @@ void GUI::stopSceneRecording()
     _selection.clear();
     Time end = start;
 
-    for (size_t i = 0; i < takes.size(); i++) {
-        const SceneTake& take = takes[i];
+    for (const SceneTake& take : job.takes) {
         const Id mediaId = _project.importMedia(take.path);
 
         if (MediaItem* item = _project.findMedia(mediaId)) {

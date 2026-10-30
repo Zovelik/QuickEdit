@@ -27,6 +27,7 @@
 
 #include <atomic>
 #include <filesystem>
+#include <future>
 #include <map>
 #include <mutex>
 #include <set>
@@ -495,13 +496,26 @@ private:
         std::filesystem::path path;
         size_t sourceIndex = 0;
         SceneSource source;
+        capture::ScreenRecordSettings settings;
         core::Id trackId = core::InvalidId;     // Video track it goes on
+    };
+
+    // The opening or the finishing of the recorders of a scene, on a
+    // thread of its own.
+    struct SceneJob
+    {
+        std::vector<SceneTake> takes;
+        std::string error;
+        double seconds = 0.0;
     };
 
     void sceneRecorderWindow();
     void syncScenePreviews(bool show);
     void startSceneRecording();
     void stopSceneRecording();
+    void updateSceneRecording();            // Each frame: a job done goes on
+    void beginSceneRecording(SceneJob job);
+    void placeSceneRecording(SceneJob job);
     double sceneSeconds() const;            // Length of the scene being recorded
     RecordingScene* currentScene();
 
@@ -520,6 +534,10 @@ private:
     std::vector<SceneTake> _sceneTakes;
     std::filesystem::path _sceneMicrophonePath;
     std::vector<core::Id> _sceneNewTracks;      // Added for the recording
+    bool _sceneStarting = false;
+    bool _sceneFinishing = false;
+    std::future<SceneJob> _sceneJob;
+    std::vector<std::pair<core::Id, core::Time>> _sceneFinishingLive;     // Track and length, while finishing
     std::string _sceneError;
 
     // Format and frame rate of a camera, side by side or one under the
@@ -531,6 +549,23 @@ private:
     std::map<std::string, std::vector<capture::CameraFormat>> _cameraFormats;   // By device, read once
     void startScreenRecording();
     void stopScreenRecording();
+
+    // The opening or the finishing of the screen recorder, on a thread.
+    struct ScreenJob
+    {
+        bool ok = false;
+        std::string error;
+        double seconds = 0.0;
+        int64_t microphoneFrames = 0;
+        bool microphoneInFile = false;      // Added to the recording
+    };
+
+    void updateScreenRecording();           // Each frame: a job done goes on
+    void beginScreenRecording(ScreenJob job);
+    void placeScreenRecording(ScreenJob job);
+    bool _screenStarting = false;
+    bool _screenFinishing = false;
+    std::future<ScreenJob> _screenJob;
     capture::ScreenRecorder _screenRecorder;
     bool _showScreenRecorder = false;
     std::vector<capture::CaptureSource> _captureSources;
@@ -639,6 +674,7 @@ private:
     LayerDrag _layerDrag = LayerDrag::Move;
     ImVec2 _dragStartMouse;
     ImVec2 _dragCenter;             // Center of the layer, sequence pixels
+    ImGuiMouseCursor _dragCursor = ImGuiMouseCursor_Arrow;     // Of the handle grabbed
     float _dragStartX = 0.f;
     float _dragStartY = 0.f;
     float _dragStartScale = 1.f;

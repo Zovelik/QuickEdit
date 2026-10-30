@@ -106,6 +106,33 @@ int TimelineView::groupOf(TrackType type)
 }
 
 
+// The button at the start of the name of a sound clip of a file with several
+// audio streams: shows each stream (on audio tracks), or mixes them again.
+// Its icon, nullptr when the clip has none.
+const char* TimelineView::streamsButton(const Project& project, const Clip& clip, TrackType type)
+{
+    const MediaItem* media = (clip.kind == ClipKind::Media) ? project.findMedia(clip.mediaId) : nullptr;
+
+    if (!media || media->audioStreams.size() < 2 || (type != TrackType::Sound && type != TrackType::Audio)) {
+        return nullptr;
+    }
+
+    return (clip.audioStream < 0) ? ICON_MD_UNFOLD_MORE : ICON_MD_UNFOLD_LESS;
+}
+
+
+bool TimelineView::overStreamsButton(const Clip& clip, const Row& row, const char* icon, const ImVec2& mouse) const
+{
+    const float unit = ImGui::GetFontSize();
+    const float x = std::max(timeToX(clip.start), _timelineLeft) + 0.35f * unit;
+    const float y = row.top + 2.f + 0.2f * unit;
+
+    // Drawn only on the clips wide enough for their name.
+    return timeToX(clip.end()) - timeToX(clip.start) > 2.f * unit &&
+        ImRect(ImVec2(x - 0.15f * unit, y - 0.1f * unit), ImVec2(x + ImGui::CalcTextSize(icon).x + 0.15f * unit, y + unit)).Contains(mouse);
+}
+
+
 bool TimelineView::isSelected(const std::vector<Id>& selection, Id clipId)
 {
     return std::find(selection.begin(), selection.end(), clipId) != selection.end();
@@ -533,6 +560,17 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
             // The clips may have moved in memory.
             hoveredClip = nullptr;
         }
+        else if (const char* icon = (hoveredClip && hoveredRow && mouse.x >= _timelineLeft) ? streamsButton(project, *hoveredClip, hoveredRow->type) : nullptr;
+                 icon && overStreamsButton(*hoveredClip, *hoveredRow, icon, mouse)) {
+            const Id clipId = hoveredClip->id;
+            hoveredClip = nullptr;
+
+            if (project.findClip(clipId)->audioStream < 0 ? project.unfoldAudioStreams(clipId) : project.foldAudioStreams(clipId)) {
+                std::erase_if(selection, [&](Id id) { return project.findClip(id) == nullptr; });
+                result.edited = true;
+                result.label = "Audio streams";
+            }
+        }
         else if (hoveredClip && mouse.x >= _timelineLeft) {
             if (io.KeyAlt) {
                 // The clip alone, without its linked clips (the sound of a
@@ -619,6 +657,12 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
         }
 
         ImGui::EndPopup();
+    }
+
+    if (const char* icon = (hovered && hoveredClip && hoveredRow && _dragMode == DragMode::None) ? streamsButton(project, *hoveredClip, hoveredRow->type) : nullptr;
+        icon && overStreamsButton(*hoveredClip, *hoveredRow, icon, mouse)) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        ImGui::SetTooltip("%s", hoveredClip->audioStream < 0 ? tr("Show each audio stream, on audio tracks") : tr("Mix the audio streams again in one clip"));
     }
 
     if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && hoveredClip && _dragMode == DragMode::None) {
@@ -982,6 +1026,29 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
             break;
         }
 
+        // Sound and audio clips heard or not.
+        std::vector<Clip*> sounds;
+
+        for (Id clipId : selection) {
+            Clip* clip = project.findClip(clipId);
+            const Track* track = clip ? project.findTrackOfClip(clipId) : nullptr;
+
+            if (track && (track->type == TrackType::Sound || track->type == TrackType::Audio)) {
+                sounds.push_back(clip);
+            }
+        }
+
+        const bool allMuted = !sounds.empty() && std::all_of(sounds.begin(), sounds.end(), [](const Clip* clip) { return clip->muted; });
+
+        if (!sounds.empty() && ImGui::MenuItem(allMuted ? tr(ICON_MD_VOLUME_UP " Unmute") : tr(ICON_MD_VOLUME_OFF " Mute"))) {
+            for (Clip* clip : sounds) {
+                clip->muted = !allMuted;
+            }
+
+            result.edited = true;
+            result.label = allMuted ? "Unmute clips" : "Mute clips";
+        }
+
         if (ImGui::MenuItem(tr(ICON_MD_VOLUME_OFF " Remove the Sound of the Video"))) {
             // The clips of the sound tracks linked with the selected videos.
             std::vector<Id> sounds;
@@ -1310,7 +1377,7 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
                 color = FrozenClipColor;
             }
 
-            if (track.muted) {
+            if (track.muted || (clip.muted && !video)) {
                 color = (color & 0x00FFFFFF) | 0x80000000;
             }
 
@@ -1425,6 +1492,15 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
                     }
                     else if (!video && media->audioStreams.size() > 1) {
                         name += "  " ICON_MD_LAYERS " " + std::to_string(media->audioStreams.size());
+                    }
+
+                    if (!video && clip.muted) {
+                        name = ICON_MD_VOLUME_OFF " " + name;
+                    }
+
+                    // The button of the streams, before the name.
+                    if (const char* icon = streamsButton(project, clip, row.type)) {
+                        name = std::string(icon) + " " + name;
                     }
                 }
                 const float textX = std::max(min.x, _timelineLeft) + 0.35f * unit;
