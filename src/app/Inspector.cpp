@@ -302,6 +302,40 @@ void Inspector::transformSection(Clip& clip, Time localTime, std::string& edit)
 
     Transform& t = clip.transform;
 
+    // Pictures: their size in the frame before the scale. Native shows
+    // them at their resolution when the scale is 100 %.
+    if (clip.kind == ClipKind::Media || clip.kind == ClipKind::Sequence) {
+        propertyLabel("Size");
+
+        const float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+        const float width = (ImGui::GetContentRegionAvail().x - 2.f * spacing) / 3.f;
+
+        for (FitMode mode : { FitMode::Fit, FitMode::Fill, FitMode::Native }) {
+            if (mode != FitMode::Fit) {
+                ImGui::SameLine(0.f, spacing);
+            }
+
+            const bool current = clip.fit == mode;
+
+            if (current) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            }
+
+            if (ImGui::Button(fitModeName(mode), ImVec2(width, 0.f)) && !current) {
+                clip.fit = mode;
+                edit = "Change size";
+            }
+
+            if (current) {
+                ImGui::PopStyleColor();
+            }
+
+            ImGui::SetItemTooltip("%s", mode == FitMode::Fit ? "The whole picture, as large as the frame allows"
+                : mode == FitMode::Fill ? "The picture covers the whole frame, cut at the edges"
+                : "One pixel of the picture per pixel of the sequence: 100 % is the native resolution");
+        }
+    }
+
     animatedRow("Position X", t.x, localTime, 1.f, -100000.f, 100000.f, "%.0f px", 1.f, edit);
     animatedRow("Position Y", t.y, localTime, 1.f, -100000.f, 100000.f, "%.0f px", 1.f, edit);
     animatedRow("Scale", t.scale, localTime, 0.5f, 0.f, 10000.f, "%.1f %%", 100.f, edit);

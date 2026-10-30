@@ -121,6 +121,22 @@ namespace core
     };
 
 
+    // Size of a picture in the frame of the sequence, before the scale of its
+    // transform.
+    enum class FitMode
+    {
+        Fit,        // Whole, as large as the frame allows
+        Fill,       // Covering the whole frame, cut at the edges
+        Native      // One pixel of the picture per pixel of the sequence
+    };
+
+    const char* fitModeName(FitMode mode);
+
+    // Sequence pixels per pixel of a picture of the given size, in a frame
+    // of the given size.
+    float fitScale(FitMode mode, float frameWidth, float frameHeight, float pictureWidth, float pictureHeight);
+
+
     // Look of the picture of a video or image clip.
     struct Frame
     {
@@ -195,7 +211,8 @@ namespace core
         // Video clips: transition from the previous clip.
         Transition transitionIn;
 
-        // Video and image clips: crop, border and shadow.
+        // Video and image clips: size in the frame, crop, border and shadow.
+        FitMode fit = FitMode::Fit;
         Frame frame;
 
         // Effects of the clip, before those of its track: on its picture

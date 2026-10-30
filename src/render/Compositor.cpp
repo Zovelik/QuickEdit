@@ -508,7 +508,7 @@ const GPU::Image* Compositor::cmdApplyEffects(VkCommandBuffer commandBuffer, con
 
     // Distances in pixels of the sequence, before the transform: in pixels
     // of the picture through its fit in the frame.
-    const float fit = std::min((float)layoutWidth / (float)layer.width, (float)layoutHeight / (float)layer.height);
+    const float fit = fitScale(layer.clip->fit, (float)layoutWidth, (float)layoutHeight, (float)layer.width, (float)layer.height);
     const uint32_t width = source->width();
     const uint32_t height = source->height();
 
@@ -944,9 +944,9 @@ void Compositor::cmdDrawLayer(VkCommandBuffer commandBuffer, const Layer& layer,
     if (layer.image) {
         const float opacity = layerOpacity(layer);
 
-        // The picture fits the frame, then the transform applies. The
-        // crop keeps the rest of the picture in place.
-        const float fit = std::min((float)width / (float)layer.width, (float)height / (float)layer.height);
+        // The picture fits the frame (or keeps its size), then the
+        // transform applies. The crop keeps the rest of the picture in place.
+        const float fit = fitScale(layer.clip->fit, (float)width, (float)height, (float)layer.width, (float)layer.height);
         const float hw = 0.5f * layer.width * fit;
         const float hh = 0.5f * layer.height * fit;
         const Placement place = placement(layer, width, height);

@@ -13,6 +13,8 @@
 #include <dwmapi.h>
 #include <mmdeviceapi.h>
 #include <mmreg.h>
+#include <dshow.h>
+#include <dvdmedia.h>
 
 #endif
 
@@ -35,6 +37,8 @@ extern "C" {
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <tuple>
 
 
 namespace capture
@@ -45,8 +49,10 @@ namespace {
 constexpr int AudioSampleRate = 48000;
 
 
-// Opens a camera and its decoder.
-bool openCamera(const std::string& device, bool best, AVFormatContext*& input, AVCodecContext*& decoder, int& streamIndex, std::string& error)
+// Opens a camera and its decoder: in the format of the source when one is
+// chosen, else (best) the largest usual size first, in MJPEG (what USB
+// cameras give at that size), then what the camera gives by default.
+bool openCamera(const CaptureSource& source, bool best, AVFormatContext*& input, AVCodecContext*& decoder, int& streamIndex, std::string& error)
 {
     avdevice_register_all();
 
@@ -57,23 +63,50 @@ bool openCamera(const std::string& device, bool best, AVFormatContext*& input, A
         return false;
     }
 
-    // The largest usual size first, in MJPEG (what USB cameras give at that
-    // size), then what the camera gives by default.
-    const char* sizes[] = { "1920x1080", "1280x720", nullptr };
-    const std::string url = "video=" + device;
-    int result = -1;
+    // Formats with their frame rate (0: the camera's choice).
+    std::vector<std::pair<CameraFormat, double>> attempts;
 
-    for (const char* size : sizes) {
-        if (!best && size) {
-            continue;
+    if (!source.format.automatic()) {
+        attempts.emplace_back(source.format, source.frameRate);
+    }
+    else if (best) {
+        // The largest MJPEG up to 1080p at its highest rate: left alone, a
+        // camera may pick its slowest one.
+        for (const CameraFormat& format : listCameraFormats(source)) {
+            if (format.codec == "mjpeg" && format.height <= 1080) {
+                attempts.emplace_back(format, format.frameRates.empty() ? 0.0 : format.frameRates.front());
+                break;
+            }
         }
 
+        attempts.emplace_back(CameraFormat{ 1920, 1080, "mjpeg" }, 0.0);
+        attempts.emplace_back(CameraFormat{ 1280, 720, "mjpeg" }, 0.0);
+    }
+
+    attempts.emplace_back(CameraFormat(), 0.0);
+
+    const std::string url = "video=" + source.device;
+    int result = -1;
+
+    for (const auto& [attempt, frameRate] : attempts) {
         AVDictionary* options = nullptr;
         av_dict_set(&options, "rtbufsize", "256M", 0);
 
-        if (size) {
-            av_dict_set(&options, "video_size", size, 0);
-            av_dict_set(&options, "vcodec", "mjpeg", 0);
+        if (!attempt.automatic()) {
+            av_dict_set(&options, "video_size", (std::to_string(attempt.width) + "x" + std::to_string(attempt.height)).c_str(), 0);
+
+            if (!attempt.codec.empty()) {
+                av_dict_set(&options, "vcodec", attempt.codec.c_str(), 0);
+            }
+            else if (!attempt.pixelFormat.empty()) {
+                av_dict_set(&options, "pixel_format", attempt.pixelFormat.c_str(), 0);
+            }
+
+            if (frameRate > 0.0) {
+                char rate[32];
+                std::snprintf(rate, sizeof(rate), "%.3f", frameRate);
+                av_dict_set(&options, "framerate", rate, 0);
+            }
         }
 
         result = avformat_open_input(&input, url.c_str(), format, &options);
@@ -82,6 +115,8 @@ bool openCamera(const std::string& device, bool best, AVFormatContext*& input, A
         if (result >= 0) {
             break;
         }
+
+        SDL_Log("Camera %s: format %s refused", source.name.c_str(), attempt.label().c_str());
     }
 
     if (result < 0) {
@@ -330,6 +365,234 @@ std::vector<CaptureSource> listSources()
 }
 
 
+std::string CameraFormat::label() const
+{
+    if (automatic()) {
+        return "Automatic";
+    }
+
+    std::string encoding = !codec.empty() ? codec : pixelFormat;
+
+    if (encoding == "mjpeg") encoding = "MJPEG";
+    else if (encoding == "h264") encoding = "H.264";
+    else if (encoding == "yuyv422") encoding = "YUY2";
+    else if (encoding == "nv12") encoding = "NV12";
+    else if (encoding == "yuv420p") encoding = "I420";
+    else if (encoding == "uyvy422") encoding = "UYVY";
+    else if (encoding == "bgr24" || encoding == "bgr0") encoding = "RGB";
+
+    return std::to_string(width) + " x " + std::to_string(height) + "  " + encoding;
+}
+
+
+#ifdef _WIN32
+
+namespace {
+
+std::string toUtf8(const wchar_t* text)
+{
+    const int size = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+    std::string result(size > 0 ? (size_t)size - 1 : 0, '\0');
+
+    if (size > 1) {
+        WideCharToMultiByte(CP_UTF8, 0, text, -1, result.data(), size, nullptr, nullptr);
+    }
+
+    return result;
+}
+
+
+// The FFmpeg names of the encoding of a DirectShow media subtype: decoder,
+// or pixel format of raw pictures. False when not handled.
+bool ffmpegEncoding(const GUID& subtype, std::string& codec, std::string& pixelFormat)
+{
+    if (IsEqualGUID(subtype, MEDIASUBTYPE_RGB24)) { pixelFormat = "bgr24"; return true; }
+    if (IsEqualGUID(subtype, MEDIASUBTYPE_RGB32)) { pixelFormat = "bgr0"; return true; }
+
+    // The others are FOURCC subtypes.
+    switch (subtype.Data1) {
+        case MAKEFOURCC('M', 'J', 'P', 'G'): codec = "mjpeg"; return true;
+        case MAKEFOURCC('H', '2', '6', '4'): codec = "h264"; return true;
+        case MAKEFOURCC('Y', 'U', 'Y', '2'): pixelFormat = "yuyv422"; return true;
+        case MAKEFOURCC('N', 'V', '1', '2'): pixelFormat = "nv12"; return true;
+        case MAKEFOURCC('I', '4', '2', '0'):
+        case MAKEFOURCC('I', 'Y', 'U', 'V'): pixelFormat = "yuv420p"; return true;
+        case MAKEFOURCC('U', 'Y', 'V', 'Y'): pixelFormat = "uyvy422"; return true;
+        default: return false;
+    }
+}
+
+
+void freeMediaType(AM_MEDIA_TYPE* type)
+{
+    if (!type) {
+        return;
+    }
+
+    if (type->cbFormat) CoTaskMemFree(type->pbFormat);
+    if (type->pUnk) type->pUnk->Release();
+    CoTaskMemFree(type);
+}
+
+
+// The capture filter of a camera: its DirectShow moniker whose name FFmpeg
+// shows (':' as '_'), or its friendly name.
+IBaseFilter* findCameraFilter(const CaptureSource& camera)
+{
+    ICreateDevEnum* devices = nullptr;
+    IEnumMoniker* monikers = nullptr;
+    IBaseFilter* filter = nullptr;
+
+    if (FAILED(CoCreateInstance(CLSID_SystemDeviceEnum, nullptr, CLSCTX_INPROC_SERVER, IID_ICreateDevEnum, (void**)&devices))) {
+        return nullptr;
+    }
+
+    if (devices->CreateClassEnumerator(CLSID_VideoInputDeviceCategory, &monikers, 0) == S_OK) {
+        IMoniker* moniker = nullptr;
+
+        while (!filter && monikers->Next(1, &moniker, nullptr) == S_OK) {
+            std::string uniqueName;
+            std::string friendlyName;
+            LPOLESTR displayName = nullptr;
+
+            if (SUCCEEDED(moniker->GetDisplayName(nullptr, nullptr, &displayName)) && displayName) {
+                uniqueName = toUtf8(displayName);
+                std::replace(uniqueName.begin(), uniqueName.end(), ':', '_');
+                CoTaskMemFree(displayName);
+            }
+
+            IPropertyBag* bag = nullptr;
+
+            if (SUCCEEDED(moniker->BindToStorage(nullptr, nullptr, IID_IPropertyBag, (void**)&bag))) {
+                VARIANT name;
+                VariantInit(&name);
+
+                if (SUCCEEDED(bag->Read(L"FriendlyName", &name, nullptr)) && name.vt == VT_BSTR) {
+                    friendlyName = toUtf8(name.bstrVal);
+                }
+
+                VariantClear(&name);
+                bag->Release();
+            }
+
+            if (uniqueName == camera.device || friendlyName == camera.device) {
+                moniker->BindToObject(nullptr, nullptr, IID_IBaseFilter, (void**)&filter);
+            }
+
+            moniker->Release();
+        }
+
+        monikers->Release();
+    }
+
+    devices->Release();
+    return filter;
+}
+
+} // namespace
+
+#endif
+
+
+std::vector<CameraFormat> listCameraFormats(const CaptureSource& camera)
+{
+    std::vector<CameraFormat> formats;
+
+#ifdef _WIN32
+    const HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    IBaseFilter* filter = findCameraFilter(camera);
+    ICaptureGraphBuilder2* builder = nullptr;
+    IAMStreamConfig* config = nullptr;
+
+    if (filter && SUCCEEDED(CoCreateInstance(CLSID_CaptureGraphBuilder2, nullptr, CLSCTX_INPROC_SERVER, IID_ICaptureGraphBuilder2, (void**)&builder)) &&
+        SUCCEEDED(builder->FindInterface(&PIN_CATEGORY_CAPTURE, &MEDIATYPE_Video, filter, IID_IAMStreamConfig, (void**)&config))) {
+        int count = 0;
+        int size = 0;
+
+        if (SUCCEEDED(config->GetNumberOfCapabilities(&count, &size)) && size == sizeof(VIDEO_STREAM_CONFIG_CAPS)) {
+            for (int i = 0; i < count; i++) {
+                VIDEO_STREAM_CONFIG_CAPS caps = {};
+                AM_MEDIA_TYPE* type = nullptr;
+
+                if (FAILED(config->GetStreamCaps(i, &type, (BYTE*)&caps)) || !type) {
+                    continue;
+                }
+
+                CameraFormat format;
+                REFERENCE_TIME frameTime = 0;
+
+                if (IsEqualGUID(type->formattype, FORMAT_VideoInfo) && type->cbFormat >= sizeof(VIDEOINFOHEADER)) {
+                    const VIDEOINFOHEADER* header = (const VIDEOINFOHEADER*)type->pbFormat;
+                    format.width = header->bmiHeader.biWidth;
+                    format.height = std::abs(header->bmiHeader.biHeight);
+                    frameTime = header->AvgTimePerFrame;
+                }
+                else if (IsEqualGUID(type->formattype, FORMAT_VideoInfo2) && type->cbFormat >= sizeof(VIDEOINFOHEADER2)) {
+                    const VIDEOINFOHEADER2* header = (const VIDEOINFOHEADER2*)type->pbFormat;
+                    format.width = header->bmiHeader.biWidth;
+                    format.height = std::abs(header->bmiHeader.biHeight);
+                    frameTime = header->AvgTimePerFrame;
+                }
+
+                const bool known = format.width > 0 && format.height > 0 && ffmpegEncoding(type->subtype, format.codec, format.pixelFormat);
+                freeMediaType(type);
+
+                if (!known) {
+                    continue;
+                }
+
+                // The rates of this entry: its default, and its range.
+                std::vector<double> rates;
+
+                for (REFERENCE_TIME interval : { frameTime, caps.MinFrameInterval, caps.MaxFrameInterval }) {
+                    if (interval > 0) {
+                        rates.push_back(std::round(1e7 / (double)interval * 100.0) / 100.0);
+                    }
+                }
+
+                auto same = std::find_if(formats.begin(), formats.end(), [&](const CameraFormat& other) { return other.sameMode(format); });
+
+                if (same == formats.end()) {
+                    formats.push_back(format);
+                    same = formats.end() - 1;
+                }
+
+                for (double rate : rates) {
+                    if (std::find(same->frameRates.begin(), same->frameRates.end(), rate) == same->frameRates.end()) {
+                        same->frameRates.push_back(rate);
+                    }
+                }
+            }
+        }
+    }
+
+    if (config) config->Release();
+    if (builder) builder->Release();
+    if (filter) filter->Release();
+
+    if (SUCCEEDED(init)) {
+        CoUninitialize();
+    }
+
+    // The largest first; compressed before raw for a same size.
+    std::sort(formats.begin(), formats.end(), [](const CameraFormat& a, const CameraFormat& b) {
+        return std::make_tuple(a.width * a.height, a.width, !a.codec.empty(), a.codec, a.pixelFormat) >
+               std::make_tuple(b.width * b.height, b.width, !b.codec.empty(), b.codec, b.pixelFormat);
+    });
+
+    for (CameraFormat& format : formats) {
+        std::sort(format.frameRates.begin(), format.frameRates.end(), std::greater<double>());
+    }
+
+    SDL_Log("Camera %s: %d formats", camera.name.c_str(), (int)formats.size());
+#else
+    (void)camera;
+#endif
+
+    return formats;
+}
+
+
 void excludeFromCapture(bool exclude)
 {
 #ifdef _WIN32
@@ -510,7 +773,7 @@ bool ScreenRecorder::start(const std::filesystem::path& path, const ScreenRecord
         AVRational frameRate = { _frameRateNum, _frameRateDen };
 
         if (camera) {
-            if (!openCamera(settings.source.device, true, video->input, video->decoder, video->streamIndex, lastError)) {
+            if (!openCamera(settings.source, true, video->input, video->decoder, video->streamIndex, lastError)) {
                 break;
             }
 
@@ -1121,7 +1384,7 @@ void previewLoop(std::shared_ptr<SourcePreview::State> state, CaptureSource sour
     bool opened = false;
 
     if (source.kind == CaptureSource::Kind::Camera) {
-        opened = openCamera(source.device, false, input, decoder, streamIndex, error);
+        opened = openCamera(source, false, input, decoder, streamIndex, error);
     }
     else {
         int result = 0;
@@ -1203,7 +1466,8 @@ void SourcePreview::show(const CaptureSource& source)
         return;
     }
 
-    stop();
+    // Another format of the same camera: released first, it opens once.
+    stop(_state && source.kind == CaptureSource::Kind::Camera && source.sameDevice(_source));
     _source = source;
 
     if (!source.handle) {

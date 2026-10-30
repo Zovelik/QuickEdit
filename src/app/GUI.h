@@ -439,6 +439,11 @@ private:
     // Screen recording, in a window of its own; the microphone, through
     // _recorder, recorded beside it on request.
     void screenRecorderWindow();
+
+    // Format and frame rate of the camera being the capture source.
+    void cameraFormatOptions();
+    std::vector<capture::CameraFormat> _cameraFormats;
+    std::string _cameraFormatsDevice;
     void startScreenRecording();
     void stopScreenRecording();
     capture::ScreenRecorder _screenRecorder;

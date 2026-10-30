@@ -361,6 +361,7 @@ Json clipToJson(const Clip& clip)
     json["frozen"] = clip.frozen;
 
     if (clip.speed != 1.0) json["speed"] = clip.speed;
+    if (clip.fit != FitMode::Fit) json["fit"] = clip.fit == FitMode::Fill ? "fill" : "native";
 
     if (clip.fadeIn > 0) json["fadeIn"] = clip.fadeIn;
     if (clip.fadeOut > 0) json["fadeOut"] = clip.fadeOut;
@@ -446,6 +447,9 @@ Clip clipFromJson(const Json& json)
     clip.gainDb = (float)json["gainDb"].toDouble(0.0);
     clip.frozen = json["frozen"].toBool();
     clip.speed = std::clamp(json["speed"].toDouble(1.0), Project::MinSpeed, Project::MaxSpeed);
+
+    const std::string fit = json["fit"].toString();
+    clip.fit = (fit == "fill") ? FitMode::Fill : (fit == "native") ? FitMode::Native : FitMode::Fit;
     clip.fadeIn = std::clamp<Time>(json["fadeIn"].toInt(), 0, clip.duration);
     clip.fadeOut = std::clamp<Time>(json["fadeOut"].toInt(), 0, clip.duration);
 
@@ -641,6 +645,30 @@ void Sequence::addTrack(TrackType type, Id id, Id soundId)
     else {
         track.name = "A" + std::to_string(audioTracks.size() + 1);
         audioTracks.push_back(track);
+    }
+}
+
+
+const char* fitModeName(FitMode mode)
+{
+    switch (mode) {
+        case FitMode::Fill:   return "Fill";
+        case FitMode::Native: return "Native";
+        default:              return "Fit";
+    }
+}
+
+
+float fitScale(FitMode mode, float frameWidth, float frameHeight, float pictureWidth, float pictureHeight)
+{
+    if (pictureWidth <= 0.f || pictureHeight <= 0.f) {
+        return 1.f;
+    }
+
+    switch (mode) {
+        case FitMode::Fill:   return std::max(frameWidth / pictureWidth, frameHeight / pictureHeight);
+        case FitMode::Native: return 1.f;
+        default:              return std::min(frameWidth / pictureWidth, frameHeight / pictureHeight);
     }
 }
 

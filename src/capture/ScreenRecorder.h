@@ -15,6 +15,28 @@ struct AVFormatContext;
 
 namespace capture
 {
+    // A way a camera can give its pictures: size, encoding, frame rates.
+    struct CameraFormat
+    {
+        int width = 0;              // 0: what the camera gives by default
+        int height = 0;
+        std::string codec;          // FFmpeg decoder: "mjpeg", "h264"; empty for raw pictures
+        std::string pixelFormat;    // Raw pictures: FFmpeg pixel format ("yuyv422", "nv12"...)
+
+        // The frame rates offered, highest first.
+        std::vector<double> frameRates;
+
+        bool automatic() const { return width == 0; }
+
+        // "1920 x 1080  MJPEG"
+        std::string label() const;
+
+        bool sameMode(const CameraFormat& other) const
+        {
+            return width == other.width && height == other.height && codec == other.codec && pixelFormat == other.pixelFormat;
+        }
+    };
+
     // A screen, a window or a camera that can be recorded.
     struct CaptureSource
     {
@@ -30,11 +52,26 @@ namespace capture
         std::string device;         // Camera: its DirectShow name
         std::string name;
 
-        bool operator==(const CaptureSource& other) const { return kind == other.kind && handle == other.handle && device == other.device; }
+        // Camera: the format asked for, and its frame rate (0: the
+        // camera's choice).
+        CameraFormat format;
+        double frameRate = 0.0;
+
+        bool operator==(const CaptureSource& other) const
+        {
+            return kind == other.kind && handle == other.handle && device == other.device &&
+                format.sameMode(other.format) && frameRate == other.frameRate;
+        }
+
+        bool sameDevice(const CaptureSource& other) const { return kind == other.kind && handle == other.handle && device == other.device; }
     };
 
     // The screens, the cameras, then the windows of the other applications.
     std::vector<CaptureSource> listSources();
+
+    // The formats a camera offers (DirectShow capabilities), the largest
+    // first. Empty when unknown (other systems).
+    std::vector<CameraFormat> listCameraFormats(const CaptureSource& camera);
 
     // Keeps the windows of the calling thread out of the captures (or puts
     // them back), so that QuickEdit does not record itself.

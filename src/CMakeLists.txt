@@ -196,8 +196,8 @@ endif()
 
 if (WIN32)
     # SetWindowSubclass (app/BorderlessWindow.cpp), the windows to capture
-    # (capture/ScreenRecorder.cpp)
-    target_link_libraries(QuickEdit PRIVATE comctl32 dwmapi)
+    # and the formats of the cameras (capture/ScreenRecorder.cpp)
+    target_link_libraries(QuickEdit PRIVATE comctl32 dwmapi strmiids ole32 oleaut32)
 endif()
 
 install(TARGETS QuickEdit DESTINATION .)

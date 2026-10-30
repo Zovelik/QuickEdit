@@ -744,6 +744,16 @@ void testSpeedAndTracks()
     loaded.fromJson(project.toJson({}), {});
     CHECK(loaded.sequence().videoTracks[0].clips[0].speed == 2.0);
 
+    // Size in the frame: a 1280 x 720 window in a 1920 x 1080 sequence.
+    CHECK(fitScale(FitMode::Fit, 1920.f, 1080.f, 1280.f, 720.f) == 1.5f);
+    CHECK(fitScale(FitMode::Fill, 1920.f, 1080.f, 1000.f, 1000.f) == 1.92f);
+    CHECK(fitScale(FitMode::Native, 1920.f, 1080.f, 1280.f, 720.f) == 1.f);
+
+    sequence.videoTracks[0].clips[0].fit = FitMode::Native;
+    Project native;
+    native.fromJson(project.toJson({}), {});
+    CHECK(native.sequence().videoTracks[0].clips[0].fit == FitMode::Native);
+
     // Tracks: a video track goes with its sound track; one stays.
     const size_t videos = sequence.videoTracks.size();
     CHECK(sequence.removeTrack(sequence.soundTracks[1].id));

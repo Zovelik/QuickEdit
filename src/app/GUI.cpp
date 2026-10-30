@@ -1810,7 +1810,7 @@ void GUI::viewerInteraction(const ImVec2& frameMin, const ImVec2& frameSize)
     float pictureHalfHeight = 0.f;
 
     if (croppable) {
-        const float fit = std::min((float)sequence.width / (float)handleMedia->width, (float)sequence.height / (float)handleMedia->height);
+        const float fit = fitScale(handleClip->fit, (float)sequence.width, (float)sequence.height, (float)handleMedia->width, (float)handleMedia->height);
         pictureHalfWidth = 0.5f * (float)handleMedia->width * fit;
         pictureHalfHeight = 0.5f * (float)handleMedia->height * fit;
     }
@@ -3543,7 +3543,7 @@ void GUI::screenRecorderWindow()
 
         // The source chosen before, while it exists; the main screen first.
         const bool known = std::any_of(_captureSources.begin(), _captureSources.end(),
-            [&](const capture::CaptureSource& source) { return source == _captureSource; });
+            [&](const capture::CaptureSource& source) { return source.sameDevice(_captureSource); });
 
         if (!known && !_captureSources.empty()) {
             _captureSource = _captureSources.front();
@@ -3600,7 +3600,7 @@ void GUI::screenRecorderWindow()
             ImGui::PushID(source.device.c_str());
             const std::string label = std::string(sourceIcon(source)) + source.name;
 
-            if (ImGui::Selectable(label.c_str(), source == _captureSource)) {
+            if (ImGui::Selectable(label.c_str(), source.sameDevice(_captureSource)) && !source.sameDevice(_captureSource)) {
                 _captureSource = source;
                 _screenError.clear();
             }
@@ -3619,6 +3619,10 @@ void GUI::screenRecorderWindow()
     }
 
     ImGui::SetItemTooltip("Look for screens and windows again");
+
+    if (isCamera) {
+        cameraFormatOptions();
+    }
 
     sourcePreview();
 
@@ -3724,6 +3728,87 @@ void GUI::screenRecorderWindow()
     ImGui::PopTextWrapPos();
 
     ImGui::End();
+}
+
+
+void GUI::cameraFormatOptions()
+{
+    // The formats of the camera, read once per camera.
+    if (_cameraFormatsDevice != _captureSource.device) {
+        _cameraFormatsDevice = _captureSource.device;
+        _cameraFormats = capture::listCameraFormats(_captureSource);
+    }
+
+    capture::CameraFormat& chosen = _captureSource.format;
+    const float labelWidth = ImGui::CalcTextSize("Frame rate").x + ImGui::GetStyle().ItemSpacing.x;
+    const float half = 0.5f * (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x);
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Format");
+    ImGui::SameLine(labelWidth);
+    ImGui::SetNextItemWidth(half - labelWidth);
+
+    if (ImGui::BeginCombo("##cameraFormat", chosen.label().c_str(), ImGuiComboFlags_HeightLarge)) {
+        if (ImGui::Selectable("Automatic", chosen.automatic())) {
+            chosen = capture::CameraFormat();
+            _captureSource.frameRate = 0.0;
+        }
+
+        ImGui::SetItemTooltip("The largest size the camera gives in MJPEG, up to 1080p");
+
+        for (const capture::CameraFormat& format : _cameraFormats) {
+            ImGui::PushID(&format);
+
+            if (ImGui::Selectable(format.label().c_str(), format.sameMode(chosen))) {
+                chosen = format;
+
+                // The rate chosen before when offered, else the highest.
+                const auto& rates = format.frameRates;
+
+                if (std::find(rates.begin(), rates.end(), _captureSource.frameRate) == rates.end()) {
+                    _captureSource.frameRate = rates.empty() ? 0.0 : rates.front();
+                }
+            }
+
+            ImGui::PopID();
+        }
+
+        ImGui::EndCombo();
+    }
+
+    if (_cameraFormats.empty()) {
+        ImGui::SetItemTooltip("The formats of this camera are not known: it gives its default one");
+    }
+
+    // Frame rate, of the chosen format.
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Frame rate");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+
+    char rateLabel[32] = "Automatic";
+
+    if (_captureSource.frameRate > 0.0) {
+        std::snprintf(rateLabel, sizeof(rateLabel), "%g fps", _captureSource.frameRate);
+    }
+
+    ImGui::BeginDisabled(chosen.automatic() || chosen.frameRates.empty());
+
+    if (ImGui::BeginCombo("##cameraRate", rateLabel)) {
+        for (double rate : chosen.frameRates) {
+            char label[32];
+            std::snprintf(label, sizeof(label), "%g fps", rate);
+
+            if (ImGui::Selectable(label, rate == _captureSource.frameRate)) {
+                _captureSource.frameRate = rate;
+            }
+        }
+
+        ImGui::EndCombo();
+    }
+
+    ImGui::EndDisabled();
 }
 
 
@@ -4000,6 +4085,14 @@ void GUI::stopScreenRecording()
 
     if (clipId != InvalidId) {
         TimelineView::addWithLinks(_project, clipId, _selection);
+
+        // A capture smaller than the sequence (a window, a camera) is shown
+        // at its resolution rather than enlarged.
+        const MediaItem* item = _project.findMedia(mediaId);
+
+        if (item && item->width > 0 && item->width <= sequence.width && item->height <= sequence.height) {
+            _project.findClip(clipId)->fit = FitMode::Native;
+        }
     }
 
     Time end = start + secondsToTime(seconds);
