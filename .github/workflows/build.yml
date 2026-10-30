@@ -90,7 +90,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential pkg-config ninja-build \
+            build-essential g++-12 pkg-config ninja-build \
             libasound2-dev libpulse-dev libaudio-dev libjack-dev libsndio-dev libpipewire-0.3-dev \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev \
             libxtst-dev libxkbcommon-dev libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev \
@@ -131,10 +131,13 @@ jobs:
         if: runner.os == 'Windows'
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
+      # GCC 12 (std::atomic<std::shared_ptr>, which the GCC 11 of Ubuntu
+      # 22.04 lacks); its libstdc++ is the one of the system.
       - name: Configure (Linux)
         if: runner.os == 'Linux'
         run: >
           cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=gcc-12 -DCMAKE_CXX_COMPILER=g++-12
           -DFFMPEG_ROOT="${{ github.workspace }}/3rdparty/ffmpeg/linux64"
 
       - name: Build
@@ -145,6 +148,14 @@ jobs:
         run: ctest -C Release --output-on-failure
 
       # PACKAGES
+
+      # NSIS for the installer: not on the Windows runners any more.
+      - name: Install NSIS
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          "${env:ProgramFiles(x86)}\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       # linuxdeploy and appimagetool, driven by CPack; appstreamcli lets
       # appimagetool check the AppStream data.

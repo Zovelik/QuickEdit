@@ -5,6 +5,7 @@
 #include <core/Project.h>
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -25,7 +26,7 @@ public:
     };
 
     std::string draw(core::Project& project, const std::vector<core::Id>& selection, core::Time playhead,
-        FontLibrary& fonts, const TextSelection& textSelection = {});
+        FontLibrary& fonts, const TextSelection& textSelection);
 
 private:
     // The inspector of one clip (the first of the selection).
