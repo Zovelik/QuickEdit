@@ -135,7 +135,8 @@ public:
         float tileV = 1.f;
     };
 
-    std::function<Thumbnails(core::Id mediaId)> thumbnailsOf;
+    // Of a height on screen (pixels): finer pictures for taller tracks.
+    std::function<Thumbnails(core::Id mediaId, float height)> thumbnailsOf;
 
     // The shaders of the user, offered with the built-in transitions.
     const std::vector<core::ShaderDef>* userShaders = nullptr;

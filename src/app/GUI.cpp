@@ -240,7 +240,7 @@ GUI::GUI(const std::filesystem::path& projectPath, double startSeconds, Id selec
     });
 
     _timeline.waveformOf = [this](Id mediaId, int stream) { return _media.waveform(mediaId, stream); };
-    _timeline.thumbnailsOf = [this](Id mediaId) { return thumbnailsOf(mediaId); };
+    _timeline.thumbnailsOf = [this](Id mediaId, float height) { return thumbnailsOf(mediaId, height); };
     _timeline.userShaders = &_userShaders;
     _inspector.userShaders = &_userShaders;
     _inspector.shaderError = [this](const std::string& id) { return _compositor ? _compositor->shaderError(id) : std::string(); };
@@ -1272,8 +1272,8 @@ void GUI::mediaPanel()
             // Every row as tall as a picture; the picture (or a placeholder
             // with the icon of the media) and the name are drawn over the
             // row once it is laid out.
-            const TimelineView::Thumbnails thumbnails = thumbnailsOf(item.id);
             const float pictureHeight = 2.f * ImGui::GetTextLineHeight();
+            const TimelineView::Thumbnails thumbnails = thumbnailsOf(item.id, pictureHeight);
             const ImVec2 pictureSize(std::round(pictureHeight * 16.f / 9.f), pictureHeight);
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
             const float columnRight = rowMin.x + ImGui::GetContentRegionAvail().x;
@@ -6444,19 +6444,12 @@ void GUI::newProject()
 }
 
 
-TimelineView::Thumbnails GUI::thumbnailsOf(Id mediaId)
+GUI::ThumbnailTexture& GUI::thumbnailTexture(const MediaItem& item, int level)
 {
-    const MediaItem* item = _project.findMedia(mediaId);
-
-    // Once probed: the length places the pictures.
-    if (!item || !item->probed || item->type == MediaType::Audio) {
-        return {};
-    }
-
-    ThumbnailTexture& entry = _thumbnailTextures[item->path];
+    ThumbnailTexture& entry = _thumbnailTextures[{ item.path, level }];
 
     if (!entry.strip) {
-        entry.strip = _thumbnails.get(item->path, item->duration, item->type == MediaType::Image);
+        entry.strip = _thumbnails.get(item.path, item.duration, item.type == MediaType::Image, level);
     }
 
     media::ThumbnailStrip& strip = *entry.strip;
@@ -6467,36 +6460,91 @@ TimelineView::Thumbnails GUI::thumbnailsOf(Id mediaId)
         ImGui::RegisterUserTexture(entry.texture);
     }
 
+    // New tiles: only their rows of the atlas to the GPU.
+    std::scoped_lock lock(strip.mutex);
+
+    if (strip.ready > entry.uploaded &&
+        (entry.texture->Status == ImTextureStatus_OK || entry.texture->Status == ImTextureStatus_WantUpdates)) {
+        const int firstRow = entry.uploaded / media::ThumbnailStrip::Columns;
+        const int lastRow = (strip.ready - 1) / media::ThumbnailStrip::Columns;
+        const size_t rowBytes = (size_t)strip.atlasWidth() * 4 * strip.tileHeight;
+
+        std::memcpy((uint8_t*)entry.texture->GetPixels() + rowBytes * firstRow, strip.rgba.data() + rowBytes * firstRow,
+            std::min(rowBytes * (lastRow - firstRow + 1), (size_t)entry.texture->GetSizeInBytes() - rowBytes * firstRow));
+
+        const ImTextureRect rows = { 0, (unsigned short)(firstRow * strip.tileHeight),
+            (unsigned short)strip.atlasWidth(), (unsigned short)((lastRow - firstRow + 1) * strip.tileHeight) };
+
+        if (entry.texture->Status == ImTextureStatus_WantUpdates && !entry.texture->Updates.empty()) {
+            entry.texture->Updates.push_back(rows);
+            ImTextureRect& all = entry.texture->UpdateRect;
+            const int bottom = std::max(all.y + all.h, rows.y + rows.h);
+            all.y = std::min(all.y, rows.y);
+            all.h = (unsigned short)(bottom - all.y);
+            all.x = 0;
+            all.w = rows.w;
+        }
+        else {
+            entry.texture->UpdateRect = rows;
+            entry.texture->Updates.resize(0);
+            entry.texture->Updates.push_back(rows);
+        }
+
+        entry.texture->SetStatus(ImTextureStatus_WantUpdates);
+        entry.uploaded = strip.ready;
+    }
+
+    return entry;
+}
+
+
+TimelineView::Thumbnails GUI::thumbnailsOf(Id mediaId, float height)
+{
+    const MediaItem* item = _project.findMedia(mediaId);
+
+    // Once probed: the length places the pictures.
+    if (!item || !item->probed || item->type == MediaType::Audio) {
+        return {};
+    }
+
+    // The level whose tiles are at least as tall as shown (72, 144, 288
+    // pixels); until all its tiles are made, the finest level done (the
+    // first one always).
+    int wanted = 0;
+
+    while (wanted + 1 < media::ThumbnailStrip::Levels && (float)(72 << wanted) < 0.9f * height) {
+        wanted++;
+    }
+
+    ThumbnailTexture* entry = &thumbnailTexture(*item, wanted);
+
+    for (int level = wanted - 1; level >= 0; level--) {
+        {
+            std::scoped_lock lock(entry->strip->mutex);
+
+            if (entry->strip->ready == entry->strip->count) {
+                break;
+            }
+        }
+
+        entry = &thumbnailTexture(*item, level);
+    }
+
+    media::ThumbnailStrip& strip = *entry->strip;
     TimelineView::Thumbnails thumbnails;
 
     {
         std::scoped_lock lock(strip.mutex);
-
-        // New tiles: the whole atlas to the GPU (a few MB at most, while
-        // the strip is being made).
-        if (strip.dirty) {
-            strip.dirty = false;
-            std::memcpy(entry.texture->GetPixels(), strip.rgba.data(), std::min(strip.rgba.size(), (size_t)entry.texture->GetSizeInBytes()));
-
-            if (entry.texture->Status == ImTextureStatus_OK || entry.texture->Status == ImTextureStatus_WantUpdates) {
-                const ImTextureRect all = { 0, 0, (unsigned short)strip.atlasWidth(), (unsigned short)strip.atlasHeight() };
-                entry.texture->UpdateRect = all;
-                entry.texture->Updates.resize(0);
-                entry.texture->Updates.push_back(all);
-                entry.texture->SetStatus(ImTextureStatus_WantUpdates);
-            }
-        }
-
-        thumbnails.ready = strip.ready;
+        thumbnails.ready = std::min(strip.ready, entry->uploaded);
     }
 
-    thumbnails.texture = entry.texture->GetTexRef();
+    thumbnails.texture = entry->texture->GetTexRef();
     thumbnails.count = strip.count;
     thumbnails.interval = strip.interval;
     thumbnails.image = item->type == MediaType::Image;
     thumbnails.columns = media::ThumbnailStrip::Columns;
-    thumbnails.tileU = (float)media::ThumbnailStrip::TileWidth / (float)strip.atlasWidth();
-    thumbnails.tileV = (float)media::ThumbnailStrip::TileHeight / (float)strip.atlasHeight();
+    thumbnails.tileU = (float)strip.tileWidth / (float)strip.atlasWidth();
+    thumbnails.tileV = (float)strip.tileHeight / (float)strip.atlasHeight();
 
     return thumbnails;
 }

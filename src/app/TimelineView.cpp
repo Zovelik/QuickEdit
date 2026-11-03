@@ -1744,7 +1744,7 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
             // Pictures of a video along the clip, the time of each tile from
             // its left edge.
             if (video && clip.kind == ClipKind::Media && thumbnailsOf && max.y - min.y > 8.f) {
-                const Thumbnails thumbnails = thumbnailsOf(clip.mediaId);
+                const Thumbnails thumbnails = thumbnailsOf(clip.mediaId, max.y - min.y - 2.f);
 
                 if (thumbnails.ready > 0) {
                     const float tileWidth = (max.y - min.y - 2.f) * 16.f / 9.f;

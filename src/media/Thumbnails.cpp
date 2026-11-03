@@ -17,8 +17,9 @@ namespace media
 
 namespace {
 
-// At most this many pictures per file.
-constexpr int MaxThumbnails = 100;
+// At most this many pictures per file and level: the larger ones fewer
+// (their atlas about 30 MB at most).
+constexpr int MaxThumbnails[media::ThumbnailStrip::Levels] = { 100, 100, 50 };
 
 
 // Decodes the pictures of a strip, one after the other: a key frame near
@@ -72,7 +73,7 @@ void build(std::shared_ptr<ThumbnailStrip> strip, std::filesystem::path path)
     }
 
     const int stride = strip->atlasWidth() * 4;
-    std::vector<uint8_t> tile((size_t)ThumbnailStrip::TileWidth * ThumbnailStrip::TileHeight * 4);
+    std::vector<uint8_t> tile((size_t)strip->tileWidth * strip->tileHeight * 4);
 
     for (int i = 0; i < strip->count && !strip->cancel; i++) {
         const Time time = strip->interval * i;
@@ -103,22 +104,23 @@ void build(std::shared_ptr<ThumbnailStrip> strip, std::filesystem::path path)
 
         if (decoded) {
             // Fit in the tile, black around.
-            const float fit = std::min((float)ThumbnailStrip::TileWidth / (float)frame->width, (float)ThumbnailStrip::TileHeight / (float)frame->height);
-            const int w = std::clamp((int)((float)frame->width * fit), 1, ThumbnailStrip::TileWidth);
-            const int h = std::clamp((int)((float)frame->height * fit), 1, ThumbnailStrip::TileHeight);
-            const int x = (ThumbnailStrip::TileWidth - w) / 2;
-            const int y = (ThumbnailStrip::TileHeight - h) / 2;
+            const float fit = std::min((float)strip->tileWidth / (float)frame->width, (float)strip->tileHeight / (float)frame->height);
+            const int w = std::clamp((int)((float)frame->width * fit), 1, strip->tileWidth);
+            const int h = std::clamp((int)((float)frame->height * fit), 1, strip->tileHeight);
+            const int x = (strip->tileWidth - w) / 2;
+            const int y = (strip->tileHeight - h) / 2;
 
             for (size_t p = 0; p < tile.size(); p += 4) {
                 tile[p] = tile[p + 1] = tile[p + 2] = 0;
                 tile[p + 3] = 255;
             }
 
-            sws = sws_getCachedContext(sws, frame->width, frame->height, (AVPixelFormat)frame->format, w, h, AV_PIX_FMT_RGBA, SWS_BILINEAR, nullptr, nullptr, nullptr);
+            // Area: sharp when reduced a lot.
+            sws = sws_getCachedContext(sws, frame->width, frame->height, (AVPixelFormat)frame->format, w, h, AV_PIX_FMT_RGBA, SWS_AREA, nullptr, nullptr, nullptr);
 
             if (sws) {
-                uint8_t* data[4] = { tile.data() + ((size_t)y * ThumbnailStrip::TileWidth + x) * 4, nullptr, nullptr, nullptr };
-                const int linesize[4] = { ThumbnailStrip::TileWidth * 4, 0, 0, 0 };
+                uint8_t* data[4] = { tile.data() + ((size_t)y * strip->tileWidth + x) * 4, nullptr, nullptr, nullptr };
+                const int linesize[4] = { strip->tileWidth * 4, 0, 0, 0 };
                 sws_scale(sws, frame->data, frame->linesize, 0, frame->height, data, linesize);
             }
 
@@ -130,13 +132,12 @@ void build(std::shared_ptr<ThumbnailStrip> strip, std::filesystem::path path)
         const int column = i % ThumbnailStrip::Columns;
         const int row = i / ThumbnailStrip::Columns;
 
-        for (int line = 0; line < ThumbnailStrip::TileHeight; line++) {
-            std::copy_n(tile.data() + (size_t)line * ThumbnailStrip::TileWidth * 4, ThumbnailStrip::TileWidth * 4,
-                strip->rgba.data() + (size_t)(row * ThumbnailStrip::TileHeight + line) * stride + (size_t)column * ThumbnailStrip::TileWidth * 4);
+        for (int line = 0; line < strip->tileHeight; line++) {
+            std::copy_n(tile.data() + (size_t)line * strip->tileWidth * 4, strip->tileWidth * 4,
+                strip->rgba.data() + (size_t)(row * strip->tileHeight + line) * stride + (size_t)column * strip->tileWidth * 4);
         }
 
         strip->ready = i + 1;
-        strip->dirty = true;
     }
 
     finish();
@@ -155,23 +156,28 @@ ThumbnailCache::~ThumbnailCache()
 }
 
 
-std::shared_ptr<ThumbnailStrip> ThumbnailCache::get(const std::filesystem::path& path, Time duration, bool image)
+std::shared_ptr<ThumbnailStrip> ThumbnailCache::get(const std::filesystem::path& path, Time duration, bool image, int level)
 {
+    level = std::clamp(level, 0, ThumbnailStrip::Levels - 1);
+
     std::scoped_lock lock(_mutex);
 
-    if (auto it = _strips.find(path); it != _strips.end()) {
+    if (auto it = _strips.find({ path, level }); it != _strips.end()) {
         return it->second;
     }
 
     auto strip = std::make_shared<ThumbnailStrip>();
+    strip->tileWidth = 128 << level;
+    strip->tileHeight = 72 << level;
 
     if (!image && duration > 0) {
-        strip->interval = std::max<Time>(TicksPerSecond, duration / MaxThumbnails);
-        strip->count = (int)std::clamp<Time>((duration + strip->interval - 1) / strip->interval, 1, MaxThumbnails);
+        const int most = MaxThumbnails[level];
+        strip->interval = std::max<Time>(TicksPerSecond, duration / most);
+        strip->count = (int)std::clamp<Time>((duration + strip->interval - 1) / strip->interval, 1, most);
     }
 
     strip->rgba.assign((size_t)strip->atlasWidth() * strip->atlasHeight() * 4, 0);
-    _strips[path] = strip;
+    _strips[{ path, level }] = strip;
 
     _pool.submit([strip, path]() { build(strip, path); });
 

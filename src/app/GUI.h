@@ -443,10 +443,13 @@ private:
     {
         std::shared_ptr<media::ThumbnailStrip> strip;
         ImTextureData* texture = nullptr;
+        int uploaded = 0;               // Tiles already in the texture
     };
 
-    std::map<std::filesystem::path, ThumbnailTexture> _thumbnailTextures;
-    TimelineView::Thumbnails thumbnailsOf(core::Id mediaId);
+    // Per file and level of detail (see media::ThumbnailStrip).
+    std::map<std::pair<std::filesystem::path, int>, ThumbnailTexture> _thumbnailTextures;
+    TimelineView::Thumbnails thumbnailsOf(core::Id mediaId, float height);
+    ThumbnailTexture& thumbnailTexture(const core::MediaItem& item, int level);
     audio::AudioEngine _audio;
 
     // Voice-over recording, in a window of its own.
