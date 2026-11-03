@@ -1985,6 +1985,13 @@ void GUI::viewerRecording(ImDrawList* drawList, const ImVec2& frameMin, const Im
 
 void GUI::inspectorPanel()
 {
+    // To a keyframe, from the buttons of the animated properties.
+    if (const Time by = std::exchange(_inspector.seekBy, 0); by != 0) {
+        stopPlayback();
+        seek(std::max<Time>(0, _playhead + by));
+        _audio.scrub(_playhead);
+    }
+
     if (ImGui::Begin(tr("Inspector###Inspector")) && ImGui::BeginTabBar("##inspectorTabs")) {
         if (ImGui::BeginTabItem(tr(ICON_MD_EDIT " Clip"))) {
             clipTab();

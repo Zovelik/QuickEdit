@@ -332,39 +332,8 @@ bool Inspector::animatedRow(const char* label, AnimatedValue& value, Time localT
     propertyLabel(label);
     ImGui::PushID(label);
 
-    // Keyframe button: filled at a keyframe, outlined when animated between
-    // keyframes.
-    const bool atKey = value.keyAt(localTime) >= 0;
-    const char* icon = atKey ? ICON_MD_RADIO_BUTTON_CHECKED : (value.animated() ? ICON_MD_RADIO_BUTTON_UNCHECKED : ICON_MD_ADD_CIRCLE_OUTLINE);
-
-    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
-
-    if (value.animated()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 170, 60, 255));
-    }
-
-    const bool toggled = ImGui::Button(icon);
-
-    if (value.animated()) {
-        ImGui::PopStyleColor();
-    }
-
-    ImGui::PopStyleColor();
-
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip)) {
-        ImGui::SetTooltip("%s", atKey ? tr("Remove the keyframe") : tr("Add a keyframe at the playhead"));
-    }
-
-    if (toggled) {
-        if (atKey) {
-            value.removeKey(localTime);
-            edit = "Remove keyframe";
-        }
-        else {
-            value.addKey(localTime);
-            edit = "Add keyframe";
-        }
-    }
+    // Previous keyframe, add / remove, next keyframe.
+    widgets::keyframeButtons(value, localTime, edit, seekBy);
 
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-FLT_MIN);

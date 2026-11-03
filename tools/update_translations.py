@@ -75,7 +75,8 @@ def literals_between(text, start, end):
 def texts():
     keys = set()
 
-    for path in glob.glob(os.path.join(ROOT, 'src', 'app', '*.cpp')):
+    # The sources of the interface, and its headers (inline widgets).
+    for path in glob.glob(os.path.join(ROOT, 'src', 'app', '*.cpp')) + glob.glob(os.path.join(ROOT, 'src', 'app', '*.h')):
         source = read(path)
 
         for pattern in PATTERNS:

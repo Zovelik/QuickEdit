@@ -42,6 +42,10 @@ public:
     // The shaders of the user (offered with the built-in ones), why one does
     // not compile, and the folder they are in.
     const std::vector<core::ShaderDef>* userShaders = nullptr;
+
+    // A move of the playhead asked (to a keyframe), from where it is; 0
+    // for none. Reset by the caller.
+    core::Time seekBy = 0;
     std::function<std::string(const std::string& shaderId)> shaderError;
     std::function<void()> openShaderFolder;
 
