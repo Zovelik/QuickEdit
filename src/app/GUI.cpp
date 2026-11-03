@@ -648,6 +648,7 @@ void GUI::render(
 
     exportPopup();
     projectPropertiesPopup();
+    preferencesPopup();
     errorPopup();
     unsavedChangesPopup();
     recoveryPopup();
@@ -916,6 +917,7 @@ void GUI::menuBar()
             if (ImGui::MenuItem(tr(ICON_MD_SUBTITLES " Add Subtitle Track"))) { addTrack(TrackType::Subtitle); }
             ImGui::Separator();
             if (ImGui::MenuItem(tr(ICON_MD_VIDEO_SETTINGS " Project Properties..."))) { _requestProjectProperties = true; }
+            if (ImGui::MenuItem(tr(ICON_MD_SETTINGS " Preferences..."), "Ctrl+,")) { _requestPreferences = true; }
             ImGui::Separator();
 
             bool snapping = _timeline.snapping();
@@ -952,50 +954,6 @@ void GUI::menuBar()
             if (ImGui::MenuItem(tr(ICON_MD_FIT_SCREEN " Fit Sequence"),      "Ctrl+0")) { _timeline.requestZoomToFit(); }
             ImGui::Separator();
             if (ImGui::MenuItem(tr(ICON_MD_TIMELINE " Keyframes"))) { ImGui::SetWindowFocus("###Keyframes"); }
-            ImGui::Separator();
-
-            if (ImGui::MenuItem(tr(ICON_MD_CROP_FREE " Preview Trimmed Edges"), nullptr, &_trimPreview)) {
-                saveSetting("trimPreview", _trimPreview);
-            }
-
-            ImGui::SetItemTooltip("%s", tr("While a clip edge is dragged: the viewer shows its frame, a sound is heard there"));
-            ImGui::Separator();
-
-            if (ImGui::BeginMenu(tr(ICON_MD_LANGUAGE " Language"))) {
-                for (const i18n::Language& language : i18n::languages()) {
-                    if (ImGui::MenuItem(language.name.c_str(), nullptr, language.code == i18n::language()) &&
-                        i18n::setLanguage(language.code)) {
-                        saveSetting("language", language.code);
-                    }
-                }
-
-                ImGui::EndMenu();
-            }
-
-            ImGui::Separator();
-
-            // AI control: the MCP server, its address in the tooltip.
-            bool mcp = _mcpEnabled;
-
-            if (ImGui::MenuItem(tr(ICON_MD_SMART_TOY " AI Control (MCP Server)"), nullptr, &mcp)) {
-                setMcpEnabled(mcp);
-                saveSetting("mcpServer", mcp);
-            }
-
-            ImGui::SetItemTooltip(tr("Lets an AI assistant (Claude...) use QuickEdit through the Model Context Protocol, on this computer only:\n"
-                "http://127.0.0.1:%d/mcp\nIn Claude Code: claude mcp add --transport http quickedit http://127.0.0.1:%d/mcp"), _mcpPort, _mcpPort);
-
-            ImGui::Separator();
-
-            if (ImGui::MenuItem(tr(ICON_MD_SYSTEM_UPDATE " Check for Updates"), nullptr, false, *UpdateChecker::repository() && !_updates.running())) {
-                _updateAsked = true;
-                _updates.start();
-            }
-
-            if (ImGui::MenuItem(tr("Check for Updates at Start"), nullptr, &_checkUpdates)) {
-                saveSetting("checkUpdates", _checkUpdates);
-            }
-
             ImGui::Separator();
             if (ImGui::MenuItem(tr("Reset Layout"))) { _dockLayoutInitialized = false; ImGui::DockBuilderRemoveNode(ImGui::GetID("MainDockSpace")); }
             ImGui::EndMenu();
@@ -1204,6 +1162,7 @@ void GUI::shortcuts()
     }
 
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_K, global)) { splitAtPlayhead(); }
+    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Comma, global)) { _requestPreferences = true; }
 
     // Clips, unless a text field has the keyboard (its own copy and paste).
     if (!ImGui::GetIO().WantTextInput && !_mediaPanelFocused && !_keyframesFocused) {
@@ -5659,6 +5618,134 @@ void GUI::keyframesPanel()
     }
 
     ImGui::End();
+}
+
+
+void GUI::preferencesPopup()
+{
+    if (std::exchange(_requestPreferences, false)) {
+        _mcpPortEdit = _mcpPort;
+        ImGui::OpenPopup(tr("Preferences"));
+    }
+
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(34.f * ImGui::GetFontSize(), 0.f), ImGuiCond_Appearing);
+
+    if (!ImGui::BeginPopupModal(tr("Preferences"), nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+        return;
+    }
+
+    const float labelWidth = 9.f * ImGui::GetFontSize();
+
+    auto label = [&](const char* text) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", tr(text));
+        ImGui::SameLine(labelWidth);
+    };
+
+    // Interface
+    ImGui::SeparatorText(tr(ICON_MD_LANGUAGE " Interface"));
+    label("Language");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+
+    std::string current = i18n::language();
+
+    for (const i18n::Language& language : i18n::languages()) {
+        if (language.code == i18n::language()) current = language.name;
+    }
+
+    if (ImGui::BeginCombo("##language", current.c_str())) {
+        for (const i18n::Language& language : i18n::languages()) {
+            if (ImGui::Selectable(language.name.c_str(), language.code == i18n::language()) && i18n::setLanguage(language.code)) {
+                saveSetting("language", language.code);
+            }
+        }
+
+        ImGui::EndCombo();
+    }
+
+    // Editing
+    ImGui::SeparatorText(tr(ICON_MD_EDIT " Editing"));
+
+    if (ImGui::Checkbox(tr("Preview trimmed edges"), &_trimPreview)) {
+        saveSetting("trimPreview", _trimPreview);
+    }
+
+    ImGui::SetItemTooltip("%s", tr("While a clip edge is dragged: the viewer shows its frame, a sound is heard there"));
+
+    // AI control
+    ImGui::SeparatorText(tr(ICON_MD_SMART_TOY " AI Control"));
+    bool mcp = _mcpEnabled;
+
+    if (ImGui::Checkbox(tr("Let an AI assistant use QuickEdit (MCP server)"), &mcp)) {
+        setMcpEnabled(mcp);
+        saveSetting("mcpServer", mcp);
+    }
+
+    ImGui::SetItemTooltip("%s", tr("Through the Model Context Protocol, on this computer only: Claude, for instance, then sees the project and edits it."));
+
+    label("Port");
+    ImGui::SetNextItemWidth(8.f * ImGui::GetFontSize());
+    ImGui::InputInt("##mcpPort", &_mcpPortEdit, 0);
+    _mcpPortEdit = std::clamp(_mcpPortEdit, 1024, 65535);
+
+    if (_mcpPortEdit != _mcpPort) {
+        ImGui::SameLine();
+
+        if (ImGui::Button(tr("Apply"))) {
+            _mcpPort = _mcpPortEdit;
+            saveSetting("mcpPort", _mcpPort);
+
+            if (_mcpEnabled) setMcpEnabled(true);
+        }
+    }
+
+    char address[64];
+    std::snprintf(address, sizeof(address), "http://127.0.0.1:%d/mcp", _mcpPort);
+
+    if (!_mcpError.empty()) {
+        ImGui::TextColored(ImVec4(0.9f, 0.35f, 0.3f, 1.f), ICON_MD_WARNING " %s", _mcpError.c_str());
+    }
+    else if (_mcp.running()) {
+        ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.5f, 1.f), tr(ICON_MD_CHECK_CIRCLE " Listening on %s (%d calls)"), address, _mcp.calls());
+    }
+
+    // The command to connect Claude Code, to copy.
+    const std::string command = std::string("claude mcp add --transport http quickedit ") + address;
+    ImGui::TextDisabled("%s", tr("In Claude Code:"));
+    ImGui::SetNextItemWidth(-ImGui::GetFrameHeight() - ImGui::GetStyle().ItemInnerSpacing.x);
+    ImGui::InputText("##mcpCommand", const_cast<char*>(command.c_str()), command.size() + 1, ImGuiInputTextFlags_ReadOnly);
+    ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
+
+    if (ImGui::Button(ICON_MD_CONTENT_COPY "##copyMcpCommand", ImVec2(ImGui::GetFrameHeight(), 0.f))) {
+        SDL_SetClipboardText(command.c_str());
+    }
+
+    ImGui::SetItemTooltip("%s", tr("Copy"));
+
+    // Updates
+    ImGui::SeparatorText(tr(ICON_MD_SYSTEM_UPDATE " Updates"));
+
+    if (ImGui::Checkbox(tr("Check for updates at start"), &_checkUpdates)) {
+        saveSetting("checkUpdates", _checkUpdates);
+    }
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!*UpdateChecker::repository() || _updates.running());
+
+    if (ImGui::Button(_updates.running() ? tr("Checking...") : tr("Check Now"))) {
+        _updateAsked = true;
+        _updates.start();
+    }
+
+    ImGui::EndDisabled();
+    ImGui::Separator();
+
+    if (ImGui::Button(tr("Close")) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
 }
 
 

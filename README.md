@@ -41,7 +41,7 @@ Windows and Linux. C++20, SDL3, Dear ImGui, Vulkan, FFmpeg.
 
 ## AI control (MCP)
 
-View > AI Control (MCP Server) starts a Model Context Protocol server on
+Edit > Preferences > AI Control starts a Model Context Protocol server on
 `http://127.0.0.1:8765/mcp` (this computer only; off by default). An AI
 assistant connected to it sees the project (tracks, clips, media, rendered
 frames, transcriptions) and edits it live: media, clips, texts, titles,

@@ -746,6 +746,12 @@ private:
     // Settings of the sequence, from the Edit menu.
     void projectPropertiesPopup();
     bool _requestProjectProperties = false;
+
+    // The preferences of the application (Edit > Preferences...), saved in
+    // the settings: language, editing, AI control, updates.
+    void preferencesPopup();
+    bool _requestPreferences = false;
+    int _mcpPortEdit = 0;
     bool _autoExport = false;
 
     // Layer moved, scaled or rotated in the viewer: its placement when the
