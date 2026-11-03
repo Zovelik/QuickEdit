@@ -2069,11 +2069,12 @@ void TimelineView::beginDrag(Project& project, DragMode mode, const Clip& grabbe
     _lastValidTrackDelta = 0;
     _snapLine = -1;
 
-    // A move takes the whole selection; a trim only the grabbed clip and the
-    // clips linked to it.
+    // A move takes the whole selection, a trim too when the grabbed clip is
+    // in it (same edge of every selected clip); else only the grabbed clip
+    // and the clips linked to it.
     std::vector<Id> clipIds;
 
-    if (mode == DragMode::Move) {
+    if (mode == DragMode::Move || isSelected(selection, grabbed.id)) {
         clipIds = selection;
     }
     else {

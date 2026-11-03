@@ -759,7 +759,7 @@ void GUI::menuBar()
             if (ImGui::MenuItem(tr(ICON_MD_SAVE        " Save Project"),       "Ctrl+S"))       { requestSaveFile(); }
             if (ImGui::MenuItem(tr(ICON_MD_SAVE_AS     " Save Project As..."), "Ctrl+Shift+S")) { requestSaveAsFile(); }
             ImGui::Separator();
-            if (ImGui::MenuItem(tr(ICON_MD_UPLOAD_FILE " Import Media..."),    "Ctrl+I"))       { requestImportMedia(); }
+            if (ImGui::MenuItem(tr(ICON_MD_LIBRARY_ADD " Import Media..."),    "Ctrl+I"))       { requestImportMedia(); }
             if (ImGui::MenuItem(tr(ICON_MD_MOVIE_CREATION " Export Video..."), "Ctrl+E"))       { _requestExportPopup = true; }
             ImGui::Separator();
 
@@ -1048,7 +1048,7 @@ void GUI::toolbar()
 
     toolbarSeparator();
 
-    if (toolbarButton(ICON_MD_UPLOAD_FILE, "Import Media...", "Ctrl+I", buttonSize)) { requestImportMedia(); }
+    if (toolbarButton(ICON_MD_LIBRARY_ADD, "Import Media...", "Ctrl+I", buttonSize)) { requestImportMedia(); }
     if (toolbarButton(ICON_MD_MOVIE_CREATION, "Export Video...", "Ctrl+E", buttonSize)) { _requestExportPopup = true; }
     if (toolbarButton(ICON_MD_MIC, "Record Voice-Over...", "R", buttonSize, true, _showRecorder)) { _showRecorder = !_showRecorder; }
     if (toolbarButton(ICON_MD_SCREEN_SHARE, "Record Screen...", "Shift+R", buttonSize, true, _showScreenRecorder)) { _showScreenRecorder = !_showScreenRecorder; }
@@ -1090,8 +1090,9 @@ void GUI::toolbar()
 
 void GUI::shortcuts()
 {
-    // The text editor of the viewer has the keyboard.
-    if (_textEditor.active()) {
+    // The text editor of the viewer, or the shader editor, has the keyboard
+    // (the code editor reads its keys itself: no text input flag for it).
+    if (_textEditor.active() || _shaderEditorFocused) {
         return;
     }
 
@@ -1192,7 +1193,7 @@ void GUI::mediaPanel()
         return;
     }
 
-    if (ImGui::Button(tr(ICON_MD_UPLOAD_FILE " Import..."))) {
+    if (ImGui::Button(tr(ICON_MD_LIBRARY_ADD " Import..."))) {
         requestImportMedia();
     }
 

@@ -78,6 +78,7 @@ struct EffectParameters
     float direction[2];
     float pixelScale;
     float padding[3];
+    float visible[4];   // The part not cropped, in texture coordinates
 };
 
 
@@ -573,6 +574,12 @@ const GPU::Image* Compositor::cmdApplyEffects(VkCommandBuffer commandBuffer, con
         parameters.texel[0] = 1.f / (float)width;
         parameters.texel[1] = 1.f / (float)height;
         parameters.pixelScale = (float)layer.width / std::max(1.f, (float)layer.width * fit) * ((float)width / std::max(1u, layer.width));
+
+        const Frame& frame = layer.clip->frame;
+        parameters.visible[0] = std::clamp(frame.cropLeft, 0.f, 0.99f);
+        parameters.visible[1] = std::clamp(frame.cropTop, 0.f, 0.99f);
+        parameters.visible[2] = 1.f - std::clamp(frame.cropRight, 0.f, 0.99f - parameters.visible[0]);
+        parameters.visible[3] = 1.f - std::clamp(frame.cropBottom, 0.f, 0.99f - parameters.visible[1]);
 
         // Nothing to do.
         if (info.type == VideoEffectType::Blur && parameters.a[0] * parameters.pixelScale < 0.5f) {

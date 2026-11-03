@@ -10,6 +10,7 @@ layout(push_constant) uniform Parameters
     vec2 texel;         // Size of a pixel of the picture, in texture coordinates
     vec2 direction;     // Of a separable pass (blur)
     float pixelScale;   // Pixels of the picture per pixel of the sequence
+    vec4 visible;       // The part not cropped (left, top, right, bottom), in texture coordinates
 } parameters;
 
 layout(location = 0) in vec2 inUV;
