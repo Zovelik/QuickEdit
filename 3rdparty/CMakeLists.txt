@@ -18,5 +18,14 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/whisper.cpp/CMakeLists.txt")
     set(GGML_VULKAN ON CACHE BOOL "" FORCE)
     set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 
+    # For the processors of the users, not the one of the machine building
+    # it (an AVX-512 build machine gives an illegal instruction elsewhere):
+    # AVX2, FMA and F16C, every x86-64 processor since 2013-2015.
+    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+    set(GGML_AVX ON CACHE BOOL "" FORCE)
+    set(GGML_AVX2 ON CACHE BOOL "" FORCE)
+    set(GGML_FMA ON CACHE BOOL "" FORCE)
+    set(GGML_F16C ON CACHE BOOL "" FORCE)
+
     add_subdirectory(whisper.cpp EXCLUDE_FROM_ALL)
 endif()

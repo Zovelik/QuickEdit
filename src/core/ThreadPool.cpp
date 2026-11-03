@@ -1,5 +1,7 @@
 #include <core/ThreadPool.h>
 
+#include <core/Guard.h>
+
 #include <algorithm>
 #include <atomic>
 #include <memory>
@@ -68,8 +70,9 @@ void ThreadPool::parallelFor(size_t count, const std::function<void(size_t)>& bo
     auto run = [state, total, &body]() {
         size_t i;
 
+        // An exception counts the item done: the loop still ends.
         while ((i = state->next.fetch_add(1)) < total) {
-            body(i);
+            guarded("Parallel task", [&]() { body(i); });
 
             if (state->done.fetch_add(1) + 1 == total) {
                 std::scoped_lock lock(state->mutex);
@@ -110,7 +113,7 @@ void ThreadPool::workerLoop()
             _tasks.pop_front();
         }
 
-        task();
+        guarded("Background task", task);
     }
 }
 

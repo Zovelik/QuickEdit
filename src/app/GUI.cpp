@@ -15,6 +15,7 @@
 #include <imgui_stdlib.h>
 
 #include <audio/Vst3Plugin.h>
+#include <core/Guard.h>
 #include <core/Layers.h>
 #include <core/Subtitles.h>
 
@@ -23,7 +24,9 @@
 #include <cmath>
 #include <cstring>
 #include <ctime>
+#include <exception>
 #include <fstream>
+#include <optional>
 #include <sstream>
 
 
@@ -227,6 +230,13 @@ GUI::GUI(const std::filesystem::path& projectPath, double startSeconds, Id selec
         }
     }
 
+    // An error a background task did not handle: that task stops, the
+    // user is told, the application goes on.
+    core::setErrorReporter([this](const std::string& where, const std::string& what) {
+        SDL_Log("Error (%s): %s", where.c_str(), what.c_str());
+        setErrorMessage(std::string(tr("A task stopped after an error:")) + "\n" + where + ": " + what);
+    });
+
     _timeline.waveformOf = [this](Id mediaId, int stream) { return _media.waveform(mediaId, stream); };
     _timeline.thumbnailsOf = [this](Id mediaId) { return thumbnailsOf(mediaId); };
     _timeline.userShaders = &_userShaders;
@@ -252,12 +262,24 @@ GUI::GUI(const std::filesystem::path& projectPath, double startSeconds, Id selec
         _selection = { selectedClip };
     }
 
+    // Copies left by a session that crashed: offered to recover.
+    _leftovers = autosave::leftovers();
+    _requestRecoveryPopup = !_leftovers.empty();
+
     updateWindowTitle();
 }
 
 
 GUI::~GUI()
 {
+    core::setErrorReporter(nullptr);
+
+    // A normal exit: no copy to recover. Kept when the application ends on
+    // an error.
+    if (std::uncaught_exceptions() == 0) {
+        autosave::remove();
+    }
+
     // A recording being opened or finished on a thread uses the recorders:
     // done before they go.
     if (_screenJob.valid()) _screenJob.wait();
@@ -581,6 +603,7 @@ void GUI::render(
     projectPropertiesPopup();
     errorPopup();
     unsavedChangesPopup();
+    recoveryPopup();
 
     endMainWindow();
 
@@ -4422,7 +4445,17 @@ void GUI::updateScreenRecording()
         return;
     }
 
-    ScreenJob job = _screenJob.get();
+    // An error on the thread: the recording did not start or finish.
+    ScreenJob job;
+
+    try {
+        job = _screenJob.get();
+    }
+    catch (const std::exception& e) {
+        core::reportError("Recording", e.what());
+        job = ScreenJob();
+        job.error = e.what();
+    }
 
     if (_screenStarting) {
         _screenStarting = false;
@@ -6085,6 +6118,127 @@ void GUI::unsavedChangesPopup()
 }
 
 
+void GUI::writeAutosave()
+{
+    // Parameters changed in the plugin editors.
+    _effects.saveStates(_project);
+
+    autosave::write(_project, _projectPath);
+    _autosaveWritten = true;
+    _autosavedRevision = _history.revision();
+    _autosaveTicks = SDL_GetTicks();
+}
+
+
+void GUI::updateAutosave()
+{
+    // At most every 30 s, while there are changes not saved nor copied.
+    constexpr uint64_t Interval = 30000;
+
+    if (!_history.modified() || _history.revision() == _autosavedRevision || SDL_GetTicks() < _autosaveTicks + Interval) {
+        return;
+    }
+
+    writeAutosave();
+}
+
+
+void GUI::recoveryPopup()
+{
+    if (std::exchange(_requestRecoveryPopup, false)) {
+        ImGui::OpenPopup(tr("Recover Projects"));
+    }
+
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (!ImGui::BeginPopupModal(tr("Recover Projects"), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+
+    ImGui::TextUnformatted(tr("QuickEdit did not close normally. These projects had changes not saved:"));
+    ImGui::Spacing();
+
+    std::optional<size_t> recover;
+    std::optional<size_t> discard;
+
+    for (size_t i = 0; i < _leftovers.size(); i++) {
+        const autosave::Leftover& leftover = _leftovers[i];
+        ImGui::PushID((int)i);
+        ImGui::Separator();
+
+        char when[64] = {};
+        const std::time_t time = (std::time_t)leftover.time;
+
+        if (const std::tm* local = std::localtime(&time)) {
+            std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M", local);
+        }
+
+        ImGui::Text("%s", leftover.title.empty() ? tr("Untitled") : leftover.title.c_str());
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", when);
+
+        if (!leftover.original.empty()) {
+            ImGui::TextDisabled("%s", pathToUtf8(leftover.original).c_str());
+        }
+
+        if (ImGui::Button(tr("Recover"))) {
+            recover = i;
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button(tr("Discard"))) {
+            discard = i;
+        }
+
+        ImGui::PopID();
+    }
+
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // The copies stay for the next start.
+    if (ImGui::Button(tr("Later")) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        ImGui::CloseCurrentPopup();
+    }
+
+    if (recover) {
+        const autosave::Leftover leftover = _leftovers[*recover];
+
+        try {
+            core::Project project = autosave::load(leftover);
+
+            stopPlayback();
+            replaceProject(std::move(project), leftover.original);
+            _timeline.requestZoomToFit();
+
+            // Still to be saved; copied for this session before the old copy goes.
+            _history.markUnsaved();
+            writeAutosave();
+            autosave::discard(leftover);
+            _leftovers.erase(_leftovers.begin() + (std::ptrdiff_t)*recover);
+
+            // One project at a time: the others stay for the next start.
+            ImGui::CloseCurrentPopup();
+        }
+        catch (const std::exception& e) {
+            ImGui::CloseCurrentPopup();
+            setErrorMessage(std::string(tr("Could not recover the project:\n")) + e.what());
+        }
+    }
+    else if (discard) {
+        autosave::discard(_leftovers[*discard]);
+        _leftovers.erase(_leftovers.begin() + (std::ptrdiff_t)*discard);
+
+        if (_leftovers.empty()) {
+            ImGui::CloseCurrentPopup();
+        }
+    }
+
+    ImGui::EndPopup();
+}
+
+
 void GUI::setErrorMessage(const std::string& message)
 {
     std::scoped_lock lock(_errorMutex);
@@ -6288,6 +6442,13 @@ void GUI::replaceProject(Project project, const std::filesystem::path& path)
     _playhead = 0;
     _history.reset(_project);
     projectChanged();
+
+    // The copy of the previous project goes: this one has no changes yet.
+    if (std::exchange(_autosaveWritten, false)) {
+        autosave::remove();
+    }
+
+    _autosavedRevision = _history.revision();
 }
 
 
@@ -6317,6 +6478,11 @@ bool GUI::saveProject(const std::filesystem::path& filepath)
         _project.save(filepath);
         _projectPath = filepath;
         _history.markSaved();
+
+        if (std::exchange(_autosaveWritten, false)) {
+            autosave::remove();
+        }
+
         return true;
     }
     catch (const std::exception& e) {
@@ -6648,6 +6814,8 @@ void SDLCALL GUI::onFileImport(void* userdata, const char* const* filelist, int 
 
 void GUI::eventBeforeFrame()
 {
+    updateAutosave();
+
     if (_shaderReloadPending) {
         applyShaderReload();
     }

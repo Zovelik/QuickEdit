@@ -10,6 +10,7 @@
 #include <filesystem>
 
 #include <app/GUI.h>
+#include <core/Guard.h>
 #include <core/Paths.h>
 #include <config.h>
 
@@ -369,7 +370,14 @@ int main(int argc, char* argv[])
                 codec == "h265" ? ExportSettings::Codec::H265 : ExportSettings::Codec::H264, exportHeight, exportFps, exportLufs);
         }
 
-        gui.run();
+        // The work copied before the application ends on an error.
+        try {
+            gui.run();
+        }
+        catch (...) {
+            core::guarded("Autosave", [&]() { gui.writeAutosave(); });
+            throw;
+        }
     } catch (const std::exception& e) {
         // Also shown in a message box: there is no console to read it from
         // in a WIN32 application. SDL allows this call even after SDL_Quit().

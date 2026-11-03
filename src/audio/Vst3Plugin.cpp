@@ -12,6 +12,7 @@
 #include "pluginterfaces/vst/ivstmessage.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
 
+#include <core/Guard.h>
 #include <core/Json.h>
 #include <core/Paths.h>
 
@@ -300,7 +301,12 @@ void PluginScanner::start(bool rescan)
     }
 
     _scanning = true;
-    _thread = std::thread(&PluginScanner::run, this, rescan);
+    // An error out of the scan ends it with the plugins found so far.
+    _thread = std::thread([this, rescan]() {
+        if (!core::guarded("Plugin scan", [&]() { run(rescan); })) {
+            _scanning = false;
+        }
+    });
 }
 
 

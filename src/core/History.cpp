@@ -23,6 +23,13 @@ void History::reset(const Project& project)
     _states.push_back({ project.toJson({}), {} });
     _current = 0;
     _savedState = 0;
+    _revision++;
+}
+
+
+void History::markUnsaved()
+{
+    _savedState = NoSavedState;
 }
 
 
@@ -37,6 +44,7 @@ void History::commit(const Project& project, const std::string& label)
 
     _states.push_back({ project.toJson({}), label });
     _current++;
+    _revision++;
 
     if (_states.size() > _maxSteps) {
         _states.erase(_states.begin());
@@ -68,6 +76,7 @@ void History::undo(Project& project)
     }
 
     _current--;
+    _revision++;
     project.fromJson(_states[_current].snapshot, {});
 }
 
@@ -79,6 +88,7 @@ void History::redo(Project& project)
     }
 
     _current++;
+    _revision++;
     project.fromJson(_states[_current].snapshot, {});
 }
 

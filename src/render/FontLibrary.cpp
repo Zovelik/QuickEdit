@@ -6,6 +6,8 @@
 #define STBTT_STATIC
 #include <imstb_truetype.h>
 
+#include <core/Guard.h>
+
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -29,9 +31,16 @@ std::vector<uint8_t> readFile(const std::filesystem::path& path, size_t offset =
         return {};
     }
 
+    // Within the file: the offsets come from the file itself.
+    file.seekg(0, std::ios::end);
+    const size_t length = (size_t)std::max<std::streamoff>(0, (std::streamoff)file.tellg());
+
+    if (offset > length || (size > 0 && size > length - offset)) {
+        return {};
+    }
+
     if (size == 0) {
-        file.seekg(0, std::ios::end);
-        size = (size_t)file.tellg() - offset;
+        size = length - offset;
     }
 
     std::vector<uint8_t> data(size);
@@ -79,9 +88,16 @@ bool readFontNames(const std::filesystem::path& path, std::string& family, std::
 
     size_t fontOffset = 0;
 
-    // Font collection: the first font.
+    // Font collection: the first font, its offset after the 12 bytes of the
+    // header of the collection.
     if (std::memcmp(header.data(), "ttcf", 4) == 0) {
-        fontOffset = readU32(header.data() + 8 + 4);
+        const std::vector<uint8_t> collection = readFile(path, 0, 16);
+
+        if (collection.size() < 16) {
+            return false;
+        }
+
+        fontOffset = readU32(collection.data() + 12);
         header = readFile(path, fontOffset, 12);
 
         if (header.size() < 12) {
@@ -101,6 +117,11 @@ bool readFontNames(const std::filesystem::path& path, std::string& family, std::
 
         if (std::memcmp(entry, "name", 4) != 0) {
             continue;
+        }
+
+        // A size of 0 would read the whole file.
+        if (readU32(entry + 12) == 0) {
+            return false;
         }
 
         const std::vector<uint8_t> name = readFile(path, readU32(entry + 8), readU32(entry + 12));
@@ -213,7 +234,8 @@ FontLibrary::FontLibrary(std::vector<uint8_t> defaultFont, bool scanSystemFonts)
     f.metrics = { ascent * f.scale, descent * f.scale, lineGap * f.scale };
 
     if (scanSystemFonts) {
-        _scanThread = std::thread([this]() { this->scanSystemFonts(); });
+        // Without the system fonts after an error: the bundled ones stay.
+        _scanThread = std::thread([this]() { core::guarded("Font scan", [this]() { this->scanSystemFonts(); }); });
     }
 }
 
@@ -392,7 +414,16 @@ void FontLibrary::scanSystemFonts()
 
             FontInfo info;
 
-            if (readFontNames(it->path(), info.family, info.style)) {
+            // A file that cannot be read is left out, not the others.
+            bool named = false;
+
+            try {
+                named = readFontNames(it->path(), info.family, info.style);
+            }
+            catch (const std::exception&) {
+            }
+
+            if (named) {
                 const std::u8string u8 = it->path().u8string();
                 info.path.assign(u8.begin(), u8.end());
                 fonts.push_back(std::move(info));

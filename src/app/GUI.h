@@ -1,5 +1,6 @@
 #pragma once
 
+#include <app/Autosave.h>
 #include <app/EffectRack.h>
 #include <audio/Vst3Plugin.h>
 #include <app/Exporter.h>
@@ -104,6 +105,10 @@ public:
     // Asks to save the changes first when the project is modified.
     virtual void quit() override;
 
+    // The emergency copy of the project, now (see Autosave.h): also before
+    // the application ends on an error.
+    void writeAutosave();
+
 private:
     void beginMainWindow();
     void endMainWindow();
@@ -160,6 +165,16 @@ private:
     void exportPopup();
     void errorPopup();
     void unsavedChangesPopup();
+
+    // Emergency copies: written now and then while the project has changes
+    // not saved; those left by a crash offered at start.
+    void updateAutosave();
+    void recoveryPopup();
+    uint64_t _autosavedRevision = 0;
+    uint64_t _autosaveTicks = 0;
+    bool _autosaveWritten = false;
+    std::vector<autosave::Leftover> _leftovers;
+    bool _requestRecoveryPopup = false;
 
     // Reports an error to the user. Safe to call from any thread.
     void setErrorMessage(const std::string& message);

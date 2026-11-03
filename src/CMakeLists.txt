@@ -57,6 +57,7 @@ endforeach()
 add_library(QuickEditCore STATIC
     core/Animation.cpp
     core/Base64.cpp
+    core/Guard.cpp
     core/History.cpp
     core/Json.cpp
     core/Layers.cpp
@@ -100,6 +101,7 @@ endif()
 set(QUICKEDIT_SRC
     main.cpp
     app/AppIcon.cpp
+    app/Autosave.cpp
     app/EffectRack.cpp
     app/Exporter.cpp
     app/BorderlessWindow.cpp

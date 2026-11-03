@@ -32,6 +32,8 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+#include <core/Guard.h>
+
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -1059,10 +1061,19 @@ bool ScreenRecorder::start(const std::filesystem::path& path, const ScreenRecord
         settings.source.name.c_str(), _video->encoder->width, _video->encoder->height, av_q2d(_video->encoder->framerate), _encoderName.c_str());
 
     _recording = true;
-    _videoThread = std::thread(&ScreenRecorder::videoLoop, this);
+    // An error out of a loop ends the recording, its reason kept.
+    _videoThread = std::thread([this]() {
+        if (!core::guarded("Screen recording", [this]() { videoLoop(); })) {
+            fail("The recording of the picture failed.");
+        }
+    });
 
     if (_audio) {
-        _audioThread = std::thread(&ScreenRecorder::audioLoop, this);
+        _audioThread = std::thread([this]() {
+            if (!core::guarded("Screen recording", [this]() { audioLoop(); })) {
+                fail("The recording of the sound failed.");
+            }
+        });
     }
 
     return true;
@@ -1670,7 +1681,12 @@ void SourcePreview::show(const CaptureSource& source)
     // The thread owns the state with this object: stopping never waits for
     // a capture that has nothing new to give.
     _state = std::make_shared<State>();
-    std::thread(previewLoop, _state, source, std::move(previous)).detach();
+    // Done after an error too: whoever waits for it to let the device go.
+    std::thread([state = _state, source, previous = std::move(previous)]() {
+        if (!core::guarded("Source preview", [&]() { previewLoop(state, source, previous); })) {
+            state->done = true;
+        }
+    }).detach();
 }
 
 

@@ -11,6 +11,7 @@
 #include <media/MediaFile.h>
 #include <media/MediaManager.h>
 
+#include <core/Guard.h>
 #include <core/Paths.h>
 
 #include <imgui_internal.h>
@@ -803,7 +804,17 @@ void GUI::updateSceneRecording()
         return;
     }
 
-    SceneJob job = _sceneJob.get();
+    // An error on the thread: the recording did not start or finish.
+    SceneJob job;
+
+    try {
+        job = _sceneJob.get();
+    }
+    catch (const std::exception& e) {
+        core::reportError("Recording", e.what());
+        job = SceneJob();
+        job.error = e.what();
+    }
 
     if (_sceneStarting) {
         _sceneStarting = false;

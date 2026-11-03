@@ -86,6 +86,7 @@ namespace media
         std::deque<std::shared_ptr<VideoFrame>> _ahead;
         core::Id _aheadMedia = core::InvalidId;
         bool _aheadEnded = false;
+        uint64_t _handledSerial = 0;
 
         std::thread _thread;
     };

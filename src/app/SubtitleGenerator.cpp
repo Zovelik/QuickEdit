@@ -9,6 +9,8 @@ extern "C" {
 #include <libavutil/error.h>
 }
 
+#include <core/Guard.h>
+
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -94,7 +96,14 @@ void ModelDownload::start(const WhisperModel& model)
         _error.clear();
     }
 
-    _thread = std::thread(&ModelDownload::run, this, std::string(ModelUrl) + model.file, modelFolder() / model.file);
+    // An error out of the download ends it, the window told why.
+    _thread = std::thread([this, url = std::string(ModelUrl) + model.file, path = modelFolder() / model.file]() {
+        if (!core::guarded("Model download", [&]() { run(url, path); })) {
+            std::scoped_lock lock(_mutex);
+            _error = "The download failed.";
+            _running = false;
+        }
+    });
 }
 
 
@@ -209,7 +218,19 @@ void SubtitleGenerator::start(std::vector<float> samples, const Settings& settin
         _error.clear();
     }
 
-    _thread = std::thread(&SubtitleGenerator::run, this, std::move(samples), settings);
+    // An error out of the recognition ends it, the window told why.
+    _thread = std::thread([this, samples = std::move(samples), settings]() mutable {
+        if (!core::guarded("Subtitle generation", [&]() { run(std::move(samples), settings); })) {
+            {
+                std::scoped_lock lock(_mutex);
+                _cues.clear();
+                _error = "The recognition failed.";
+            }
+
+            _done = true;
+            _running = false;
+        }
+    });
 }
 
 

@@ -3,6 +3,7 @@
 #include <core/Json.h>
 #include <core/Project.h>
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -39,6 +40,12 @@ namespace core
         bool modified() const { return _current != _savedState; }
         void markSaved() { _savedState = _current; }
 
+        // As if never saved (a project recovered after a crash).
+        void markUnsaved();
+
+        // Changes with each reset, commit, undo and redo.
+        uint64_t revision() const { return _revision; }
+
     private:
         struct State
         {
@@ -50,5 +57,6 @@ namespace core
         size_t _current = 0;
         size_t _savedState = 0;
         size_t _maxSteps;
+        uint64_t _revision = 0;
     };
 }

@@ -7,6 +7,22 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(GNUInstallDirs)
 
+# AddressSanitizer on the sources of QuickEdit, for testing: memory errors
+# are reported where they happen, not where they make it crash later.
+option(QUICKEDIT_ASAN "Build QuickEdit with AddressSanitizer" OFF)
+
+# On everything built here: the containers of the standard library must be
+# instrumented the same way in every object.
+if (QUICKEDIT_ASAN)
+    if (MSVC)
+        add_compile_options(/fsanitize=address /Zi)
+        add_link_options(/INCREMENTAL:NO /DEBUG)
+    else()
+        add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=address)
+    endif()
+endif()
+
 list(PREPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_BINDIR})

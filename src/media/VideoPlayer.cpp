@@ -1,5 +1,7 @@
 #include <media/VideoPlayer.h>
 
+#include <core/Guard.h>
+
 extern "C" {
 #include <libavutil/buffer.h>
 }
@@ -27,7 +29,18 @@ constexpr size_t MaxOpenReaders = 4;
 VideoPlayer::VideoPlayer(AVBufferRef* hwDevice)
     : _hwDevice(hwDevice ? av_buffer_ref(hwDevice) : nullptr)
 {
-    _thread = std::thread([this]() { workerLoop(); });
+    _thread = std::thread([this]() {
+        // An error not handled in the loop: the request given up (its media
+        // failed, nothing decoded ahead), then the loop goes on.
+        while (!guarded("Video decoding", [this]() { workerLoop(); })) {
+            _ahead.clear();
+            _aheadEnded = true;
+
+            std::scoped_lock lock(_mutex);
+            _failed.insert(_request.mediaId);
+            _handledSerial = _request.serial;
+        }
+    });
 }
 
 
@@ -156,8 +169,6 @@ VideoReader* VideoPlayer::reader(const Request& request)
 
 void VideoPlayer::workerLoop()
 {
-    uint64_t handledSerial = 0;
-
     while (true) {
         Request request;
         std::set<Id> forgotten;
@@ -169,7 +180,7 @@ void VideoPlayer::workerLoop()
                 const bool prefetch = _request.playing && !_aheadEnded && _ahead.size() < MaxFramesAhead &&
                     _aheadMedia == _request.mediaId && _request.mediaId != InvalidId;
 
-                return _stop || _request.serial != handledSerial || prefetch;
+                return _stop || _request.serial != _handledSerial || prefetch;
             });
 
             if (_stop) {
@@ -190,8 +201,8 @@ void VideoPlayer::workerLoop()
             }
         }
 
-        const bool newRequest = request.serial != handledSerial;
-        handledSerial = request.serial;
+        const bool newRequest = request.serial != _handledSerial;
+        _handledSerial = request.serial;
 
         if (request.mediaId == InvalidId) {
             std::scoped_lock lock(_mutex);
@@ -249,7 +260,17 @@ void VideoPlayer::workerLoop()
         }
         else if (!videoReader->stillImage()) {
             // Prefetch while playing.
-            std::shared_ptr<VideoFrame> next = videoReader->nextFrame();
+            std::shared_ptr<VideoFrame> next;
+
+            try {
+                next = videoReader->nextFrame();
+            }
+            catch (const std::exception&) {
+                std::scoped_lock lock(_mutex);
+                _failed.insert(request.mediaId);
+                _aheadEnded = true;
+                continue;
+            }
 
             if (!next) {
                 _aheadEnded = true;
