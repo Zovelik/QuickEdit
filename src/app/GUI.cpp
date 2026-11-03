@@ -6556,9 +6556,8 @@ void GUI::updatePopup()
     if (_updates.done()) {
         _updates.acknowledge();
 
-        if (_updates.error().empty()) {
-            saveSetting("lastUpdateCheck", (int64_t)std::time(nullptr));
-        }
+        // Failed too (offline, private repository): tried again the next day.
+        saveSetting("lastUpdateCheck", (int64_t)std::time(nullptr));
 
         _requestUpdatePopup = _updates.newer() || std::exchange(_updateAsked, false);
     }
