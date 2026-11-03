@@ -548,6 +548,16 @@ namespace core
         // selected clips (and their links) when the selection is not empty.
         void splitAt(Time t, const std::vector<Id>& onlyClips = {});
 
+        // Copy and paste of clips: copyClips() describes them (with their
+        // track, their time from the first one, the files of their media),
+        // pasteClips() places such a copy at time at, on the same tracks
+        // (the last one of their kind when there are fewer), over what is
+        // there. The pasted clips get ids and link groups of their own;
+        // their media are found by file, imported when missing. Returns the
+        // ids of the pasted clips.
+        Json copyClips(const std::vector<Id>& clipIds) const;
+        std::vector<Id> pasteClips(const Json& copy, Time at);
+
         // Frees [from, to) on a track for a clip placed over others, except
         // the clips kept: the clips inside go, the ones across an edge are
         // shortened, one across both is cut in two (its parts keep its

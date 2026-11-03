@@ -84,6 +84,11 @@ public:
         core::Time trimTime = -1;
         bool trimEnd = false;
         bool trimSound = false;
+
+        // Cut, copy or paste asked from the menu of the clips (done by the
+        // caller, through the clipboard).
+        enum class Clipboard { None, Cut, Copy, Paste };
+        Clipboard clipboard = Clipboard::None;
     };
 
     // Files dragged from the file manager, previewed where they would land.

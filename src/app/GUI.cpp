@@ -791,6 +791,10 @@ void GUI::menuBar()
             if (ImGui::MenuItem(undoLabel.c_str(), "Ctrl+Z", nullptr, _history.canUndo())) { undo(); }
             if (ImGui::MenuItem(redoLabel.c_str(), "Ctrl+Y", nullptr, _history.canRedo())) { redo(); }
             ImGui::Separator();
+            if (ImGui::MenuItem(tr(ICON_MD_CONTENT_CUT   " Cut"),   "Ctrl+X", nullptr, hasSelection))      { copySelection(true); }
+            if (ImGui::MenuItem(tr(ICON_MD_CONTENT_COPY  " Copy"),  "Ctrl+C", nullptr, hasSelection))      { copySelection(false); }
+            if (ImGui::MenuItem(tr(ICON_MD_CONTENT_PASTE " Paste"), "Ctrl+V", nullptr, canPasteClips()))   { pasteClips(); }
+            ImGui::Separator();
             if (ImGui::MenuItem(tr(ICON_MD_CONTENT_CUT " Split at Playhead"), "Ctrl+K"))                    { splitAtPlayhead(); }
             if (ImGui::MenuItem(tr(ICON_MD_PAUSE_CIRCLE " Freeze Frame"),   "Shift+F"))                   { freezeFrame(); }
             if (ImGui::MenuItem(tr(ICON_MD_COMPARE_ARROWS " Add / Remove Transition"), "Ctrl+D"))          { toggleTransition(); }
@@ -1131,6 +1135,13 @@ void GUI::shortcuts()
     }
 
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_K, global)) { splitAtPlayhead(); }
+
+    // Clips, unless a text field has the keyboard (its own copy and paste).
+    if (!ImGui::GetIO().WantTextInput && !_mediaPanelFocused && !_keyframesFocused) {
+        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_C, global)) { copySelection(false); }
+        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_X, global)) { copySelection(true); }
+        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_V, global)) { pasteClips(); }
+    }
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_D, global)) { toggleTransition(); }
 
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Equal,                  repeat) ||
@@ -5211,6 +5222,13 @@ void GUI::timelinePanel()
 
         trimPreview(result.trimTime, result.trimEnd, result.trimSound);
 
+        switch (result.clipboard) {
+            case TimelineView::Result::Clipboard::Cut:   copySelection(true); break;
+            case TimelineView::Result::Clipboard::Copy:  copySelection(false); break;
+            case TimelineView::Result::Clipboard::Paste: pasteClips(); break;
+            default: break;
+        }
+
         if (result.dropTrack != InvalidId) {
             _dropTrack = result.dropTrack;
             _dropStart = result.dropStart;
@@ -6803,6 +6821,80 @@ void GUI::deleteSelection(bool ripple)
 
     _selection.clear();
     commit(ripple ? "Ripple delete" : "Delete clips");
+}
+
+
+namespace {
+
+// Before the description of copied clips in the clipboard: text of another
+// application is not taken for clips.
+constexpr std::string_view ClipboardPrefix = "QuickEdit clips:";
+
+}
+
+
+void GUI::copySelection(bool cut)
+{
+    endTextEditing();
+
+    if (_selection.empty()) {
+        return;
+    }
+
+    _effects.saveStates(_project);
+
+    const std::string text = std::string(ClipboardPrefix) + _project.copyClips(_selection).dump();
+    SDL_SetClipboardText(text.c_str());
+
+    if (cut) {
+        deleteSelection(false);
+    }
+}
+
+
+bool GUI::canPasteClips() const
+{
+    if (!SDL_HasClipboardText()) {
+        return false;
+    }
+
+    char* text = SDL_GetClipboardText();
+    const bool clips = text && std::string_view(text).starts_with(ClipboardPrefix);
+    SDL_free(text);
+    return clips;
+}
+
+
+void GUI::pasteClips()
+{
+    char* text = SDL_GetClipboardText();
+    const std::string clipboard = text ? text : "";
+    SDL_free(text);
+
+    if (!clipboard.starts_with(ClipboardPrefix)) {
+        return;
+    }
+
+    try {
+        const std::vector<Id> pasted = _project.pasteClips(Json::parse(clipboard.substr(ClipboardPrefix.size())), _playhead);
+
+        if (pasted.empty()) {
+            return;
+        }
+
+        Time end = _playhead;
+
+        for (Id id : pasted) {
+            if (const Clip* clip = _project.findClip(id)) end = std::max(end, clip->end());
+        }
+
+        _selection = pasted;
+        commit(pasted.size() > 1 ? "Paste clips" : "Paste clip");
+        seek(end);
+    }
+    catch (const std::exception& e) {
+        setErrorMessage(std::string(tr("Could not paste the clips:\n")) + e.what());
+    }
 }
 
 

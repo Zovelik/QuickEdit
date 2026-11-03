@@ -203,6 +203,13 @@ private:
 
     void newProject();
 
+    // Copy and paste of the selected clips, through the clipboard of the
+    // system (another QuickEdit, another project): pasted at the playhead,
+    // which then goes to their end.
+    void copySelection(bool cut);
+    void pasteClips();
+    bool canPasteClips() const;
+
     // Replaces the project (new, opened), forgetting what was analyzed,
     // decoded and selected for the previous one.
     void replaceProject(core::Project project, const std::filesystem::path& path);

@@ -568,6 +568,49 @@ void testTextAndFreeze()
 }
 
 
+void testCopyPaste()
+{
+    Project project;
+    Sequence& sequence = project.sequence();
+
+    // A video (with its sound) and a styled text after it.
+    const Id video = project.importMedia("C:/media/clip.mp4");
+    const Id clip = project.addClip(video, sequence.videoTracks[0].id, 2 * TicksPerSecond);
+    const Id text = project.addTextClip(sequence.videoTracks[1].id, 5 * TicksPerSecond, TicksPerSecond, "Title");
+    project.findClip(text)->text.spans[0].style.color = { 1.f, 0.f, 0.f, 1.f };
+
+    std::vector<Id> selection;
+    selection.push_back(clip);
+    selection.push_back(text);
+
+    for (const Clip& sound : sequence.soundTracks[0].clips) selection.push_back(sound.id);
+
+    const Json copy = Json::parse(project.copyClips(selection).dump());
+
+    // Into another project, at 10 s: the same tracks, the same spacing,
+    // linked again between themselves only, the media imported there.
+    Project other;
+    const std::vector<Id> pasted = other.pasteClips(copy, 10 * TicksPerSecond);
+    Sequence& otherSequence = other.sequence();
+
+    CHECK(pasted.size() == 3);
+    CHECK(other.media().size() == 1);
+    CHECK(otherSequence.videoTracks[0].clips.size() == 1 && otherSequence.videoTracks[0].clips[0].start == 10 * TicksPerSecond);
+    CHECK(otherSequence.soundTracks[0].clips.size() == 1);
+    CHECK(otherSequence.videoTracks[0].clips[0].linkGroup == otherSequence.soundTracks[0].clips[0].linkGroup);
+    CHECK(otherSequence.videoTracks[0].clips[0].linkGroup != InvalidId);
+    CHECK(otherSequence.videoTracks[1].clips.size() == 1 && otherSequence.videoTracks[1].clips[0].start == 13 * TicksPerSecond);
+    CHECK(otherSequence.videoTracks[1].clips[0].text.spans[0].style.color.g == 0.f);
+
+    // Twice in the same project: other ids, another link group.
+    const std::vector<Id> again = project.pasteClips(copy, 20 * TicksPerSecond);
+    CHECK(again.size() == 3);
+    CHECK(sequence.videoTracks[0].clips.size() == 2);
+    CHECK(sequence.videoTracks[0].clips[1].id != clip);
+    CHECK(sequence.videoTracks[0].clips[1].linkGroup != sequence.videoTracks[0].clips[0].linkGroup);
+}
+
+
 void testSequenceResize()
 {
     Project project;
@@ -977,6 +1020,7 @@ int main()
     testTextAndFreeze();
     testTransitions();
     testSequenceResize();
+    testCopyPaste();
     testTextEditing();
     testSpeedAndTracks();
     testLoudness();

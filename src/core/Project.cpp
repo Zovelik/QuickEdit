@@ -1412,6 +1412,118 @@ void Project::splitAt(Time t, const std::vector<Id>& onlyClips)
 }
 
 
+Json Project::copyClips(const std::vector<Id>& clipIds) const
+{
+    Json clips = Json::array();
+    Time first = std::numeric_limits<Time>::max();
+
+    for (const TrackType type : { TrackType::Video, TrackType::Sound, TrackType::Audio, TrackType::Subtitle }) {
+        for (const Track& track : _sequence.tracks(type)) {
+            for (const Clip& clip : track.clips) {
+                if (std::find(clipIds.begin(), clipIds.end(), clip.id) != clipIds.end()) {
+                    first = std::min(first, clip.start);
+                }
+            }
+        }
+    }
+
+    for (const TrackType type : { TrackType::Video, TrackType::Sound, TrackType::Audio, TrackType::Subtitle }) {
+        const std::vector<Track>& tracks = _sequence.tracks(type);
+
+        for (size_t i = 0; i < tracks.size(); i++) {
+            for (const Clip& clip : tracks[i].clips) {
+                if (std::find(clipIds.begin(), clipIds.end(), clip.id) == clipIds.end()) {
+                    continue;
+                }
+
+                Json entry = Json::object();
+                entry["trackType"] = (int)type;
+                entry["track"] = (int64_t)i;
+
+                Clip relative = clip;
+                relative.start -= first;
+                entry["clip"] = clipToJson(relative);
+
+                if (const MediaItem* media = findMedia(clip.mediaId)) {
+                    const std::u8string path = media->path.u8string();
+                    entry["media"] = std::string(path.begin(), path.end());
+                }
+
+                clips.push_back(entry);
+            }
+        }
+    }
+
+    Json copy = Json::object();
+    copy["clips"] = clips;
+    return copy;
+}
+
+
+std::vector<Id> Project::pasteClips(const Json& copy, Time at)
+{
+    std::vector<Id> pasted;
+    std::vector<std::pair<Id, Id>> linkGroups;     // Copied, new
+
+    for (const Json& entry : copy["clips"].items()) {
+        const TrackType type = (TrackType)entry["trackType"].toInt();
+        std::vector<Track>& tracks = _sequence.tracks(type);
+
+        if (tracks.empty()) {
+            continue;
+        }
+
+        Track& track = tracks[(size_t)std::clamp<int64_t>(entry["track"].toInt(), 0, (int64_t)tracks.size() - 1)];
+
+        if (track.locked) {
+            continue;
+        }
+
+        Clip clip = clipFromJson(entry["clip"]);
+        clip.start += at;
+        clip.id = newId();
+
+        for (EffectSlot& slot : clip.effects) slot.id = newId();
+        for (VideoEffect& effect : clip.videoEffects) effect.id = newId();
+
+        // Its media: the same file, here.
+        if (clip.kind == ClipKind::Media) {
+            const std::string path = entry["media"].toString();
+
+            if (path.empty()) {
+                continue;
+            }
+
+            clip.mediaId = importMedia(std::filesystem::path(std::u8string(path.begin(), path.end())));
+        }
+
+        // A nested sequence of another project: nothing to show.
+        if (clip.kind == ClipKind::Sequence && !findSequence(clip.sequence)) {
+            continue;
+        }
+
+        if (clip.linkGroup != InvalidId) {
+            auto it = std::find_if(linkGroups.begin(), linkGroups.end(), [&](const auto& pair) { return pair.first == clip.linkGroup; });
+
+            if (it == linkGroups.end()) {
+                linkGroups.emplace_back(clip.linkGroup, newId());
+                it = linkGroups.end() - 1;
+            }
+
+            clip.linkGroup = it->second;
+        }
+
+        overwrite(track.id, clip.start, clip.end());
+
+        track.clips.push_back(clip);
+        track.sortClips();
+        pasted.push_back(clip.id);
+    }
+
+    return pasted;
+}
+
+
 Clip Project::cutClip(Clip& left, Time t)
 {
     Clip right = left;

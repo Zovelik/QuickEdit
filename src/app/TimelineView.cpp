@@ -1066,6 +1066,11 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
     // ------------------------------------------------------------------------
 
     if (ImGui::BeginPopup("##clipContext")) {
+        if (ImGui::MenuItem(tr(ICON_MD_CONTENT_CUT   " Cut"),   "Ctrl+X")) { result.clipboard = Result::Clipboard::Cut; }
+        if (ImGui::MenuItem(tr(ICON_MD_CONTENT_COPY  " Copy"),  "Ctrl+C")) { result.clipboard = Result::Clipboard::Copy; }
+        if (ImGui::MenuItem(tr(ICON_MD_CONTENT_PASTE " Paste"), "Ctrl+V")) { result.clipboard = Result::Clipboard::Paste; }
+        ImGui::Separator();
+
         if (ImGui::MenuItem(tr(ICON_MD_CONTENT_CUT " Split at Playhead"), "Ctrl+K")) {
             project.splitAt(playhead, selection);
             result.edited = true;
