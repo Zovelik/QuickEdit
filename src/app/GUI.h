@@ -6,6 +6,7 @@
 #include <app/Exporter.h>
 #include <app/GUIBase.h>
 #include <app/Inspector.h>
+#include <app/McpServer.h>
 #include <app/RecordingScene.h>
 #include <app/SubtitleGenerator.h>
 #include <app/KeyframeEditor.h>
@@ -694,6 +695,45 @@ private:
     // option is on) and from the View menu; told in a popup when there is
     // one, or when the check was asked.
     UpdateChecker _updates;
+
+    // The MCP server, through which an AI assistant uses QuickEdit (View
+    // menu, off by default), and its tools (app/McpTools.cpp).
+    McpServer _mcp;
+    bool _mcpEnabled = false;
+    int _mcpPort = 8765;
+    std::string _mcpError;
+    void setMcpEnabled(bool enabled);
+    void updateMcp();
+    static core::Json mcpTools();
+    static int defaultMcpPort();
+    std::string mcpInstructions() const;
+    std::optional<core::Json> mcpCall(const std::string& name, const core::Json& arguments, int attempt);
+    std::vector<core::Id> _mcpImported;
+    SubtitleGenerator _mcpTranscriber;
+    std::filesystem::path _mcpTranscribeModel;
+    std::string _mcpTranscribeLanguage;
+    bool _mcpTranscribeStarted = false;
+
+    // A frame of the viewer read back (render_frame): once the pictures of
+    // its time are there, copied after the composition, read a frame later.
+    struct FrameCapture
+    {
+        bool requested = false;
+        bool recorded = false;
+        bool readable = false;
+        int waited = 0;
+        core::Time time = 0;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        std::shared_ptr<GPU::Buffer> buffer;
+    };
+
+    FrameCapture _frameCapture;
+    void cmdCaptureFrame(VkCommandBuffer commandBuffer);
+
+    // The export presets (for the tools too).
+    static size_t exportPresetCount();
+    static const char* exportPresetName(int index);
     bool _checkUpdates = true;
     bool _updateAsked = false;
     bool _requestUpdatePopup = false;

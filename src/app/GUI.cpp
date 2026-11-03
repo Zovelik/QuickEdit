@@ -231,6 +231,12 @@ GUI::GUI(const std::filesystem::path& projectPath, double startSeconds, Id selec
 
         _trimPreview = loadSettings()["trimPreview"].toBool(true);
         _checkUpdates = loadSettings()["checkUpdates"].toBool(true);
+        _mcpPort = (int)loadSettings()["mcpPort"].toInt(defaultMcpPort());
+    }
+
+    // The MCP server, when it was left on.
+    if (loadSettings()["mcpServer"].toBool(false)) {
+        setMcpEnabled(true);
     }
 
     // The first time maximized; then as it was left.
@@ -550,6 +556,9 @@ void GUI::cmdCompose(VkCommandBuffer commandBuffer)
     }
 
     _compositor->cmdComposite(commandBuffer, sequence.width, sequence.height, layers);
+
+    // A frame asked by the MCP server.
+    cmdCaptureFrame(commandBuffer);
 }
 
 
@@ -962,6 +971,19 @@ void GUI::menuBar()
 
                 ImGui::EndMenu();
             }
+
+            ImGui::Separator();
+
+            // AI control: the MCP server, its address in the tooltip.
+            bool mcp = _mcpEnabled;
+
+            if (ImGui::MenuItem(tr(ICON_MD_SMART_TOY " AI Control (MCP Server)"), nullptr, &mcp)) {
+                setMcpEnabled(mcp);
+                saveSetting("mcpServer", mcp);
+            }
+
+            ImGui::SetItemTooltip(tr("Lets an AI assistant (Claude...) use QuickEdit through the Model Context Protocol, on this computer only:\n"
+                "http://127.0.0.1:%d/mcp\nIn Claude Code: claude mcp add --transport http quickedit http://127.0.0.1:%d/mcp"), _mcpPort, _mcpPort);
 
             ImGui::Separator();
 
@@ -5740,6 +5762,18 @@ const std::vector<ExportPreset>& exportPresets()
 }
 
 
+size_t GUI::exportPresetCount()
+{
+    return exportPresets().size();
+}
+
+
+const char* GUI::exportPresetName(int index)
+{
+    return (index >= 0 && index < (int)exportPresets().size()) ? exportPresets()[(size_t)index].name : "";
+}
+
+
 void GUI::applyExportPreset(int index)
 {
     _exportPreset = index;
@@ -7472,6 +7506,7 @@ void SDLCALL GUI::onFileImport(void* userdata, const char* const* filelist, int 
 void GUI::eventBeforeFrame()
 {
     updateAutosave();
+    updateMcp();
 
     if (_shaderReloadPending) {
         applyShaderReload();

@@ -160,6 +160,20 @@ or Media Foundation. `av1_vulkan` (FFmpeg 8.1) gives a corrupt stream on
 NVIDIA: it comes after the dedicated AV1 encoders. Sound: the mix of the
 playback, optionally normalized to a loudness target, in AAC.
 
+### MCP server
+
+`McpServer` answers the Model Context Protocol (JSON-RPC 2.0, Streamable
+HTTP transport, plain JSON answers) with cpp-httplib on 127.0.0.1; requests
+from another web origin are refused. Its threads only queue the tool calls:
+`GUI::mcpCall()` (`app/McpTools.cpp`) runs them on the main thread between
+two frames, each edit committed to the history ("AI: ..."). A call may last
+several frames (returns nothing until done): `render_frame` waits for the
+pictures of its time and reads the composited frame back (`cmdCaptureFrame`),
+`import_media` waits for the analysis, `transcribe_media` and `export_video`
+for their jobs. `update_clip` merges a JSON patch into the clip as saved in
+the project (`Project::clipJson` / `setClipJson`), so every property of a
+clip can be changed.
+
 ## Threads
 
 | Thread           | Role                                                    |
@@ -168,6 +182,7 @@ playback, optionally normalized to a loudness target, in AAC.
 | Decoding (n)     | reading ahead, per active video                          |
 | Real-time audio  | mixing and plugins, no allocation nor lock               |
 | Background tasks | probing, thumbnails, waveforms, plugin scan, export      |
+| MCP server       | HTTP requests, tool calls queued for the main thread    |
 
 The model is only modified by the main thread; the other threads work on
 immutable copies published after each edit.

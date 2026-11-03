@@ -565,6 +565,12 @@ namespace core
         Json copyClips(const std::vector<Id>& clipIds) const;
         std::vector<Id> pasteClips(const Json& copy, Time at);
 
+        // A clip as saved in the project file, and the same changed: its
+        // id and its track stay; false (and why) when it would overlap
+        // another clip of its track (unless overwrite) or is not there.
+        Json clipJson(Id clipId) const;
+        bool setClipJson(Id clipId, const Json& json, bool overwriteOthers, std::string& error);
+
         // Frees [from, to) on a track for a clip placed over others, except
         // the clips kept: the clips inside go, the ones across an edge are
         // shortened, one across both is cut in two (its parts keep its

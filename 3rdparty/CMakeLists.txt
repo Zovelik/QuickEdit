@@ -1,6 +1,16 @@
 add_subdirectory(SDL)
 add_subdirectory(imgui)
 
+# HTTP server of the MCP server (header only), MIT.
+add_library(httplib INTERFACE)
+target_include_directories(httplib INTERFACE cpp-httplib)
+find_package(Threads REQUIRED)
+target_link_libraries(httplib INTERFACE Threads::Threads)
+
+if (WIN32)
+    target_link_libraries(httplib INTERFACE ws2_32)
+endif()
+
 # Code editor with syntax colors (shader editor), MIT.
 add_library(ImGuiColorTextEdit STATIC ImGuiColorTextEdit/TextEditor.cpp)
 target_include_directories(ImGuiColorTextEdit PUBLIC ImGuiColorTextEdit)

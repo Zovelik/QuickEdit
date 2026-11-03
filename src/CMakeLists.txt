@@ -114,6 +114,8 @@ set(QUICKEDIT_SRC
     app/SceneRecorder.cpp
     app/SubtitleGenerator.cpp
     app/KeyframeEditor.cpp
+    app/McpServer.cpp
+    app/McpTools.cpp
     app/ViewerTextEditor.cpp
     app/TimelineView.cpp
     app/UpdateChecker.cpp
@@ -163,7 +165,7 @@ if (MSVC)
     target_compile_options(QuickEdit PRIVATE /utf-8)
 endif()
 
-target_link_libraries(QuickEdit PRIVATE QuickEditCore QuickEditMedia SDL3::SDL3 Vulkan::Vulkan imgui ImGuiColorTextEdit
+target_link_libraries(QuickEdit PRIVATE QuickEditCore QuickEditMedia SDL3::SDL3 Vulkan::Vulkan imgui ImGuiColorTextEdit httplib
     FFmpeg::avformat FFmpeg::avcodec FFmpeg::avutil FFmpeg::avfilter FFmpeg::avdevice FFmpeg::swresample FFmpeg::swscale vst3host)
 
 if (WIN32)
@@ -233,6 +235,7 @@ foreach(license
         "SDL3|${CMAKE_SOURCE_DIR}/3rdparty/SDL/LICENSE.txt"
         "Dear ImGui|${CMAKE_SOURCE_DIR}/3rdparty/imgui/imgui/LICENSE.txt"
         "ImGuiColorTextEdit|${CMAKE_SOURCE_DIR}/3rdparty/ImGuiColorTextEdit/LICENSE"
+        "cpp-httplib|${CMAKE_SOURCE_DIR}/3rdparty/cpp-httplib/LICENSE"
         "VST3 SDK|${CMAKE_SOURCE_DIR}/3rdparty/vst3sdk/LICENSE.txt"
         "whisper.cpp|${CMAKE_SOURCE_DIR}/3rdparty/whisper.cpp/LICENSE"
         "FFmpeg|${FFMPEG_ROOT}/LICENSE.txt")

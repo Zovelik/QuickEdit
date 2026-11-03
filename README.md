@@ -36,6 +36,23 @@ Windows and Linux. C++20, SDL3, Dear ImGui, Vulkan, FFmpeg.
   the speech with whisper.cpp on the GPU.
 - **Export**: H.264, H.265 and AV1 to MP4, MOV or MKV, at any size and frame
   rate.
+- **AI control**: an MCP server (Model Context Protocol) lets an AI assistant
+  such as Claude edit the project you have open: see below.
+
+## AI control (MCP)
+
+View > AI Control (MCP Server) starts a Model Context Protocol server on
+`http://127.0.0.1:8765/mcp` (this computer only; off by default). An AI
+assistant connected to it sees the project (tracks, clips, media, rendered
+frames, transcriptions) and edits it live: media, clips, texts, titles,
+transitions, effects, keyframes, subtitles, shaders it writes and compiles,
+export. Each of its edits is a step of the history: undo it as any other.
+
+With Claude Code:
+
+```
+claude mcp add --transport http quickedit http://127.0.0.1:8765/mcp
+```
 
 ## Shortcuts
 
@@ -69,7 +86,7 @@ Windows and Linux. C++20, SDL3, Dear ImGui, Vulkan, FFmpeg.
 
 ### Dependencies
 
-Git submodules: SDL3, Dear ImGui, ImGuiColorTextEdit.
+Git submodules: SDL3, Dear ImGui, ImGuiColorTextEdit, cpp-httplib.
 
 ```
 git submodule update --init --recursive

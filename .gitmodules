@@ -7,3 +7,6 @@
 [submodule "3rdparty/ImGuiColorTextEdit"]
 	path = 3rdparty/ImGuiColorTextEdit
 	url = https://github.com/goossens/ImGuiColorTextEdit.git
+[submodule "3rdparty/cpp-httplib"]
+	path = 3rdparty/cpp-httplib
+	url = https://github.com/yhirose/cpp-httplib.git

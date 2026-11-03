@@ -1418,6 +1418,54 @@ void Project::splitAt(Time t, const std::vector<Id>& onlyClips)
 }
 
 
+Json Project::clipJson(Id clipId) const
+{
+    const Clip* clip = findClip(clipId);
+    return clip ? clipToJson(*clip) : Json();
+}
+
+
+bool Project::setClipJson(Id clipId, const Json& json, bool overwriteOthers, std::string& error)
+{
+    Track* track = findTrackOfClip(clipId);
+
+    if (!track) {
+        error = "No clip " + std::to_string(clipId) + " in the current sequence.";
+        return false;
+    }
+
+    Clip clip = clipFromJson(json);
+    clip.id = clipId;
+
+    if (clip.duration <= 0 || clip.start < 0) {
+        error = "A clip needs a start of 0 or more and a positive duration.";
+        return false;
+    }
+
+    for (const Clip& other : track->clips) {
+        if (other.id != clipId && other.start < clip.end() && clip.start < other.end() && !overwriteOthers) {
+            error = "The clip would overlap clip " + std::to_string(other.id) + " on its track.";
+            return false;
+        }
+    }
+
+    const Id trackId = track->id;
+
+    if (overwriteOthers) {
+        overwrite(trackId, clip.start, clip.end(), { clipId });
+    }
+
+    track = findTrack(trackId);
+
+    for (Clip& existing : track->clips) {
+        if (existing.id == clipId) existing = clip;
+    }
+
+    track->sortClips();
+    return true;
+}
+
+
 Json Project::copyClips(const std::vector<Id>& clipIds) const
 {
     Json clips = Json::array();
