@@ -34,4 +34,32 @@ std::filesystem::path configDirectory()
     return folder;
 }
 
+
+std::filesystem::path cacheDirectory()
+{
+    std::filesystem::path folder;
+
+#ifdef _WIN32
+    if (const wchar_t* localAppData = _wgetenv(L"LOCALAPPDATA")) {
+        folder = std::filesystem::path(localAppData) / "QuickEdit" / "Cache";
+    }
+#else
+    if (const char* cache = std::getenv("XDG_CACHE_HOME"); cache && *cache) {
+        folder = std::filesystem::path(cache) / "quickedit";
+    }
+    else if (const char* home = std::getenv("HOME")) {
+        folder = std::filesystem::path(home) / ".cache" / "quickedit";
+    }
+#endif
+
+    if (folder.empty()) {
+        folder = std::filesystem::temp_directory_path() / "QuickEdit";
+    }
+
+    std::error_code error;
+    std::filesystem::create_directories(folder, error);
+
+    return folder;
+}
+
 }

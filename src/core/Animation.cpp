@@ -121,4 +121,14 @@ void AnimatedValue::shiftKeys(Time offset)
     }
 }
 
+
+void AnimatedValue::scaleValues(float factor)
+{
+    value *= factor;
+
+    for (Keyframe& key : keys) {
+        key.value *= factor;
+    }
+}
+
 }

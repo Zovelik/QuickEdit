@@ -57,6 +57,9 @@ namespace core
 
         // Moves every keyframe by offset (after a trim of the clip start).
         void shiftKeys(Time offset);
+
+        // Multiplies the value and those of the keyframes.
+        void scaleValues(float factor);
     };
 
 

@@ -1160,8 +1160,8 @@ void GUI::shortcuts()
     if (ImGui::Shortcut(ImGuiKey_LeftArrow, repeat))   { stepFrames(-1); }
     if (ImGui::Shortcut(ImGuiKey_RightArrow, repeat))  { stepFrames(1); }
     // Delete: the gap selected in the timeline, or the selected clips. The
-    // media panel handles its own.
-    if (!_mediaPanelFocused) {
+    // media panel and the keyframe editor handle their own.
+    if (!_mediaPanelFocused && !_keyframesFocused) {
         if (ImGui::Shortcut(ImGuiKey_Delete, global) || ImGui::Shortcut(ImGuiKey_Backspace, global)) {
             if (_timeline.hasGap()) {
                 closeGap();
@@ -5504,7 +5504,10 @@ void GUI::keyframesPanel()
         ImGui::SetNextWindowFocus();
     }
 
+    _keyframesFocused = false;
+
     if (ImGui::Begin(tr("Keyframes###Keyframes"), nullptr, ImGuiWindowFlags_NoFocusOnAppearing)) {
+        _keyframesFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
         const KeyframeEditor::Result result = _keyframes.draw(_project, _selection, _playhead);
 
         if (result.seeked) {
@@ -6539,8 +6542,7 @@ void GUI::matchSequenceToVideo()
         }
 
         if (larger) {
-            sequence.width = item.width & ~1u;
-            sequence.height = item.height & ~1u;
+            sequence.resize(item.width & ~1u, item.height & ~1u);
         }
 
         if (faster) {

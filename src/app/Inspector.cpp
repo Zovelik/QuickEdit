@@ -1439,8 +1439,7 @@ void Inspector::sequenceSection(Project& project, std::string& edit)
             const bool selected = preset.width == sequence.width && preset.height == sequence.height;
 
             if (ImGui::Selectable(tr(preset.label), selected) && !selected) {
-                sequence.width = preset.width;
-                sequence.height = preset.height;
+                sequence.resize(preset.width, preset.height);
                 edit = "Change resolution";
             }
         }

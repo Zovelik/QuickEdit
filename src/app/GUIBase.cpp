@@ -597,7 +597,9 @@ void GUIBase::createVulkanDevice()
         }
     }
 
-    _pPipelineCache = new GPU::PipelineCache(*_pDevice, "pipeline_cache.bin");
+    // With the caches of the system, not in the current folder (often the
+    // one of the project opened).
+    _pPipelineCache = new GPU::PipelineCache(*_pDevice, core::cacheDirectory() / "pipeline_cache.bin");
 }
 
 

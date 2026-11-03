@@ -418,6 +418,12 @@ namespace core
 
         // End of the last clip.
         Time duration() const;
+
+        // Changes the size of the frame, the pictures keeping their place
+        // and their size in it: positions, texts, pictures at their native
+        // size, frames and subtitles follow (sizes as the frame, the
+        // smaller of its two factors when its shape changes).
+        void resize(uint32_t newWidth, uint32_t newHeight);
     };
 
 

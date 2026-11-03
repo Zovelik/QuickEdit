@@ -828,6 +828,43 @@ bool Sequence::removeTrack(Id trackId)
 }
 
 
+void Sequence::resize(uint32_t newWidth, uint32_t newHeight)
+{
+    if (newWidth == 0 || newHeight == 0 || width == 0 || height == 0) {
+        return;
+    }
+
+    const float fx = (float)newWidth / (float)width;
+    const float fy = (float)newHeight / (float)height;
+    const float size = std::min(fx, fy);
+
+    for (Track& track : videoTracks) {
+        for (Clip& clip : track.clips) {
+            clip.transform.x.scaleValues(fx);
+            clip.transform.y.scaleValues(fy);
+
+            // The pictures fitted to the frame follow it by themselves.
+            if (clip.kind == ClipKind::Text || (clip.kind == ClipKind::Media && clip.fit == FitMode::Native)) {
+                clip.transform.scale.scaleValues(size);
+            }
+
+            clip.frame.cornerRadius *= size;
+            clip.frame.borderWidth *= size;
+            clip.frame.shadowOffsetX *= size;
+            clip.frame.shadowOffsetY *= size;
+            clip.frame.shadowSoftness *= size;
+        }
+    }
+
+    subtitleStyle.size *= size;
+    subtitleStyle.outlineWidth *= size;
+    subtitleStyle.bottomMargin *= fy;
+
+    width = newWidth;
+    height = newHeight;
+}
+
+
 Track* Sequence::findTrack(Id trackId)
 {
     for (TrackType type : { TrackType::Video, TrackType::Sound, TrackType::Audio, TrackType::Subtitle }) {

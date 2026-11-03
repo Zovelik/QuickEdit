@@ -663,6 +663,7 @@ private:
     // timeline.
     void keyframesPanel();
     KeyframeEditor _keyframes;
+    bool _keyframesFocused = false;     // Its Delete key: the keys, not the clips
     ViewerTextEditor _textEditor;
 
     // Starts / stops editing a text in the viewer.

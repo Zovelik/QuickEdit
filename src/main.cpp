@@ -58,7 +58,9 @@ void ffmpegLog(void* context, int level, const char* format, va_list arguments)
 
 void startLog()
 {
-    logFile = std::fopen("quickedit.log", "w");
+    // Next to the executable, not in the current folder.
+    const char* base = SDL_GetBasePath();
+    logFile = std::fopen((std::string(base ? base : "") + "quickedit.log").c_str(), "w");
     SDL_SetLogOutputFunction(logToFile, nullptr);
     av_log_set_callback(ffmpegLog);
 }

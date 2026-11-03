@@ -568,6 +568,30 @@ void testTextAndFreeze()
 }
 
 
+void testSequenceResize()
+{
+    Project project;
+    Sequence& sequence = project.sequence();
+    sequence.width = 1920;
+    sequence.height = 1080;
+
+    // A text off center, growing: the same place and size in a 4K frame.
+    const Id text = project.addTextClip(sequence.videoTracks[0].id, 0, TicksPerSecond, "Title");
+    Clip* clip = project.findClip(text);
+    clip->transform.x = 200.f;
+    clip->transform.y = -100.f;
+    clip->transform.scale.addKey(0);
+    clip->transform.scale.set(TicksPerSecond, 2.f);
+
+    sequence.resize(3840, 2160);
+    clip = project.findClip(text);
+    CHECK(sequence.width == 3840 && sequence.height == 2160);
+    CHECK(clip->transform.x.value == 400.f && clip->transform.y.value == -200.f);
+    CHECK(clip->transform.scale.at(0) == 2.f && clip->transform.scale.at(TicksPerSecond) == 4.f);
+    CHECK(sequence.subtitleStyle.size == 108.f);
+}
+
+
 void testTransitions()
 {
     Project project;
@@ -952,6 +976,7 @@ int main()
     testAnimation();
     testTextAndFreeze();
     testTransitions();
+    testSequenceResize();
     testTextEditing();
     testSpeedAndTracks();
     testLoudness();

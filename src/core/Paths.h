@@ -10,4 +10,10 @@ namespace core
     // $XDG_CONFIG_HOME/quickedit (~/.config/quickedit) elsewhere. Created
     // when missing.
     std::filesystem::path configDirectory();
+
+    // Folder of the files QuickEdit makes again when they are missing (the
+    // pipeline cache of the GPU): %LOCALAPPDATA%\QuickEdit\Cache on Windows,
+    // $XDG_CACHE_HOME/quickedit (~/.cache/quickedit) elsewhere. Created when
+    // missing.
+    std::filesystem::path cacheDirectory();
 }
