@@ -24,6 +24,9 @@ namespace audio
     class AudioEngine
     {
     public:
+        // Length of a piece of sound played by scrub().
+        static constexpr double ScrubSeconds = 0.08;
+
         AudioEngine();
         ~AudioEngine();
 

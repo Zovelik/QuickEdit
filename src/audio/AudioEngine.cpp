@@ -16,8 +16,7 @@ constexpr int BytesPerFrame = (int)(media::AudioBuffer::Channels * sizeof(float)
 // Frames mixed at once, at most: about 20 ms at 48 kHz.
 constexpr int64_t MaxChunkFrames = 1024;
 
-// Length of a piece of sound played by scrub(), and of its fades.
-constexpr double ScrubSeconds = 0.08;
+// Length of the fades of the pieces of sound played by scrub().
 constexpr double ScrubFadeSeconds = 0.006;
 
 } // namespace

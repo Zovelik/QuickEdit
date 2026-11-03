@@ -228,6 +228,8 @@ GUI::GUI(const std::filesystem::path& projectPath, double startSeconds, Id selec
         if (language.empty() || !i18n::setLanguage(language)) {
             i18n::setLanguage(i18n::systemLanguage());
         }
+
+        _trimPreview = loadSettings()["trimPreview"].toBool(true);
     }
 
     // An error a background task did not handle: that task stops, the
@@ -485,14 +487,17 @@ void GUI::cmdCompose(VkCommandBuffer commandBuffer)
         return layers;
     };
 
+    // At the playhead, or at the edge of a clip being trimmed.
+    const Time shown = (_trimPreviewTime >= 0) ? _trimPreviewTime : _playhead;
+
     std::vector<Compositor::Layer> layers = build(
-        layersAt(sequence, _playhead, [this](Id id) { return _project.findSequence(id); }), sequence);
+        layersAt(sequence, shown, [this](Id id) { return _project.findSequence(id); }), sequence);
 
     // The subtitles, over everything (kept until the frame is recorded).
-    _subtitleClips = subtitleClipsAt(sequence, _playhead);
+    _subtitleClips = subtitleClipsAt(sequence, shown);
 
     for (const Clip& clip : _subtitleClips) {
-        Compositor::Layer layer = { &clip, _playhead - clip.start, nullptr, 0, 0, 1.f, 0.f, 0.f, 1.f, 1.f };
+        Compositor::Layer layer = { &clip, shown - clip.start, nullptr, 0, 0, 1.f, 0.f, 0.f, 1.f, 1.f };
         layers.push_back(layer);
     }
 
@@ -898,6 +903,13 @@ void GUI::menuBar()
             if (ImGui::MenuItem(tr(ICON_MD_FIT_SCREEN " Fit Sequence"),      "Ctrl+0")) { _timeline.requestZoomToFit(); }
             ImGui::Separator();
             if (ImGui::MenuItem(tr(ICON_MD_TIMELINE " Keyframes"))) { ImGui::SetWindowFocus("###Keyframes"); }
+            ImGui::Separator();
+
+            if (ImGui::MenuItem(tr(ICON_MD_CROP_FREE " Preview Trimmed Edges"), nullptr, &_trimPreview)) {
+                saveSetting("trimPreview", _trimPreview);
+            }
+
+            ImGui::SetItemTooltip("%s", tr("While a clip edge is dragged: the viewer shows its frame, a sound is heard there"));
             ImGui::Separator();
 
             if (ImGui::BeginMenu(tr(ICON_MD_LANGUAGE " Language"))) {
@@ -1872,6 +1884,33 @@ void GUI::viewerPanel()
     ImGui::TextDisabled("%s", duration.c_str());
 
     ImGui::End();
+}
+
+
+void GUI::trimPreview(Time time, bool end, bool sound)
+{
+    if (!_trimPreview || _playing || time < 0) {
+        _trimPreviewTime = -1;
+        _trimHeard = -1;
+        return;
+    }
+
+    // A sound: heard from its first sample, or up to its last one, each
+    // time the edge moves (the mix first made with the clip as it is now).
+    if (sound) {
+        _trimPreviewTime = -1;
+
+        if (time != _trimHeard) {
+            _trimHeard = time;
+            rebuildMix();
+            _audio.scrub(end ? std::max<Time>(0, time - secondsToTime(audio::AudioEngine::ScrubSeconds)) : time);
+        }
+
+        return;
+    }
+
+    // A picture: its first frame, or its last one.
+    _trimPreviewTime = end ? std::max<Time>(0, time - frameToTime(1, _project.sequence().frameRate)) : time;
 }
 
 
@@ -5170,6 +5209,8 @@ void GUI::timelinePanel()
 
         const TimelineView::Result result = _timeline.draw(_project, _playhead, _selection);
 
+        trimPreview(result.trimTime, result.trimEnd, result.trimSound);
+
         if (result.dropTrack != InvalidId) {
             _dropTrack = result.dropTrack;
             _dropStart = result.dropStart;
@@ -6653,11 +6694,17 @@ void GUI::updateMedia()
     matchSequenceToVideo();
 
     if (_mixDirty) {
-        _mixDirty = false;
-        _audio.setGraph(audio::buildMixGraph(_project,
-            [this](Id mediaId, int stream) { return _media.audio(mediaId, stream); },
-            [this](Id, const std::vector<EffectSlot>& slots) { return _effects.effectsOf(slots); }));
+        rebuildMix();
     }
+}
+
+
+void GUI::rebuildMix()
+{
+    _mixDirty = false;
+    _audio.setGraph(audio::buildMixGraph(_project,
+        [this](Id mediaId, int stream) { return _media.audio(mediaId, stream); },
+        [this](Id, const std::vector<EffectSlot>& slots) { return _effects.effectsOf(slots); }));
 }
 
 

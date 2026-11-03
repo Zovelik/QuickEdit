@@ -78,6 +78,12 @@ public:
         // to place one after the other from dropStart.
         core::Id dropTrack = core::InvalidId;
         core::Time dropStart = 0;
+
+        // While an edge of a clip is dragged: where it is, -1 else; which
+        // edge, and whether the clip is a sound.
+        core::Time trimTime = -1;
+        bool trimEnd = false;
+        bool trimSound = false;
     };
 
     // Files dragged from the file manager, previewed where they would land.

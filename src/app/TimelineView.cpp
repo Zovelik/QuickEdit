@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <iterator>
 #include <limits>
+#include <map>
 
 
 using namespace core;
@@ -925,6 +926,15 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
     }
     else if (_dragMode != DragMode::None) {
         updateDrag(project, mouse.x, mouse.y);
+
+        // The edge being trimmed, for the viewer and the sound.
+        if (_dragMode == DragMode::TrimStart || _dragMode == DragMode::TrimEnd) {
+            if (const Clip* clip = project.findClip(_grabbedClip)) {
+                result.trimEnd = _dragMode == DragMode::TrimEnd;
+                result.trimTime = result.trimEnd ? clip->end() : clip->start;
+                result.trimSound = _grabbedType != TrackType::Video;
+            }
+        }
     }
 
     if (_dragMode != DragMode::None && _dragMode != DragMode::Marquee && _dragMode != DragMode::Slip &&
@@ -1674,6 +1684,17 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
         }
     }
 
+    // The clips linked to others: a link mark on them.
+    std::map<Id, int> linkCounts;
+
+    for (const auto* tracks : { &sequence.videoTracks, &sequence.soundTracks, &sequence.audioTracks, &sequence.subtitleTracks }) {
+        for (const Track& track : *tracks) {
+            for (const Clip& clip : track.clips) {
+                if (clip.linkGroup != InvalidId) linkCounts[clip.linkGroup]++;
+            }
+        }
+    }
+
     for (const Row& row : _rows) {
         const Track& track = tracksOfType(sequence, row.type)[row.trackIndex];
 
@@ -1840,8 +1861,8 @@ void TimelineView::drawClips(ImDrawList* drawList, const Project& project, const
                 drawList->PushClipRect(min, ImVec2(max.x - 0.2f * unit, max.y), true);
                 drawList->AddText(ImVec2(textX, min.y + 0.2f * unit), IM_COL32(255, 255, 255, 230), name.c_str());
 
-                if (media && clip.linkGroup == InvalidId && media->type == MediaType::Video && !clip.frozen) {
-                    drawList->AddText(ImVec2(textX, min.y + 1.3f * unit), IM_COL32(255, 255, 255, 140), ICON_MD_LINK_OFF);
+                if (clip.linkGroup != InvalidId && linkCounts[clip.linkGroup] > 1) {
+                    drawList->AddText(ImVec2(textX, min.y + 1.3f * unit), IM_COL32(255, 255, 255, 140), ICON_MD_LINK);
                 }
 
                 drawList->PopClipRect();

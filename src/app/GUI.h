@@ -577,6 +577,16 @@ private:
 
     void updateScreenRecording();           // Each frame: a job done goes on
     void viewerRecording(ImDrawList* drawList, const ImVec2& frameMin, const ImVec2& frameSize);  // The viewer while recording
+
+    // Trimming a clip: the viewer shows the frame at the dragged edge, a
+    // sound is heard there (View menu option, saved).
+    void trimPreview(core::Time time, bool end, bool sound);
+    bool _trimPreview = true;
+    core::Time _trimPreviewTime = -1;       // Shown instead of the playhead, -1 for none
+    core::Time _trimHeard = -1;             // Where the sound was last heard
+
+    // The audio mix of the project, again (after a change).
+    void rebuildMix();
     core::Id soundTrackOf(core::Id videoTrack) const;   // Paired with it, where the sound of a recording goes
     void beginScreenRecording(ScreenJob job);
     void placeScreenRecording(ScreenJob job);
