@@ -230,6 +230,21 @@ GUI::GUI(const std::filesystem::path& projectPath, double startSeconds, Id selec
         }
 
         _trimPreview = loadSettings()["trimPreview"].toBool(true);
+        _checkUpdates = loadSettings()["checkUpdates"].toBool(true);
+    }
+
+    // The first time maximized; then as it was left.
+    if (loadSettings()["windowMaximized"].toBool(true)) {
+        SDL_MaximizeWindow(window());
+    }
+
+    // New releases, once a day at most.
+    {
+        const int64_t now = (int64_t)std::time(nullptr);
+
+        if (_checkUpdates && now - loadSettings()["lastUpdateCheck"].toInt(0) > 24 * 3600) {
+            _updates.start();
+        }
     }
 
     // An error a background task did not handle: that task stops, the
@@ -275,6 +290,9 @@ GUI::GUI(const std::filesystem::path& projectPath, double startSeconds, Id selec
 GUI::~GUI()
 {
     core::setErrorReporter(nullptr);
+
+    // The window as it is left, for the next start.
+    saveSetting("windowMaximized", (SDL_GetWindowFlags(window()) & SDL_WINDOW_MAXIMIZED) != 0);
 
     // A normal exit: no copy to recover. Kept when the application ends on
     // an error.
@@ -624,6 +642,7 @@ void GUI::render(
     errorPopup();
     unsavedChangesPopup();
     recoveryPopup();
+    updatePopup();
 
     endMainWindow();
 
@@ -942,6 +961,17 @@ void GUI::menuBar()
                 }
 
                 ImGui::EndMenu();
+            }
+
+            ImGui::Separator();
+
+            if (ImGui::MenuItem(tr(ICON_MD_SYSTEM_UPDATE " Check for Updates"), nullptr, false, *UpdateChecker::repository() && !_updates.running())) {
+                _updateAsked = true;
+                _updates.start();
+            }
+
+            if (ImGui::MenuItem(tr("Check for Updates at Start"), nullptr, &_checkUpdates)) {
+                saveSetting("checkUpdates", _checkUpdates);
             }
 
             ImGui::Separator();
@@ -6517,6 +6547,55 @@ void GUI::errorPopup()
 
         ImGui::EndPopup();
     }
+}
+
+
+void GUI::updatePopup()
+{
+    // A check done: told when there is a newer release, or when asked.
+    if (_updates.done()) {
+        _updates.acknowledge();
+
+        if (_updates.error().empty()) {
+            saveSetting("lastUpdateCheck", (int64_t)std::time(nullptr));
+        }
+
+        _requestUpdatePopup = _updates.newer() || std::exchange(_updateAsked, false);
+    }
+
+    if (std::exchange(_requestUpdatePopup, false)) {
+        ImGui::OpenPopup(tr("Updates"));
+    }
+
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (!ImGui::BeginPopupModal(tr("Updates"), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+
+    if (_updates.newer()) {
+        ImGui::Text(tr("QuickEdit %s is available (this one is %s)."), _updates.latestVersion().c_str(), APP_VERSION_STR);
+
+        if (ImGui::Button(tr(ICON_MD_DOWNLOAD " Download Page"))) {
+            SDL_OpenURL(_updates.releaseUrl().c_str());
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::SameLine();
+    }
+    else if (const std::string error = _updates.error(); !error.empty()) {
+        ImGui::TextUnformatted(tr("Could not check for updates:"));
+        ImGui::TextDisabled("%s", error.c_str());
+    }
+    else {
+        ImGui::Text(tr("QuickEdit %s is the latest version."), APP_VERSION_STR);
+    }
+
+    if (ImGui::Button(tr("Close")) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
 }
 
 

@@ -11,6 +11,7 @@
 #include <app/KeyframeEditor.h>
 #include <app/ViewerTextEditor.h>
 #include <app/TimelineView.h>
+#include <app/UpdateChecker.h>
 
 #include <audio/AudioEngine.h>
 #include <audio/Recorder.h>
@@ -688,6 +689,15 @@ private:
     std::vector<uint8_t> _defaultFontData;
     std::unique_ptr<Exporter> _exporter;
     ExportSettings _exportSettings;
+
+    // Newer releases: looked for at start (once a day at most, when the
+    // option is on) and from the View menu; told in a popup when there is
+    // one, or when the check was asked.
+    UpdateChecker _updates;
+    bool _checkUpdates = true;
+    bool _updateAsked = false;
+    bool _requestUpdatePopup = false;
+    void updatePopup();
     int _exportPreset = 0;              // In exportPresets() (GUI.cpp), 0 for custom settings
     void applyExportPreset(int preset);
     std::string _exportPathText;

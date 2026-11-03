@@ -50,6 +50,11 @@ set(APP_VERSION_STR "${APP_VERSION}")
 
 set(APP_IDENTIFIER_STR "zovelik.quickedit")
 
+# Where QuickEdit looks for newer releases (GitHub owner/name); empty for no
+# update check.
+set(QUICKEDIT_UPDATE_REPO "Zovelik/QuickEdit" CACHE STRING "GitHub repository checked for new releases (owner/name), empty for none")
+set(UPDATE_REPO_STR "${QUICKEDIT_UPDATE_REPO}")
+
 configure_file(cmake/config.h.in config.h @ONLY)
 
 # Dependencies configuration (must be set before 3rdparty is built)

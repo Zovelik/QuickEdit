@@ -116,6 +116,7 @@ set(QUICKEDIT_SRC
     app/KeyframeEditor.cpp
     app/ViewerTextEditor.cpp
     app/TimelineView.cpp
+    app/UpdateChecker.cpp
 
     audio/AudioEngine.cpp
     audio/Recorder.cpp

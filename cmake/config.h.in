@@ -1,3 +1,4 @@
 #cmakedefine APP_NAME_STR       "@APP_NAME_STR@"
 #cmakedefine APP_VERSION_STR    "@APP_VERSION_STR@"
 #cmakedefine APP_IDENTIFIER_STR "@APP_IDENTIFIER_STR@"
+#cmakedefine UPDATE_REPO_STR    "@UPDATE_REPO_STR@"
