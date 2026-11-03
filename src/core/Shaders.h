@@ -19,13 +19,33 @@ namespace core
     //   with getFromColor(uv), getToColor(uv), progress (0 to 1) and ratio
     //   (width / height).
     //
+    // - Blend modes mix a clip with the pictures below it:
+    //       vec3 blend(vec3 base, vec3 layer)
+    //   with the straight colors of both (the alpha is done around it).
+    //
+    // - Resampling shaders draw a picture at its size on screen, instead of
+    //   the Sampling of the clip:
+    //       vec4 resample(vec2 uv)
+    //   with source(ivec2 pixel) (clamped to the picture), iSourceSize and
+    //   iResolution (pixels of the picture, of the result).
+    //
+    // All get the sound of the sequence at the time of the frame (without
+    // its effects), 0 for silence (-60 dB) to 1 (0 dB): iLevel, and in
+    // bands iBass (below 250 Hz), iMid, iTreble (above 4 kHz); iSound is
+    // the four of them.
+    //
     // Parameters of a generator, up to 8, are declared by comment lines:
     //       // @param Name minimum maximum default
     enum class ShaderKind
     {
         Generator,
-        Transition
+        Transition,
+        Blend,
+        Resample
     };
+
+    // "Generator", "Transition", "Blend", "Resampling".
+    const char* shaderKindName(ShaderKind kind);
 
 
     struct ShaderParameter

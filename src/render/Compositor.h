@@ -59,6 +59,11 @@ public:
         // Generator clips: their shader.
         const core::ShaderDef* generator = nullptr;
 
+        // Shaders of the user for the blending (the clip's, else its
+        // track's) and the sampling, instead of the built-in modes.
+        const core::ShaderDef* blendShader = nullptr;
+        const core::ShaderDef* filterShader = nullptr;
+
         // Shader transitions (see core::LayerRequest): the outgoing (1) and
         // incoming (2) pictures, mixed by the shader.
         int transitionRole = 0;
@@ -105,6 +110,11 @@ public:
 
     ImTextureID texture() const { return (ImTextureID)_textureDescriptor; }
 
+    // The sound at the time of the frame (level, bass, mid, treble, 0 to
+    // 1; see audio::soundLevels()), for the shaders of the user. Set before
+    // cmdComposite().
+    void setSound(float level, float bass, float mid, float treble) { _sound[0] = level; _sound[1] = bass; _sound[2] = mid; _sound[3] = treble; }
+
     // The composited frame, in the shader read only layout after the
     // commands of cmdComposite().
     GPU::Image* output() const { return _output.get(); }
@@ -138,7 +148,9 @@ private:
 
     // Rendering into a pass target, cleared first when asked; then the
     // target ready to be sampled.
-    void cmdBeginPass(VkCommandBuffer commandBuffer, GPU::Image* target, bool clear, bool opaque = false);
+    // keep: what the target holds stays (drawn over), else it is cleared
+    // or left undefined.
+    void cmdBeginPass(VkCommandBuffer commandBuffer, GPU::Image* target, bool clear, bool opaque = false, bool keep = false);
 
     // The glyph instances of the texts, at every level of nesting.
     uint32_t collectTexts(std::vector<Layer>& layers, uint32_t width, uint32_t height, std::vector<GlyphInstance>& instances, std::vector<LayerBounds>* bounds);
@@ -156,6 +168,12 @@ private:
     // The picture of a generator; the mix of a shader transition.
     GPU::Image* cmdGenerate(VkCommandBuffer commandBuffer, const Layer& layer, uint32_t width, uint32_t height);
     GPU::Image* cmdTransition(VkCommandBuffer commandBuffer, const core::ShaderDef& shader, float progress,
+        const GPU::Image* from, const GPU::Image* to, uint32_t width, uint32_t height);
+
+    // A pass of a shader of the user reading two pictures (transitions,
+    // blend modes, resampling with the same picture twice), with two
+    // values for it, into a picture of width x height.
+    GPU::Image* cmdShaderPass(VkCommandBuffer commandBuffer, const core::ShaderDef& shader, float x, float y,
         const GPU::Image* from, const GPU::Image* to, uint32_t width, uint32_t height);
 
     // The pipeline of a shader of the user, compiled once (null when it
@@ -197,6 +215,7 @@ private:
     std::vector<PassTarget> _passTargets;
 
     const GPU::PipelineCache& _pipelineCache;
+    float _sound[4] = {};
     VkDescriptorSetLayout _transitionSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout _generatorPipelineLayout = VK_NULL_HANDLE;
     VkPipelineLayout _transitionPipelineLayout = VK_NULL_HANDLE;

@@ -105,6 +105,10 @@ def texts():
         i = project.index(function)
         keys.update(c_string(m.group(1)) for m in re.finditer(r'return\s*(' + STR + r');', project[i:project.index('\n}', i)]))
 
+    shaders = read(os.path.join(ROOT, 'src', 'core', 'Shaders.cpp'))
+    i = shaders.index('const char* shaderKindName')
+    keys.update(c_string(m.group(1)) for m in re.finditer(r'return\s*(' + STR + r');', shaders[i:shaders.index('\n}', i)]))
+
     return sorted(k for k in keys if k and is_text(k))
 
 

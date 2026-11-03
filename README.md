@@ -21,8 +21,9 @@ Windows and Linux. C++20, SDL3, Dear ImGui, Vulkan, FFmpeg.
   curves; fit, fill or native size; bilinear, bicubic, Lanczos or nearest
   sampling; crop, rounded corners, border, shadow;
   transitions; video effects (color, blur, sharpen, vignette, chroma key,
-  pixelate) per clip or per track; generators and transitions written as
-  GLSL shaders, with a built-in editor.
+  pixelate) per clip or per track; generators, transitions, blend modes and
+  resampling written as GLSL shaders (that can follow the sound), with a
+  built-in editor.
 - **Texts**: rich text edited in the viewer, per-letter animations.
 - **Sound**: waveforms, fades, VST3 effects per clip and per track (shells
   such as WaveShell included), scrubbing, loudness normalization at export.

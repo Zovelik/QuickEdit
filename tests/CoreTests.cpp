@@ -611,6 +611,32 @@ void testCopyPaste()
 }
 
 
+void testShaderKinds()
+{
+    ShaderDef blend;
+    CHECK(parseShader("vec3 blend(vec3 base, vec3 layer) { return base * layer; }", blend));
+    CHECK(blend.kind == ShaderKind::Blend);
+
+    ShaderDef resample;
+    CHECK(parseShader("vec4 resample(vec2 uv) { return source(ivec2(uv * iSourceSize)); }", resample));
+    CHECK(resample.kind == ShaderKind::Resample);
+
+    // Saved with the clips and the tracks.
+    Project project;
+    const Id text = project.addTextClip(project.sequence().videoTracks[0].id, 0, TicksPerSecond, "A");
+    project.findClip(text)->blendShader = "builtin:overlay";
+    project.findClip(text)->filterShader = "builtin:sharpbilinear";
+    project.sequence().videoTracks[1].blendShader = "builtin:difference";
+
+    Project loaded;
+    loaded.fromJson(Json::parse(project.toJson({}).dump()), {});
+    CHECK(loaded.findClip(text)->blendShader == "builtin:overlay");
+    CHECK(loaded.findClip(text)->filterShader == "builtin:sharpbilinear");
+    CHECK(loaded.sequence().videoTracks[1].blendShader == "builtin:difference");
+    CHECK(loaded.findShader("builtin:overlay") && loaded.findShader("builtin:overlay")->kind == ShaderKind::Blend);
+}
+
+
 void testSequenceResize()
 {
     Project project;
@@ -1020,6 +1046,7 @@ int main()
     testTextAndFreeze();
     testTransitions();
     testSequenceResize();
+    testShaderKinds();
     testCopyPaste();
     testTextEditing();
     testSpeedAndTracks();

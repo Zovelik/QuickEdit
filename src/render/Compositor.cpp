@@ -331,7 +331,7 @@ void Compositor::createPipelines(const GPU::PipelineCache& pipelineCache)
     // Shaders of the user: generators (parameters only), transitions (the
     // two pictures). Their pipelines are made when first used.
     {
-        const VkPushConstantRange generatorConstants = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 48 };
+        const VkPushConstantRange generatorConstants = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 64 };
 
         VkPipelineLayoutCreateInfo generatorLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
         generatorLayoutInfo.pushConstantRangeCount = 1;
@@ -348,7 +348,7 @@ void Compositor::createPipelines(const GPU::PipelineCache& pipelineCache)
         layoutInfo.pBindings = bindings;
         VK_THROW_IF_FAILED(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &_transitionSetLayout));
 
-        const VkPushConstantRange transitionConstants = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 8 };
+        const VkPushConstantRange transitionConstants = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32 };
 
         VkPipelineLayoutCreateInfo transitionLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
         transitionLayoutInfo.setLayoutCount = 1;
@@ -980,6 +980,25 @@ void Compositor::cmdRenderLevel(VkCommandBuffer commandBuffer, GPU::Image* targe
         }
     }
 
+    // Resampling shaders: the picture at its size in the output (its
+    // transform at this time, without rotation), drawn then pixel for pixel.
+    for (size_t i = 0; i < work.size(); i++) {
+        const Layer& layer = work[i];
+
+        if (!pictures[i] || !layer.filterShader || !layer.width || !layer.height) {
+            continue;
+        }
+
+        const float fit = fitScale(layer.clip->fit, (float)width, (float)height, (float)layer.width, (float)layer.height);
+        const float scale = fit * layer.clip->transform.scale.at(layer.localTime) * layer.scale * (float)outputWidth / (float)std::max(1u, width);
+        const uint32_t w = (uint32_t)std::clamp(std::lround((float)layer.width * scale), 1L, 8192L);
+        const uint32_t h = (uint32_t)std::clamp(std::lround((float)layer.height * scale), 1L, 8192L);
+
+        if (const GPU::Image* resampled = cmdShaderPass(commandBuffer, *layer.filterShader, (float)w, (float)h, pictures[i], pictures[i], w, h)) {
+            pictures[i] = resampled;
+        }
+    }
+
     // Shader transitions: the outgoing and incoming layers each drawn in a
     // frame of their own, mixed by the shader into a frame drawn instead.
     std::vector<const GPU::Image*> frames(work.size(), nullptr);
@@ -1039,6 +1058,28 @@ void Compositor::cmdRenderLevel(VkCommandBuffer commandBuffer, GPU::Image* targe
             continue;
         }
 
+        // A blend shader: the level so far and the layer alone, mixed by
+        // it into a picture drawn over the level.
+        if (work[i].blendShader && userPipeline(*work[i].blendShader)) {
+            cmdEndPass(commandBuffer, target);
+            const GPU::Image* alone = layerFrame((int)i);
+            const GPU::Image* mixed = cmdShaderPass(commandBuffer, *work[i].blendShader, 0.f, 0.f, target, alone, outputWidth, outputHeight);
+            cmdBeginPass(commandBuffer, target, false, false, true);
+
+            if (mixed) {
+                static const Clip wholeFrame;
+                Layer frameLayer;
+                frameLayer.clip = &wholeFrame;
+                frameLayer.image = mixed;
+                frameLayer.width = outputWidth;
+                frameLayer.height = outputHeight;
+
+                LayerBounds ignored;
+                cmdDrawLayer(commandBuffer, frameLayer, mixed, { 0, 0 }, width, height, outputWidth, outputHeight, ignored);
+                continue;
+            }
+        }
+
         cmdDrawLayer(commandBuffer, work[i], pictures[i], { work[i].textFirst, work[i].textCount }, width, height, outputWidth, outputHeight, bounds[i]);
     }
 
@@ -1094,7 +1135,7 @@ void Compositor::cmdDrawLayer(VkCommandBuffer commandBuffer, const Layer& layer,
 
         // Sampling and blending of the clip (its track's when Normal).
         const VkSampler sampler = (layer.clip->filter == ScaleFilter::Nearest) ? _nearestSampler : _sampler;
-        const BlendMode blend = (layer.clip->blend != BlendMode::Normal) ? layer.clip->blend : layer.trackBlend;
+        const BlendMode blend = layer.blendShader ? BlendMode::Normal : (layer.clip->blend != BlendMode::Normal) ? layer.clip->blend : layer.trackBlend;
         const VkPipeline pipeline = _blendPipelines[std::min((size_t)blend, _blendPipelines.size() - 1)];
 
         const VkDescriptorImageInfo imageInfo = { sampler, source->imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
@@ -1187,14 +1228,14 @@ void Compositor::cmdDrawLayer(VkCommandBuffer commandBuffer, const Layer& layer,
 }
 
 
-void Compositor::cmdBeginPass(VkCommandBuffer commandBuffer, GPU::Image* target, bool clear, bool opaque)
+void Compositor::cmdBeginPass(VkCommandBuffer commandBuffer, GPU::Image* target, bool clear, bool opaque, bool keep)
 {
     target->cmdBarrierTransition(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
     VkRenderingAttachmentInfo attachment = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
     attachment.imageView = target->imageView();
     attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    attachment.loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachment.loadOp = keep ? VK_ATTACHMENT_LOAD_OP_LOAD : clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     attachment.clearValue.color = { { 0.f, 0.f, 0.f, opaque ? 1.f : 0.f } };
 
@@ -1229,25 +1270,77 @@ std::string wrapShader(const ShaderDef& shader)
 
     if (shader.kind == ShaderKind::Generator) {
         code +=
-            "layout(push_constant) uniform QuickEditParameters { vec2 resolution; float time; float duration; vec4 p0; vec4 p1; } qe;\n"
+            "layout(push_constant) uniform QuickEditParameters { vec2 resolution; float time; float duration; vec4 p0; vec4 p1; vec4 sound; } qe;\n"
             "layout(location = 0) in vec2 qeUV;\n"
             "layout(location = 0) out vec4 qeColor;\n"
             "#define iResolution qe.resolution\n"
             "#define iTime qe.time\n"
             "#define iDuration qe.duration\n"
+            "#define iSound qe.sound\n"
+            "#define iLevel qe.sound.x\n"
+            "#define iBass qe.sound.y\n"
+            "#define iMid qe.sound.z\n"
+            "#define iTreble qe.sound.w\n"
             "float param(int i) { return i < 4 ? qe.p0[i] : qe.p1[i - 4]; }\n"
             "#line 1\n" + shader.source + "\n"
             "void main() { qeColor = generate(qeUV, qe.time); }\n";
+    }
+    else if (shader.kind == ShaderKind::Blend) {
+        // The base (premultiplied, as drawn) and the layer alone (the same):
+        // straight colors for the user, the result straight, as the
+        // pictures drawn over the others (Compositor::cmdRenderLevel()).
+        code +=
+            "layout(set = 0, binding = 0) uniform sampler2D qeBase;\n"
+            "layout(set = 0, binding = 1) uniform sampler2D qeLayer;\n"
+            "layout(push_constant) uniform QuickEditParameters { vec2 unused; vec2 unused2; vec4 sound; } qe;\n"
+            "layout(location = 0) in vec2 qeUV;\n"
+            "layout(location = 0) out vec4 qeColor;\n"
+            "#define iSound qe.sound\n"
+            "#define iLevel qe.sound.x\n"
+            "#define iBass qe.sound.y\n"
+            "#define iMid qe.sound.z\n"
+            "#define iTreble qe.sound.w\n"
+            "#line 1\n" + shader.source + "\n"
+            "void main() {\n"
+            "    const vec4 base = texture(qeBase, qeUV);\n"
+            "    const vec4 layer = texture(qeLayer, qeUV);\n"
+            "    if (layer.a <= 0.0) { qeColor = vec4(0.0); return; }\n"
+            "    const vec3 cb = (base.a > 0.0) ? base.rgb / base.a : vec3(0.0);\n"
+            "    const vec3 cs = layer.rgb / layer.a;\n"
+            "    qeColor = vec4(mix(cs, clamp(blend(cb, cs), 0.0, 1.0), base.a), layer.a);\n"
+            "}\n";
+    }
+    else if (shader.kind == ShaderKind::Resample) {
+        code +=
+            "layout(set = 0, binding = 0) uniform sampler2D qeSource;\n"
+            "layout(push_constant) uniform QuickEditParameters { vec2 resolution; vec2 unused; vec4 sound; } qe;\n"
+            "layout(location = 0) in vec2 qeUV;\n"
+            "layout(location = 0) out vec4 qeColor;\n"
+            "#define iResolution qe.resolution\n"
+            "#define iSourceSize vec2(textureSize(qeSource, 0))\n"
+            "#define iSound qe.sound\n"
+            "#define iLevel qe.sound.x\n"
+            "#define iBass qe.sound.y\n"
+            "#define iMid qe.sound.z\n"
+            "#define iTreble qe.sound.w\n"
+            "vec4 source(ivec2 p) { return texelFetch(qeSource, clamp(p, ivec2(0), textureSize(qeSource, 0) - 1), 0); }\n"
+            "#line 1\n" + shader.source + "\n"
+            "void main() { qeColor = resample(qeUV); }\n";
     }
     else {
         code +=
             "layout(set = 0, binding = 0) uniform sampler2D qeFrom;\n"
             "layout(set = 0, binding = 1) uniform sampler2D qeTo;\n"
-            "layout(push_constant) uniform QuickEditParameters { float progress; float ratio; } qe;\n"
+            "layout(push_constant) uniform QuickEditParameters { float progress; float ratio; vec2 unused; vec4 sound; } qe;\n"
             "layout(location = 0) in vec2 qeUV;\n"
             "layout(location = 0) out vec4 qeColor;\n"
             "#define progress qe.progress\n"
             "#define ratio qe.ratio\n"
+            "#define iSound qe.sound\n"
+            "#define iLevel qe.sound.x\n"
+            "#define iBass qe.sound.y\n"
+            "#define iMid qe.sound.z\n"
+            "#define iTreble qe.sound.w\n"
             "vec4 getFromColor(vec2 uv) { return texture(qeFrom, uv); }\n"
             "vec4 getToColor(vec2 uv) { return texture(qeTo, uv); }\n"
             "#line 1\n" + shader.source + "\n"
@@ -1273,6 +1366,7 @@ VkPipeline Compositor::userPipeline(const ShaderDef& shader)
     VkPipeline pipeline = VK_NULL_HANDLE;
 
     if (compileFragmentShader(code, shader.name, spirv, error)) {
+        // The others read pictures as the transitions do.
         const VkPipelineLayout layout = (shader.kind == ShaderKind::Generator) ? _generatorPipelineLayout : _transitionPipelineLayout;
         pipeline = createPipeline(_pipelineCache, layout, effect_vert, effect_vert_size, spirv.data(), spirv.size() * sizeof(uint32_t), false);
         _shaderErrors.erase(shader.id);
@@ -1318,7 +1412,10 @@ GPU::Image* Compositor::cmdGenerate(VkCommandBuffer commandBuffer, const Layer& 
         float time;
         float duration;
         float parameters[8];
+        float sound[4];
     } parameters = {};
+
+    std::copy(std::begin(_sound), std::end(_sound), parameters.sound);
 
     parameters.resolution[0] = (float)width;
     parameters.resolution[1] = (float)height;
@@ -1343,6 +1440,13 @@ GPU::Image* Compositor::cmdGenerate(VkCommandBuffer commandBuffer, const Layer& 
 
 
 GPU::Image* Compositor::cmdTransition(VkCommandBuffer commandBuffer, const ShaderDef& shader, float progress,
+    const GPU::Image* from, const GPU::Image* to, uint32_t width, uint32_t height)
+{
+    return cmdShaderPass(commandBuffer, shader, std::clamp(progress, 0.f, 1.f), (float)width / (float)std::max(1u, height), from, to, width, height);
+}
+
+
+GPU::Image* Compositor::cmdShaderPass(VkCommandBuffer commandBuffer, const ShaderDef& shader, float x, float y,
     const GPU::Image* from, const GPU::Image* to, uint32_t width, uint32_t height)
 {
     const VkPipeline pipeline = userPipeline(shader);
@@ -1370,7 +1474,7 @@ GPU::Image* Compositor::cmdTransition(VkCommandBuffer commandBuffer, const Shade
 
     vkUpdateDescriptorSets(_device.device(), 2, writes, 0, nullptr);
 
-    const float parameters[2] = { std::clamp(progress, 0.f, 1.f), (float)width / (float)std::max(1u, height) };
+    const float parameters[8] = { x, y, 0.f, 0.f, _sound[0], _sound[1], _sound[2], _sound[3] };
 
     GPU::Image* target = passTarget(width, height);
     cmdBeginPass(commandBuffer, target, false);

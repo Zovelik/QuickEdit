@@ -84,4 +84,19 @@ namespace audio
     // never click. Real-time safe: no lock, and no allocation once the
     // scratch buffer of the thread is as large as count.
     void mix(const MixGraph& graph, int64_t first, int64_t count, float* output);
+
+
+    // Loudness of a graph around a frame, for pictures that follow the
+    // sound: overall, and in three bands (below 250 Hz, up to 4 kHz, above),
+    // each from 0 (-60 dB or less) to 1 (0 dB). For a graph without effects
+    // (they keep a state from block to block).
+    struct SoundLevels
+    {
+        float level = 0.f;
+        float bass = 0.f;
+        float mid = 0.f;
+        float treble = 0.f;
+    };
+
+    SoundLevels soundLevels(const MixGraph& graph, int64_t frame);
 }

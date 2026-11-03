@@ -374,4 +374,53 @@ void mixClip(const MixGraph& graph, const MixClip& clip, int64_t first, int64_t 
     }
 }
 
+
+
+SoundLevels soundLevels(const MixGraph& graph, int64_t frame)
+{
+    // About 40 ms: 10 ms to settle the filters, then 30 ms measured, up to
+    // the frame (what has just been heard).
+    const double rate = (double)std::max(1u, graph.sampleRate);
+    const int64_t settle = (int64_t)(0.010 * rate);
+    const int64_t measured = (int64_t)(0.030 * rate);
+    const int64_t first = std::max<int64_t>(0, frame - measured - settle);
+    const int64_t count = frame - first;
+
+    if (count <= settle) {
+        return {};
+    }
+
+    std::vector<float> samples((size_t)count * 2);
+    mix(graph, first, count, samples.data());
+
+    // One pole filters: low passes at 250 Hz and 4 kHz.
+    const float low = 1.f - std::exp(-2.f * 3.14159265f * 250.f / (float)rate);
+    const float high = 1.f - std::exp(-2.f * 3.14159265f * 4000.f / (float)rate);
+    float lowState = 0.f;
+    float highState = 0.f;
+    double sums[4] = {};
+
+    for (int64_t i = 0; i < count; i++) {
+        const float x = 0.5f * (samples[(size_t)i * 2] + samples[(size_t)i * 2 + 1]);
+        lowState += low * (x - lowState);
+        highState += high * (x - highState);
+
+        if (i >= count - measured) {
+            const float bands[4] = { x, lowState, highState - lowState, x - highState };
+
+            for (int b = 0; b < 4; b++) {
+                sums[b] += (double)bands[b] * bands[b];
+            }
+        }
+    }
+
+    auto scaled = [&](double sum) {
+        const double rms = std::sqrt(sum / (double)std::max<int64_t>(1, std::min(measured, count)));
+        const double db = 20.0 * std::log10(std::max(rms, 1e-9));
+        return (float)std::clamp((db + 60.0) / 60.0, 0.0, 1.0);
+    };
+
+    return { scaled(sums[0]), scaled(sums[1]), scaled(sums[2]), scaled(sums[3]) };
+}
+
 }

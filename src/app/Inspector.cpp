@@ -157,6 +157,8 @@ void Inspector::copyChanges(Project& project, const Clip& before, const Clip& af
         if (after.fit != before.fit) other->fit = after.fit;
         if (after.filter != before.filter) other->filter = after.filter;
         if (after.blend != before.blend) other->blend = after.blend;
+        if (after.filterShader != before.filterShader) other->filterShader = after.filterShader;
+        if (after.blendShader != before.blendShader) other->blendShader = after.blendShader;
         if (!(after.frame == before.frame)) other->frame = after.frame;
         if (after.gainDb != before.gainDb) other->gainDb = after.gainDb;
         if (after.fadeIn != before.fadeIn) other->fadeIn = std::min(after.fadeIn, other->duration);
@@ -255,7 +257,7 @@ std::string Inspector::drawClip(Project& project, const std::vector<Id>& selecti
     }
 
     if (video) {
-        transformSection(*clip, localTime, edit);
+        transformSection(project, *clip, localTime, edit);
 
         if (clip->kind != ClipKind::Text) {
             frameSection(*clip, edit);
@@ -364,7 +366,60 @@ bool Inspector::animatedRow(const char* label, AnimatedValue& value, Time localT
 }
 
 
-void Inspector::transformSection(Clip& clip, Time localTime, std::string& edit)
+bool Inspector::shaderItems(Project& project, ShaderKind kind, std::string& shaderId)
+{
+    bool changed = false;
+
+    auto item = [&](const ShaderDef& shader) {
+        if (shader.kind != kind) {
+            return;
+        }
+
+        const bool selected = shaderId == shader.id;
+
+        if (ImGui::Selectable((std::string(ICON_MD_AUTO_AWESOME " ") + shader.name).c_str(), selected) && !selected) {
+            shaderId = shader.id;
+
+            if (shader.id.rfind("builtin:", 0) != 0) {
+                project.storeShader(shader);
+            }
+
+            changed = true;
+        }
+    };
+
+    for (const ShaderDef& shader : builtinShaders()) item(shader);
+
+    if (userShaders) {
+        for (const ShaderDef& shader : *userShaders) item(shader);
+    }
+
+    // A new one, from an example, opened in the editor.
+    if (newShader) {
+        const char* label = (kind == ShaderKind::Blend) ? ICON_MD_ADD " New Blend Shader..."
+            : (kind == ShaderKind::Resample) ? ICON_MD_ADD " New Resampling Shader..." : ICON_MD_ADD " New Shader...";
+
+        if (ImGui::Selectable(tr(label))) {
+            if (const std::optional<ShaderDef> shader = newShader(kind)) {
+                shaderId = shader->id;
+                project.storeShader(*shader);
+                changed = true;
+            }
+        }
+    }
+
+    return changed;
+}
+
+
+std::string Inspector::shaderName(const Project& project, const std::string& shaderId) const
+{
+    const ShaderDef* shader = project.findShader(shaderId);
+    return shader ? shader->name : std::string("?");
+}
+
+
+void Inspector::transformSection(Project& project, Clip& clip, Time localTime, std::string& edit)
 {
     ImGui::SeparatorText(tr(ICON_MD_OPEN_WITH " Transform"));
 
@@ -415,14 +470,25 @@ void Inspector::transformSection(Clip& clip, Time localTime, std::string& edit)
 
         ImGui::SetNextItemWidth(-FLT_MIN);
 
-        if (ImGui::BeginCombo("##sampling", tr(ScaleFilterNames[(int)clip.filter]))) {
+        const std::string filterLabel = clip.filterShader.empty() ? std::string(tr(ScaleFilterNames[(int)clip.filter]))
+                                                                  : std::string(ICON_MD_AUTO_AWESOME " ") + shaderName(project, clip.filterShader);
+
+        if (ImGui::BeginCombo("##sampling", filterLabel.c_str())) {
             for (int filter = 0; filter < (int)ScaleFilter::Count; filter++) {
-                if (ImGui::Selectable(tr(ScaleFilterNames[filter]), (int)clip.filter == filter)) {
+                if (ImGui::Selectable(tr(ScaleFilterNames[filter]), clip.filterShader.empty() && (int)clip.filter == filter)) {
                     clip.filter = (ScaleFilter)filter;
+                    clip.filterShader.clear();
                     edit = "Change sampling";
                 }
 
                 ImGui::SetItemTooltip("%s", tr(ScaleFilterTooltips[filter]));
+            }
+
+            // Resampling shaders.
+            ImGui::Separator();
+
+            if (shaderItems(project, ShaderKind::Resample, clip.filterShader)) {
+                edit = "Change sampling";
             }
 
             ImGui::EndCombo();
@@ -434,14 +500,26 @@ void Inspector::transformSection(Clip& clip, Time localTime, std::string& edit)
         propertyLabel("Blend");
         ImGui::SetNextItemWidth(-FLT_MIN);
 
-        if (ImGui::BeginCombo("##blend", tr(clip.blend == BlendMode::Normal ? "Track's" : blendModeName(clip.blend)))) {
+        const std::string blendLabel = !clip.blendShader.empty() ? std::string(ICON_MD_AUTO_AWESOME " ") + shaderName(project, clip.blendShader)
+                                                                   : std::string(tr(clip.blend == BlendMode::Normal ? "Track's" : blendModeName(clip.blend)));
+
+        if (ImGui::BeginCombo("##blend", blendLabel.c_str())) {
             for (int mode = 0; mode < (int)BlendMode::Count; mode++) {
                 const char* name = (mode == 0) ? tr("Track's") : tr(blendModeName((BlendMode)mode));
 
-                if (ImGui::Selectable(name, (int)clip.blend == mode)) {
+                if (ImGui::Selectable(name, clip.blendShader.empty() && (int)clip.blend == mode)) {
                     clip.blend = (BlendMode)mode;
+                    clip.blendShader.clear();
                     edit = "Change blending";
                 }
+            }
+
+            // Blend shaders.
+            ImGui::Separator();
+
+            if (shaderItems(project, ShaderKind::Blend, clip.blendShader)) {
+                clip.blend = BlendMode::Normal;
+                edit = "Change blending";
             }
 
             ImGui::EndCombo();

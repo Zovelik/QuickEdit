@@ -93,6 +93,21 @@ vec4 generate(vec2 uv, float time)
     return vec4(color, 1.0);
 }
 )"),
+        builtin("soundrings", "Sound Rings", ShaderKind::Generator, R"(
+// Rings that pulse with the sound: the bass makes them grow, the treble
+// brightens them.
+// @param Rings 2 30 10
+// @param Hue 0 1 0.55
+vec4 generate(vec2 uv, float time)
+{
+    vec2 p = (uv - 0.5) * vec2(iResolution.x / iResolution.y, 1.0);
+    const float d = length(p) / (0.6 + 0.4 * iBass);
+    const float rings = 0.5 + 0.5 * sin(d * param(0) * 6.2832 - time * 2.0);
+    const vec3 hue = 0.5 + 0.5 * cos(6.2832 * (param(1) + d * 0.3 + vec3(0.0, 0.33, 0.67)));
+    const float glow = smoothstep(1.0, 0.0, d) * (0.3 + 0.7 * iLevel);
+    return vec4(hue * rings * glow * (0.6 + 0.8 * iTreble), 1.0);
+}
+)"),
 
         // Transitions
         builtin("circle", "Circle Reveal", ShaderKind::Transition, R"(
@@ -130,9 +145,84 @@ vec4 transition(vec2 uv)
     return mix(getToColor(uv), getFromColor(uv), edge);
 }
 )"),
+
+        // Blend modes (the separable ones of the W3C compositing spec).
+        builtin("overlay", "Overlay", ShaderKind::Blend, R"(
+vec3 blend(vec3 base, vec3 layer)
+{
+    return mix(2.0 * base * layer, 1.0 - 2.0 * (1.0 - base) * (1.0 - layer), step(0.5, base));
+}
+)"),
+        builtin("softlight", "Soft Light", ShaderKind::Blend, R"(
+vec3 blend(vec3 base, vec3 layer)
+{
+    const vec3 d = mix(((16.0 * base - 12.0) * base + 4.0) * base, sqrt(base), step(0.25, base));
+    return mix(base - (1.0 - 2.0 * layer) * base * (1.0 - base), base + (2.0 * layer - 1.0) * (d - base), step(0.5, layer));
+}
+)"),
+        builtin("hardlight", "Hard Light", ShaderKind::Blend, R"(
+vec3 blend(vec3 base, vec3 layer)
+{
+    return mix(2.0 * base * layer, 1.0 - 2.0 * (1.0 - base) * (1.0 - layer), step(0.5, layer));
+}
+)"),
+        builtin("difference", "Difference", ShaderKind::Blend, R"(
+vec3 blend(vec3 base, vec3 layer)
+{
+    return abs(base - layer);
+}
+)"),
+        builtin("exclusion", "Exclusion", ShaderKind::Blend, R"(
+vec3 blend(vec3 base, vec3 layer)
+{
+    return base + layer - 2.0 * base * layer;
+}
+)"),
+        builtin("colordodge", "Color Dodge", ShaderKind::Blend, R"(
+vec3 blend(vec3 base, vec3 layer)
+{
+    return min(vec3(1.0), base / max(1.0 - layer, vec3(1e-4)));
+}
+)"),
+        builtin("colorburn", "Color Burn", ShaderKind::Blend, R"(
+vec3 blend(vec3 base, vec3 layer)
+{
+    return 1.0 - min(vec3(1.0), (1.0 - base) / max(layer, vec3(1e-4)));
+}
+)"),
+
+        // Resampling
+        builtin("sharpbilinear", "Sharp Bilinear (Pixel Art)", ShaderKind::Resample, R"(
+// Nearest inside the pixels, a blend of one pixel of the result at their
+// edges: sharp squares without the uneven sizes of Nearest.
+vec4 resample(vec2 uv)
+{
+    const vec2 texel = uv * iSourceSize - 0.5;
+    const vec2 scale = max(iResolution / iSourceSize, vec2(1.0));
+    const vec2 f = fract(texel);
+    const vec2 t = clamp((f - 0.5) * scale + 0.5, 0.0, 1.0);
+    const ivec2 p = ivec2(floor(texel));
+    const vec4 top = mix(source(p), source(p + ivec2(1, 0)), t.x);
+    const vec4 bottom = mix(source(p + ivec2(0, 1)), source(p + ivec2(1, 1)), t.x);
+    return mix(top, bottom, t.y);
+}
+)"),
     };
 
     return shaders;
+}
+
+
+const char* shaderKindName(ShaderKind kind)
+{
+    switch (kind) {
+        case ShaderKind::Generator:  return "Generator";
+        case ShaderKind::Transition: return "Transition";
+        case ShaderKind::Blend:      return "Blend";
+        case ShaderKind::Resample:   return "Resampling";
+    }
+
+    return "";
 }
 
 
@@ -143,12 +233,17 @@ bool parseShader(const std::string& source, ShaderDef& shader)
 
     const bool generator = source.find("generate(") != std::string::npos;
     const bool transition = source.find("transition(") != std::string::npos;
+    const bool blend = source.find("blend(") != std::string::npos;
+    const bool resample = source.find("resample(") != std::string::npos;
 
-    if (!generator && !transition) {
+    if (!generator && !transition && !blend && !resample) {
         return false;
     }
 
-    shader.kind = generator ? ShaderKind::Generator : ShaderKind::Transition;
+    // The first of the functions it defines (a shader may call the others).
+    shader.kind = generator ? ShaderKind::Generator
+        : transition ? ShaderKind::Transition
+        : resample ? ShaderKind::Resample : ShaderKind::Blend;
 
     std::istringstream lines(source);
     std::string line;

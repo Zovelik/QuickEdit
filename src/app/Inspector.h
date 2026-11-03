@@ -62,6 +62,14 @@ public:
     // in the Project Properties window).
     void sequenceSection(core::Project& project, std::string& edit);
 
+    // Inside a combo: the shaders of a kind (built in, then the user's)
+    // and a new one from an example; the one chosen in shaderId (stored in
+    // the project when it is the user's). True when it changed.
+    bool shaderItems(core::Project& project, core::ShaderKind kind, std::string& shaderId);
+
+    // Name of a shader by its id ("?" when it is not there).
+    std::string shaderName(const core::Project& project, const std::string& shaderId) const;
+
     // A list of video effects (of a clip or a track): on / off, order,
     // parameters with keyframes at localTime, and the effects to add.
     void videoEffectsSection(core::Project& project, std::vector<core::VideoEffect>& effects, core::Time localTime, std::string& edit);
@@ -71,7 +79,7 @@ private:
     bool animatedRow(const char* label, core::AnimatedValue& value, core::Time localTime,
         float speed, float min, float max, const char* format, float displayScale, std::string& edit);
 
-    void transformSection(core::Clip& clip, core::Time localTime, std::string& edit);
+    void transformSection(core::Project& project, core::Clip& clip, core::Time localTime, std::string& edit);
     void frameSection(core::Clip& clip, std::string& edit);
 
     // Speed of a media clip (and its linked clips), in percent, with presets.

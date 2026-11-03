@@ -596,8 +596,10 @@ private:
     core::Time _trimPreviewTime = -1;       // Shown instead of the playhead, -1 for none
     core::Time _trimHeard = -1;             // Where the sound was last heard
 
-    // The audio mix of the project, again (after a change).
+    // The audio mix of the project, again (after a change), and the same
+    // without effects, for the sound levels given to the shaders.
     void rebuildMix();
+    std::shared_ptr<const audio::MixGraph> _levelsGraph;
     core::Id soundTrackOf(core::Id videoTrack) const;   // Paired with it, where the sound of a recording goes
     void beginScreenRecording(ScreenJob job);
     void placeScreenRecording(ScreenJob job);

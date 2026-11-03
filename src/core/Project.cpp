@@ -415,6 +415,8 @@ Json clipToJson(const Clip& clip)
     if (clip.fit != FitMode::Fit) json["fit"] = clip.fit == FitMode::Fill ? "fill" : "native";
     if (clip.filter != ScaleFilter::Bilinear) json["filter"] = scaleFilterName(clip.filter);
     if (clip.blend != BlendMode::Normal) json["blend"] = blendModeName(clip.blend);
+    if (!clip.filterShader.empty()) json["filterShader"] = clip.filterShader;
+    if (!clip.blendShader.empty()) json["blendShader"] = clip.blendShader;
 
     if (clip.fadeIn > 0) json["fadeIn"] = clip.fadeIn;
     if (clip.fadeOut > 0) json["fadeOut"] = clip.fadeOut;
@@ -516,6 +518,8 @@ Clip clipFromJson(const Json& json)
         }
     }
     clip.blend = blendModeFromName(json["blend"].toString());
+    clip.filterShader = json["filterShader"].toString();
+    clip.blendShader = json["blendShader"].toString();
     clip.fadeIn = std::clamp<Time>(json["fadeIn"].toInt(), 0, clip.duration);
     clip.fadeOut = std::clamp<Time>(json["fadeOut"].toInt(), 0, clip.duration);
 
@@ -577,6 +581,7 @@ Json trackToJson(const Track& track)
 
     if (track.height > 0.f) json["height"] = (double)track.height;
     if (track.blend != BlendMode::Normal) json["blend"] = blendModeName(track.blend);
+    if (!track.blendShader.empty()) json["blendShader"] = track.blendShader;
     if (track.streamsUnfolded) json["streamsUnfolded"] = true;
 
     Json clips = Json::array();
@@ -610,6 +615,7 @@ Track trackFromJson(const Json& json, TrackType type)
     track.locked = json["locked"].toBool();
     track.height = (float)json["height"].toDouble(0.0);
     track.blend = blendModeFromName(json["blend"].toString());
+    track.blendShader = json["blendShader"].toString();
     track.streamsUnfolded = json["streamsUnfolded"].toBool();
 
     for (const Json& clip : json["clips"].items()) {

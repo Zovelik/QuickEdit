@@ -397,6 +397,15 @@ void GUI::cmdCompose(VkCommandBuffer commandBuffer)
             layer.transitionRole = request.transitionRole;
             layer.transitionProgress = request.transitionProgress;
             layer.transitionShader = request.transition ? _project.findShader(request.transition->shader) : nullptr;
+            
+            // Blend and sampling shaders: the clip's blend first (a mode of its
+            // own goes before the shader of its track).
+            const Track& owner = level.videoTracks[request.track];
+            const std::string& blendId = !clip.blendShader.empty() ? clip.blendShader : (clip.blend == BlendMode::Normal) ? owner.blendShader : clip.blendShader;
+            const ShaderDef* blendShader = blendId.empty() ? nullptr : _project.findShader(blendId);
+            const ShaderDef* filterShader = clip.filterShader.empty() ? nullptr : _project.findShader(clip.filterShader);
+            layer.blendShader = (blendShader && blendShader->kind == ShaderKind::Blend) ? blendShader : nullptr;
+            layer.filterShader = (filterShader && filterShader->kind == ShaderKind::Resample) ? filterShader : nullptr;
 
             if (clip.kind == ClipKind::Text) {
                 layer.animateLetters = _textEditor.clip() != clip.id;
@@ -489,6 +498,12 @@ void GUI::cmdCompose(VkCommandBuffer commandBuffer)
 
     // At the playhead, or at the edge of a clip being trimmed.
     const Time shown = (_trimPreviewTime >= 0) ? _trimPreviewTime : _playhead;
+
+    // The sound there, for the shaders.
+    if (_levelsGraph) {
+        const audio::SoundLevels sound = audio::soundLevels(*_levelsGraph, mulDivFloor(shown, _levelsGraph->sampleRate, TicksPerSecond));
+        _compositor->setSound(sound.level, sound.bass, sound.mid, sound.treble);
+    }
 
     std::vector<Compositor::Layer> layers = build(
         layersAt(sequence, shown, [this](Id id) { return _project.findSequence(id); }), sequence);
@@ -836,10 +851,12 @@ void GUI::menuBar()
                 }
 
                 if (ImGui::MenuItem(tr(ICON_MD_ADD " New Transition Shader..."))) { newShader(ShaderKind::Transition); }
+                if (ImGui::MenuItem(tr(ICON_MD_ADD " New Blend Shader..."))) { newShader(ShaderKind::Blend); }
+                if (ImGui::MenuItem(tr(ICON_MD_ADD " New Resampling Shader..."))) { newShader(ShaderKind::Resample); }
 
                 if (ImGui::BeginMenu(tr(ICON_MD_EDIT " Edit Shader"), !_userShaders.empty())) {
                     for (const ShaderDef& shader : _userShaders) {
-                        if (ImGui::MenuItem(shader.name.c_str(), shader.kind == ShaderKind::Generator ? "Generator" : "Transition")) {
+                        if (ImGui::MenuItem(shader.name.c_str(), tr(shaderKindName(shader.kind)))) {
                             editShader(shader.id);
                         }
                     }
@@ -850,7 +867,7 @@ void GUI::menuBar()
                 // The built-in shaders are not changed: copies are.
                 if (ImGui::BeginMenu(tr(ICON_MD_CONTENT_COPY " New from a Built-in Shader"))) {
                     for (const ShaderDef& shader : builtinShaders()) {
-                        if (ImGui::MenuItem(shader.name.c_str(), shader.kind == ShaderKind::Generator ? "Generator" : "Transition")) {
+                        if (ImGui::MenuItem(shader.name.c_str(), tr(shaderKindName(shader.kind)))) {
                             duplicateShader(shader);
                         }
                     }
@@ -2788,6 +2805,7 @@ const char* const GeneratorExample =
     "//   time: seconds since the start of the clip, iDuration: its length\n"
     "//   iResolution: size of the picture in pixels\n"
     "//   param(i): the parameters declared below (up to 8), animated in the Inspector\n"
+    "//   iLevel, iBass, iMid, iTreble: the sound at that time, 0 (silence) to 1\n"
     "// Saved with Ctrl + S, and used at once.\n"
     "//\n"
     "// @param Speed 0 5 1\n"
@@ -2805,6 +2823,40 @@ const char* const GeneratorExample =
     "    float t = time * param(0);\n"
     "    float v = sin(p.x + t) + sin(p.y * 1.3 - t) + sin(length(p) * 1.5 - t * 1.7);\n"
     "    return vec4(palette(v * 0.15 + param(2)), 1.0);\n"
+    "}\n";
+
+const char* const BlendExample =
+    "// A blend mode: how a clip mixes with the pictures below it.\n"
+    "//   base: the color below, layer: the color of the clip (0 to 1, straight)\n"
+    "//   the transparency of both is taken care of around it\n"
+    "//   iLevel, iBass, iMid, iTreble: the sound at that time, 0 (silence) to 1\n"
+    "// Chosen in Blend (clip or track). Saved with Ctrl + S, and used at once.\n"
+    "\n"
+    "vec3 blend(vec3 base, vec3 layer)\n"
+    "{\n"
+    "    // Overlay: multiply the dark parts, screen the light ones.\n"
+    "    vec3 multiplied = 2.0 * base * layer;\n"
+    "    vec3 screened = 1.0 - 2.0 * (1.0 - base) * (1.0 - layer);\n"
+    "    return mix(multiplied, screened, step(0.5, base));\n"
+    "}\n";
+
+const char* const ResampleExample =
+    "// A resampling shader: draws a picture at its size on screen, instead of\n"
+    "// the Sampling of the clip.\n"
+    "//   uv: position in the picture (0 to 1, from the top left)\n"
+    "//   source(ivec2 pixel): a pixel of the picture (clamped to it)\n"
+    "//   iSourceSize: size of the picture, iResolution: size of the result (pixels)\n"
+    "// Chosen in Sampling. Saved with Ctrl + S, and used at once.\n"
+    "\n"
+    "vec4 resample(vec2 uv)\n"
+    "{\n"
+    "    // Bilinear, by hand: the four pixels around, weighted.\n"
+    "    vec2 texel = uv * iSourceSize - 0.5;\n"
+    "    ivec2 p = ivec2(floor(texel));\n"
+    "    vec2 f = fract(texel);\n"
+    "    vec4 top = mix(source(p), source(p + ivec2(1, 0)), f.x);\n"
+    "    vec4 bottom = mix(source(p + ivec2(0, 1)), source(p + ivec2(1, 1)), f.x);\n"
+    "    return mix(top, bottom, f.y);\n"
     "}\n";
 
 const char* const TransitionExample =
@@ -2869,7 +2921,7 @@ std::optional<ShaderDef> GUI::newShader(ShaderKind kind)
     std::filesystem::create_directories(folder, ec);
 
     // A free name: "My Generator", "My Generator 2"...
-    const std::string base = (kind == ShaderKind::Generator) ? "My Generator" : "My Transition";
+    const std::string base = std::string("My ") + shaderKindName(kind);
     std::string name = base;
 
     for (int i = 2; std::filesystem::exists(folder / std::filesystem::u8path(name + ".glsl"), ec); i++) {
@@ -2878,7 +2930,11 @@ std::optional<ShaderDef> GUI::newShader(ShaderKind kind)
 
     const std::filesystem::path path = folder / std::filesystem::u8path(name + ".glsl");
 
-    if (!(std::ofstream(path, std::ios::binary) << (kind == ShaderKind::Generator ? GeneratorExample : TransitionExample))) {
+    const char* example = (kind == ShaderKind::Generator) ? GeneratorExample
+        : (kind == ShaderKind::Transition) ? TransitionExample
+        : (kind == ShaderKind::Blend) ? BlendExample : ResampleExample;
+
+    if (!(std::ofstream(path, std::ios::binary) << example)) {
         SDL_Log("Could not write %s", path.string().c_str());
         return std::nullopt;
     }
@@ -5999,12 +6055,24 @@ void GUI::effectsTab()
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-FLT_MIN);
 
-        if (ImGui::BeginCombo("##trackBlend", tr(blendModeName(track->blend)))) {
+        const std::string blendLabel = track->blendShader.empty() ? std::string(tr(blendModeName(track->blend)))
+                                                                  : std::string(ICON_MD_AUTO_AWESOME " ") + _inspector.shaderName(_project, track->blendShader);
+
+        if (ImGui::BeginCombo("##trackBlend", blendLabel.c_str())) {
             for (int mode = 0; mode < (int)BlendMode::Count; mode++) {
-                if (ImGui::Selectable(tr(blendModeName((BlendMode)mode)), (int)track->blend == mode)) {
+                if (ImGui::Selectable(tr(blendModeName((BlendMode)mode)), track->blendShader.empty() && (int)track->blend == mode)) {
                     track->blend = (BlendMode)mode;
+                    track->blendShader.clear();
                     edit = "Change blending";
                 }
+            }
+
+            // Blend shaders.
+            ImGui::Separator();
+
+            if (_inspector.shaderItems(_project, ShaderKind::Blend, track->blendShader)) {
+                track->blend = BlendMode::Normal;
+                edit = "Change blending";
             }
 
             ImGui::EndCombo();
@@ -6785,6 +6853,7 @@ void GUI::rebuildMix()
     _audio.setGraph(audio::buildMixGraph(_project,
         [this](Id mediaId, int stream) { return _media.audio(mediaId, stream); },
         [this](Id, const std::vector<EffectSlot>& slots) { return _effects.effectsOf(slots); }));
+    _levelsGraph = audio::buildMixGraph(_project, [this](Id mediaId, int stream) { return _media.audio(mediaId, stream); });
 }
 
 

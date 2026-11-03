@@ -93,9 +93,14 @@ its fit mode, cropped and framed (rounded corners, border, shadow) by
 its track's. Nested sequences are rendered into their own target first
 (`cmdRenderLevel`). Texts (`FontLibrary`, `TextLayout`) are drawn from a
 signed distance field glyph atlas, one instance per glyph, with per-letter
-animations. User shaders (generators and transitions) are compiled at run
-time with shaderc (`ShaderCompiler`). The output can have any size: the
-layout stays in the pixels of the sequence.
+animations. User shaders (generators, transitions, blend modes and
+resampling) are compiled at run time with shaderc (`ShaderCompiler`). They
+get the sound levels of the frame (`audio::soundLevels()`, from a mix
+without effects). A blend shader ends the pass of the level: the layer is
+drawn alone, mixed with the level by the shader, and the result drawn over
+it. A resampling shader draws the picture at its size in the output before
+the layer is drawn. The output can have any size: the layout stays in the
+pixels of the sequence.
 
 ### `audio/`: playback, mixing, plugins
 

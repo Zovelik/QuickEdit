@@ -292,6 +292,12 @@ namespace core
         BlendMode blend = BlendMode::Normal;
         Frame frame;
 
+        // Shaders instead (ids, see Shaders.h; empty for none): a
+        // resampling shader for the sampling, a blend shader for the
+        // blending (over the one of the track).
+        std::string filterShader;
+        std::string blendShader;
+
         // Effects of the clip, before those of its track: on its picture
         // (video), or on its sound (audio, in processing order).
         std::vector<VideoEffect> videoEffects;
@@ -347,8 +353,9 @@ namespace core
         float height = 0.f;
 
         // Video tracks: mixing of their clips with the tracks below (a clip
-        // can have its own).
+        // can have its own), or a blend shader (its id) instead.
         BlendMode blend = BlendMode::Normal;
+        std::string blendShader;
 
         // Clips sorted by start time, never overlapping.
         std::vector<Clip> clips;

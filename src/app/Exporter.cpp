@@ -421,6 +421,13 @@ void Exporter::exportVideo()
             return (it != _effects.end()) ? it->second : std::vector<std::shared_ptr<audio::AudioEffect>>();
         });
 
+    // Without effects: the sound levels given to the shaders, frame by frame.
+    std::shared_ptr<const audio::MixGraph> levelsGraph = audio::buildMixGraph(_project,
+        [this](Id mediaId, int stream) {
+            const auto it = _audio.find({ mediaId, stream });
+            return (it != _audio.end()) ? it->second : nullptr;
+        });
+
     AVFrame* audioFrame = av_frame_alloc();
     std::vector<float> mixBuffer;
     int64_t audioPosition = 0;
@@ -581,6 +588,15 @@ void Exporter::exportVideo()
                 layer.transitionRole = request.transitionRole;
                 layer.transitionProgress = request.transitionProgress;
                 layer.transitionShader = request.transition ? _project.findShader(request.transition->shader) : nullptr;
+                
+                // Blend and sampling shaders: the clip's blend first (a mode of its
+                // own goes before the shader of its track).
+                const Track& owner = level.videoTracks[request.track];
+                const std::string& blendId = !clip.blendShader.empty() ? clip.blendShader : (clip.blend == BlendMode::Normal) ? owner.blendShader : clip.blendShader;
+                const ShaderDef* blendShader = blendId.empty() ? nullptr : _project.findShader(blendId);
+                const ShaderDef* filterShader = clip.filterShader.empty() ? nullptr : _project.findShader(clip.filterShader);
+                layer.blendShader = (blendShader && blendShader->kind == ShaderKind::Blend) ? blendShader : nullptr;
+                layer.filterShader = (filterShader && filterShader->kind == ShaderKind::Resample) ? filterShader : nullptr;
 
                 // Generators: the shader makes the picture.
                 if (clip.kind == ClipKind::Generator) {
@@ -656,6 +672,8 @@ void Exporter::exportVideo()
             layers.push_back({ &clip, t - clip.start, nullptr, 0, 0, 1.f, 0.f, 0.f, 1.f, 1.f });
         }
 
+        const audio::SoundLevels sound = audio::soundLevels(*levelsGraph, mulDivFloor(t, levelsGraph->sampleRate, TicksPerSecond));
+        compositor.setSound(sound.level, sound.bass, sound.mid, sound.treble);
         compositor.cmdComposite(gpu.commandBuffer, width, height, layers, sequence.width, sequence.height);
 
         AVFrame* videoFrame = av_frame_alloc();
