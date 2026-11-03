@@ -20,6 +20,13 @@ struct SceneSource
     float width = 1.f;
     float height = 1.f;
 
+    // Parts of the picture cut from each edge, in fractions of it (the rest
+    // stays in place, as the crop of the clips).
+    float cropLeft = 0.f;
+    float cropTop = 0.f;
+    float cropRight = 0.f;
+    float cropBottom = 0.f;
+
     // False when the source of a saved scene is not there any more (window
     // closed, camera unplugged): it is not recorded.
     bool available = true;

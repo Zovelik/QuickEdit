@@ -93,8 +93,8 @@ namespace capture
     class SourcePreview
     {
     public:
-        static constexpr int Width = 960;
-        static constexpr int Height = 540;
+        static constexpr int Width = 1280;
+        static constexpr int Height = 720;
         static constexpr int FrameRate = 30;
 
         ~SourcePreview() { stop(); }

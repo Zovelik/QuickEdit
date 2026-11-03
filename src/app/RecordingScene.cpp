@@ -66,6 +66,10 @@ std::vector<RecordingScene> loadScenes(const std::vector<capture::CaptureSource>
             source.y = (float)item["y"].toDouble(0.0);
             source.width = (float)std::max(0.01, item["width"].toDouble(1.0));
             source.height = (float)std::max(0.01, item["height"].toDouble(1.0));
+            source.cropLeft = (float)std::clamp(item["cropLeft"].toDouble(0.0), 0.0, 0.98);
+            source.cropTop = (float)std::clamp(item["cropTop"].toDouble(0.0), 0.0, 0.98);
+            source.cropRight = (float)std::clamp(item["cropRight"].toDouble(0.0), 0.0, 0.98 - source.cropLeft);
+            source.cropBottom = (float)std::clamp(item["cropBottom"].toDouble(0.0), 0.0, 0.98 - source.cropTop);
 
             const Json& format = item["format"];
             source.source.format.width = (int)format["width"].toInt(0);
@@ -115,6 +119,10 @@ void saveScenes(const std::vector<RecordingScene>& scenes)
             item["y"] = (double)source.y;
             item["width"] = (double)source.width;
             item["height"] = (double)source.height;
+            item["cropLeft"] = (double)source.cropLeft;
+            item["cropTop"] = (double)source.cropTop;
+            item["cropRight"] = (double)source.cropRight;
+            item["cropBottom"] = (double)source.cropBottom;
 
             if (!source.source.format.automatic()) {
                 Json format = Json::object();

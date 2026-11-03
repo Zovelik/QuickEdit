@@ -186,7 +186,7 @@
   "Double click: add   Drag: move (Shift: value only, Alt: time only)   Right click: easing   Del: remove": "Double clic : ajouter   Glisser : déplacer (Maj : valeur seule, Alt : temps seul)   Clic droit : accélération   Suppr : retirer",
   "Download": "Télécharger",
   "Download a model first.": "Téléchargez d'abord un modèle.",
-  "Drag a source to move it, its corner to resize it.": "Faites glisser une source pour la déplacer, son coin pour la redimensionner.",
+  "Drag a source to move it, a corner to resize it, an edge to crop it (Alt + corner: two edges).": "Glissez une source pour la déplacer, un coin pour la redimensionner, un bord pour la rogner (Alt + coin : deux bords).",
   "Drag into the timeline of another sequence to nest it": "Glisser dans la timeline d'une autre séquence pour l'imbriquer",
   "Drag the media inside a clip: the clip stays in place, it shows another part.": "Fait glisser le média dans un clip : le clip reste en place et montre une autre partie.",
   "Duplicate shader": "Dupliquer le shader",

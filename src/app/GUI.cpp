@@ -1932,11 +1932,15 @@ void GUI::viewerRecording(ImDrawList* drawList, const ImVec2& frameMin, const Im
 
     // A preview texture: the part of it that holds the picture (without
     // its letterboxing), drawn in a rectangle.
-    auto drawPicture = [&](ImTextureData* texture, int pictureWidth, int pictureHeight, const ImVec2& min, const ImVec2& max) {
+    // Its crop (left, top, right, bottom fractions) taken off.
+    auto drawPicture = [&](ImTextureData* texture, int pictureWidth, int pictureHeight, const ImVec2& min, const ImVec2& max, const ImVec4& crop) {
         const float fit = (pictureWidth > 0) ? std::min(PreviewWidth / (float)pictureWidth, PreviewHeight / (float)pictureHeight) : 1.f;
         const float w = (pictureWidth > 0) ? (float)pictureWidth * fit / PreviewWidth : 1.f;
         const float h = (pictureHeight > 0) ? (float)pictureHeight * fit / PreviewHeight : 1.f;
-        drawList->AddImage(texture->GetTexRef(), min, max, ImVec2(0.5f - 0.5f * w, 0.5f - 0.5f * h), ImVec2(0.5f + 0.5f * w, 0.5f + 0.5f * h));
+        const ImVec2 size(max.x - min.x, max.y - min.y);
+        drawList->AddImage(texture->GetTexRef(),
+            ImVec2(min.x + crop.x * size.x, min.y + crop.y * size.y), ImVec2(max.x - crop.z * size.x, max.y - crop.w * size.y),
+            ImVec2(0.5f - 0.5f * w + crop.x * w, 0.5f - 0.5f * h + crop.y * h), ImVec2(0.5f + 0.5f * w - crop.z * w, 0.5f + 0.5f * h - crop.w * h));
     };
 
     drawList->PushClipRect(frameMin, ImVec2(frameMin.x + frameSize.x, frameMin.y + frameSize.y), true);
@@ -1951,7 +1955,8 @@ void GUI::viewerRecording(ImDrawList* drawList, const ImVec2& frameMin, const Im
                 if (preview.texture && source.available) {
                     const ImVec2 min(frameMin.x + source.x * frameSize.x, frameMin.y + source.y * frameSize.y);
                     const ImVec2 max(min.x + source.width * frameSize.x, min.y + source.height * frameSize.y);
-                    drawPicture(preview.texture, preview.frameWidth, preview.frameHeight, min, max);
+                    drawPicture(preview.texture, preview.frameWidth, preview.frameHeight, min, max,
+                        ImVec4(source.cropLeft, source.cropTop, source.cropRight, source.cropBottom));
                 }
             }
         }
@@ -1962,7 +1967,7 @@ void GUI::viewerRecording(ImDrawList* drawList, const ImVec2& frameMin, const Im
         const float fit = std::min(frameSize.x / PreviewWidth, frameSize.y / PreviewHeight);
         const ImVec2 size(PreviewWidth * fit, PreviewHeight * fit);
         const ImVec2 min(frameMin.x + 0.5f * (frameSize.x - size.x), frameMin.y + 0.5f * (frameSize.y - size.y));
-        drawPicture(_previewTexture, 0, 0, min, ImVec2(min.x + size.x, min.y + size.y));
+        drawPicture(_previewTexture, 0, 0, min, ImVec2(min.x + size.x, min.y + size.y), ImVec4(0.f, 0.f, 0.f, 0.f));
     }
 
     // What it is, in the corner.

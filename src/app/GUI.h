@@ -551,7 +551,8 @@ private:
     int _sceneSelected = -1;
     std::string _sceneName;
     std::vector<std::unique_ptr<ScenePreview>> _scenePreviews;     // One per source of the current scene
-    int _sceneDrag = 0;             // 1: moving, 2: resizing
+    int _sceneDrag = 0;             // 1: moving, 2: resizing, 3: cropping
+    int _sceneHandle = 0;           // Corner or edge dragged (see sceneRecorderWindow())
     ImVec2 _sceneDragStart;
     SceneSource _sceneDragOriginal;
     bool _sceneRecording = false;
