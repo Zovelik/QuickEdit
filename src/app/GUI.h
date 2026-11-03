@@ -712,6 +712,7 @@ private:
     SubtitleGenerator _mcpTranscriber;
     std::filesystem::path _mcpTranscribeModel;
     std::string _mcpTranscribeLanguage;
+    std::string _mcpTranscribePrompt;
     bool _mcpTranscribeStarted = false;
 
     // A frame of the viewer read back (render_frame): once the pictures of

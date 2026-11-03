@@ -384,8 +384,8 @@ namespace core
         Rational frameRate = { 60, 1 };
         uint32_t sampleRate = 48000;
 
-        // Video tracks are composited from the last (bottom) to the first
-        // (top), as shown in the timeline. Each one has a sound track, of the
+        // Video tracks are composited from the first (V1, at the bottom of
+        // the timeline) to the last (on top). Each one has a sound track, of the
         // same index, for the sound of its video clips. Audio tracks hold
         // the other sounds (voice, music).
         std::vector<Track> videoTracks;

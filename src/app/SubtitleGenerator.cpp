@@ -266,6 +266,7 @@ void SubtitleGenerator::run(std::vector<float> samples, Settings settings)
     else {
         whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
         params.language = settings.language.c_str();
+        params.initial_prompt = settings.prompt.empty() ? nullptr : settings.prompt.c_str();
         params.translate = false;
         params.print_progress = false;
         params.print_realtime = false;

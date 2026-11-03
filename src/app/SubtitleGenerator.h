@@ -73,6 +73,10 @@ public:
         std::string language = "auto";  // Or "fr", "en"...
         bool useGpu = true;
         int maxCharacters = 60;         // Per line of subtitles, about
+
+        // Words to expect (names, jargon), given to the model as the text
+        // before: "QuickEdit, Vulkan, MCP".
+        std::string prompt;
     };
 
     ~SubtitleGenerator();

@@ -175,6 +175,7 @@ public:
 
     // Horizontal zoom, in pixels per second.
     float zoom() const { return _pixelsPerSecond; }
+    float visibleWidth() const { return std::max(1.f, _timelineRight - _timelineLeft); }     // Pixels of the tracks area
     void setZoom(float pixelsPerSecond);
 
     // Zooms to show the whole sequence on the next frame.

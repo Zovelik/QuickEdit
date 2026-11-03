@@ -233,7 +233,9 @@ Json GUI::mcpTools()
     tools.push_back(tool("transcribe_media",
         "The speech of a media (video or audio) with its times, by speech recognition (whisper.cpp, a model must be downloaded in QuickEdit). "
         "Can take a minute.",
-        R"({"media_id": {"type": "integer"}, "language": {"type": "string", "description": "auto (default), en, fr..."}})", R"(["media_id"])"));
+        R"({"media_id": {"type": "integer"}, "language": {"type": "string", "description": "auto (default), en, fr..."},
+            "vocabulary": {"type": "string", "description": "Names and words to expect, spelled right, such as: QuickEdit, Vulkan, MCP"}})",
+        R"(["media_id"])"));
     tools.push_back(tool("list_shaders",
         "The shaders (built in and the user's): generators (pictures), transitions, blend modes, resampling; their ids and parameters."));
 
@@ -314,6 +316,18 @@ Json GUI::mcpTools()
     // Project
     tools.push_back(tool("set_playhead", "Moves the playhead of QuickEdit (what the user sees).",
         R"({"time": {"type": "number"}})", R"(["time"])"));
+    tools.push_back(tool("play", "Plays the sequence in the viewer, with its sound (from time when given), until pause or its end.",
+        R"({"time": {"type": "number"}})"));
+    tools.push_back(tool("pause", "Stops the playback; the playhead stays where it is."));
+    tools.push_back(tool("select_clips", "Selects clips, as a click would (the inspector shows the first); an empty list selects none.",
+        R"({"clip_ids": {"type": "array", "items": {"type": "integer"}}})", R"(["clip_ids"])"));
+    tools.push_back(tool("zoom_timeline", "Zooms the timeline: the whole sequence (fit), or a number of seconds across.",
+        R"({"fit": {"type": "boolean"}, "seconds": {"type": "number"}})"));
+    tools.push_back(tool("show_window",
+        "Shows a window or a panel of QuickEdit, for the user (or a demo): record_voice, record_screen, record_scene, generate_subtitles, "
+        "shader_editor (with shader_id of a shader of the user), export, preferences, project_properties, keyframes, effects; or close: "
+        "true to close the floating ones.",
+        R"({"window": {"type": "string"}, "shader_id": {"type": "string"}, "close": {"type": "boolean"}})"));
     tools.push_back(tool("undo", "Undoes the last edit (the user's or yours)."));
     tools.push_back(tool("redo", "Redoes the last edit undone."));
     tools.push_back(tool("save_project", "Saves the project (to path when given, a .qep file).",
@@ -574,10 +588,21 @@ std::optional<Json> GUI::mcpCall(const std::string& name, const Json& args, int 
             return error("No clip " + std::to_string(id) + " in the current sequence.");
         }
 
+        // What the numbers of some fields mean.
+        static const Json legend = Json::parse(R"json({
+            "text.animation.in / out": "0 none, 1 typewriter, 2 fade, 3 rise, 4 pop (letter by letter)",
+            "text.align": "0 left, 1 center, 2 right",
+            "text.motion": "absent: still, roll (end credits), crawl (ticker)",
+            "colors": "[r, g, b, a], 0 to 1",
+            "keyframes": "transform.x (and others): a number, or {value, keys: [[time in ticks from the clip start, value, easing]]}; easing 0 linear, 1 ease in, 2 ease out, 3 ease in out, 4 hold",
+            "transform": "x, y: pixels from the center of the frame (y down); scale: 1 = fitted; rotation: degrees; opacity: 0 to 1"
+        })json");
+
         Json answer = Json::object();
         answer["ticksPerSecond"] = (int64_t)TicksPerSecond;
         answer["track"] = _project.findTrackOfClip(id)->id;
         answer["clip"] = clip;
+        answer["legend"] = legend;
         return done(answer);
     }
 
@@ -651,6 +676,7 @@ std::optional<Json> GUI::mcpCall(const std::string& name, const Json& args, int 
 
             _mcpTranscribeModel = modelFolder() / chosen->file;
             _mcpTranscribeLanguage = args["language"].toString("auto");
+            _mcpTranscribePrompt = args["vocabulary"].toString();
             _mcpTranscribeStarted = false;
         }
 
@@ -674,6 +700,7 @@ std::optional<Json> GUI::mcpCall(const std::string& name, const Json& args, int 
             SubtitleGenerator::Settings settings;
             settings.model = _mcpTranscribeModel;
             settings.language = _mcpTranscribeLanguage;
+            settings.prompt = _mcpTranscribePrompt;
             _mcpTranscriber.start(std::move(samples), settings);
             _mcpTranscribeStarted = true;
             return std::nullopt;
@@ -1250,6 +1277,73 @@ std::optional<Json> GUI::mcpCall(const std::string& name, const Json& args, int 
         stopPlayback();
         seek(std::max<Time>(0, ticks(args["time"])));
         return McpServer::textResult("Playhead moved.");
+    }
+
+    if (name == "play") {
+        if (args.contains("time")) seek(std::max<Time>(0, ticks(args["time"])));
+        if (!_playing) togglePlayback();
+        return McpServer::textResult("Playing.");
+    }
+
+    if (name == "pause") {
+        stopPlayback();
+        return McpServer::textResult("Paused at " + std::to_string(seconds(_playhead)) + " s.");
+    }
+
+    if (name == "select_clips") {
+        _selection.clear();
+
+        for (const Json& id : args["clip_ids"].items()) {
+            if (_project.findClip((Id)id.toInt())) _selection.push_back((Id)id.toInt());
+        }
+
+        return McpServer::textResult(std::to_string(_selection.size()) + " clip(s) selected.");
+    }
+
+    if (name == "zoom_timeline") {
+        if (args["fit"].toBool(false) || !args.contains("seconds")) {
+            _timeline.requestZoomToFit();
+        }
+        else {
+            // Pixels per second for that many seconds across the tracks.
+            const double visible = std::clamp(args["seconds"].toDouble(30.0), 0.5, 36000.0);
+            _timeline.setZoom((float)(_timeline.visibleWidth() / visible));
+        }
+
+        return McpServer::textResult("Zoomed.");
+    }
+
+    if (name == "show_window") {
+        if (args["close"].toBool(false)) {
+            _showRecorder = _showScreenRecorder = _showSceneRecorder = _showSubtitleGenerator = _showShaderEditor = false;
+            return McpServer::textResult("Closed.");
+        }
+
+        const std::string window = args["window"].toString();
+
+        if (window == "record_voice") _showRecorder = true;
+        else if (window == "record_screen") _showScreenRecorder = true;
+        else if (window == "record_scene") _showSceneRecorder = true;
+        else if (window == "generate_subtitles") _showSubtitleGenerator = true;
+        else if (window == "export") _requestExportPopup = true;
+        else if (window == "preferences") _requestPreferences = true;
+        else if (window == "project_properties") _requestProjectProperties = true;
+        else if (window == "keyframes") _focusKeyframes = true;
+        else if (window == "effects") _showEffectsTab = true;
+        else if (window == "shader_editor") {
+            const std::string shaderId = args["shader_id"].toString();
+
+            if (shaderId.rfind("file:", 0) != 0) {
+                return error("The editor opens the shaders of the user (shader_id \"file:...\", see list_shaders).");
+            }
+
+            editShader(shaderId);
+        }
+        else {
+            return error("Unknown window " + window);
+        }
+
+        return McpServer::textResult("Shown.");
     }
 
     if (name == "undo") {
