@@ -159,7 +159,8 @@ void toPreview(SwsContext*& sws, const AVFrame* frame, std::vector<uint8_t>& rgb
     const int x = (width - w) / 2;
     const int y = (height - h) / 2;
 
-    sws = sws_getCachedContext(sws, frame->width, frame->height, (AVPixelFormat)frame->format, w, h, AV_PIX_FMT_RGBA, SWS_BILINEAR, nullptr, nullptr, nullptr);
+    // Area: every pixel of the source counts, sharp text when reduced a lot.
+    sws = sws_getCachedContext(sws, frame->width, frame->height, (AVPixelFormat)frame->format, w, h, AV_PIX_FMT_RGBA, SWS_AREA, nullptr, nullptr, nullptr);
 
     if (!sws) {
         return;
@@ -175,6 +176,42 @@ void toPreview(SwsContext*& sws, const AVFrame* frame, std::vector<uint8_t>& rgb
     const int linesize[4] = { width * 4, 0, 0, 0 };
 
     sws_scale(sws, frame->data, frame->linesize, 0, frame->height, data, linesize);
+}
+
+
+// The size of the previews of a screen or a window: its shape within
+// SourcePreview::Width x Height, even. The capture reduces its pictures to
+// it on the GPU, so that a fraction of them is downloaded.
+std::pair<int, int> previewSize(const CaptureSource& source)
+{
+    int width = 0;
+    int height = 0;
+
+#ifdef _WIN32
+    if (source.kind == CaptureSource::Kind::Monitor) {
+        MONITORINFO info = { sizeof(info) };
+
+        if (GetMonitorInfoW((HMONITOR)(uintptr_t)source.handle, &info)) {
+            width = info.rcMonitor.right - info.rcMonitor.left;
+            height = info.rcMonitor.bottom - info.rcMonitor.top;
+        }
+    }
+    else if (source.kind == CaptureSource::Kind::Window) {
+        RECT rect = {};
+
+        if (SUCCEEDED(DwmGetWindowAttribute((HWND)(uintptr_t)source.handle, DWMWA_EXTENDED_FRAME_BOUNDS, &rect, sizeof(rect)))) {
+            width = rect.right - rect.left;
+            height = rect.bottom - rect.top;
+        }
+    }
+#endif
+
+    if (width <= 0 || height <= 0) {
+        return { SourcePreview::Width, SourcePreview::Height };
+    }
+
+    const float fit = std::min(1.f, std::min((float)SourcePreview::Width / (float)width, (float)SourcePreview::Height / (float)height));
+    return { std::max(2, (int)((float)width * fit) & ~1), std::max(2, (int)((float)height * fit) & ~1) };
 }
 
 
@@ -1407,16 +1444,20 @@ void ScreenRecorder::audioLoop()
 
 void ScreenRecorder::updatePreview(const void* data)
 {
-    // A few times a second; pictures on the GPU downloaded for it.
+    // Up to 30 times a second, less for pictures larger than 1080p: those
+    // on the GPU are downloaded whole for it (about 8 MB for 1080p, a few
+    // ms), on the thread of the recording.
+    const AVFrame* picture = static_cast<const AVFrame*>(data);
     const uint64_t now = SDL_GetTicks();
+    const double size = (double)picture->width * picture->height / (1920.0 * 1080.0);
+    const uint64_t interval = (uint64_t)(33.0 * std::max(1.0, picture->hw_frames_ctx ? size : 1.0));
 
-    if (now - _previewTicks < 150) {
+    if (now - _previewTicks < interval) {
         return;
     }
 
     _previewTicks = now;
 
-    const AVFrame* picture = static_cast<const AVFrame*>(data);
     AVFrame* downloaded = nullptr;
 
     if (picture->hw_frames_ctx) {
@@ -1549,10 +1590,6 @@ void previewLoop(std::shared_ptr<SourcePreview::State> state, CaptureSource sour
     int streamIndex = -1;
     std::string error;
 
-    // Of the source, when the pictures are reduced before they get here.
-    int sourceWidth = 0;
-    int sourceHeight = 0;
-
     // Not more pictures than the preview shows (the screens give one per
     // refresh of the display).
     Uint64 last = 0;
@@ -1568,8 +1605,8 @@ void previewLoop(std::shared_ptr<SourcePreview::State> state, CaptureSource sour
         std::scoped_lock lock(state->mutex);
         state->rgba.swap(rgba);
         state->fresh = true;
-        state->frameWidth = (sourceWidth > 0) ? sourceWidth : frame->width;
-        state->frameHeight = (sourceHeight > 0) ? sourceHeight : frame->height;
+        state->frameWidth = frame->width;
+        state->frameHeight = frame->height;
     };
 
     bool opened = false;
@@ -1578,23 +1615,16 @@ void previewLoop(std::shared_ptr<SourcePreview::State> state, CaptureSource sour
         opened = openCamera(source, false, input, decoder, streamIndex, error);
     }
     else {
-        // Reduced on the GPU to the size of the preview, then downloaded:
-        // a whole screen downloaded and reduced on the CPU is too slow for
-        // a fluid preview. Without that filter, the whole pictures, fewer.
+        // Reduced by the capture itself (on the GPU, bicubic) to the size of
+        // the preview, its shape kept, then downloaded: a whole screen
+        // downloaded and reduced on the CPU is too slow for a fluid preview.
+        // Without that, the whole pictures, fewer.
         int result = 0;
-        const std::string fit = "scale_d3d11=width='min(" + std::to_string(SourcePreview::Width) + ",iw*" + std::to_string(SourcePreview::Height) + "/ih)'"
-            ":height='min(" + std::to_string(SourcePreview::Height) + ",ih*" + std::to_string(SourcePreview::Width) + "/iw)'";
-        graph = openGraph(captureFilter(source, SourcePreview::FrameRate, true) + "," + fit + ",hwdownload,format=bgra", sink, result);
+        const auto [width, height] = previewSize(source);
+        graph = openGraph(captureFilter(source, SourcePreview::FrameRate, true) + ":width=" + std::to_string(width) + ":height=" + std::to_string(height) +
+            ":resize_mode=scale:scale_mode=bicubic,hwdownload,format=bgra", sink, result);
 
-        if (graph) {
-            const AVFilterContext* capture = avfilter_graph_get_filter(graph, "Parsed_gfxcapture_0");
-
-            if (capture && capture->nb_outputs > 0) {
-                sourceWidth = capture->outputs[0]->w;
-                sourceHeight = capture->outputs[0]->h;
-            }
-        }
-        else {
+        if (!graph) {
             graph = openGraph(captureFilter(source, 5, true) + ",hwdownload,format=bgra", sink, result);
         }
 

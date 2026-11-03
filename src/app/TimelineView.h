@@ -186,7 +186,8 @@ private:
         FadeOut,
         Marquee,        // A rectangle selecting the clips it touches
         Slip,           // The media moved inside the clips
-        ResizeTrack     // The bottom edge of a track header dragged
+        ResizeTrack,    // The bottom edge of a track header dragged
+        Transition      // An edge of a transition: its length
     };
 
     // Marquee: where it started (time, and y in the scrolled rows), the

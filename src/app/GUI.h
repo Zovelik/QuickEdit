@@ -576,6 +576,8 @@ private:
     };
 
     void updateScreenRecording();           // Each frame: a job done goes on
+    void viewerRecording(ImDrawList* drawList, const ImVec2& frameMin, const ImVec2& frameSize);  // The viewer while recording
+    core::Id soundTrackOf(core::Id videoTrack) const;   // Paired with it, where the sound of a recording goes
     void beginScreenRecording(ScreenJob job);
     void placeScreenRecording(ScreenJob job);
     bool _screenStarting = false;

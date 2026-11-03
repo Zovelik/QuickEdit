@@ -529,6 +529,34 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
         }
     }
 
+    // The edges of the transitions (lower part of the video tracks, as
+    // drawn): their length, the same on both sides of the cut.
+    Id transitionClip = InvalidId;
+
+    if (hovered && hoveredRow && hoveredRow->type == TrackType::Video && _tool == Tool::Select && _dragMode == DragMode::None &&
+        mouse.x >= _timelineLeft && mouse.y > hoveredRow->top + 0.35f * hoveredRow->height) {
+        const Track& track = tracksOfType(sequence, hoveredRow->type)[hoveredRow->trackIndex];
+
+        for (const Clip& clip : track.clips) {
+            if (track.locked || clip.transitionIn.type == TransitionType::None) {
+                continue;
+            }
+
+            const Time half = std::min(clip.transitionIn.duration, clip.duration) / 2;
+            const float x0 = timeToX(clip.start - half);
+            const float x1 = std::max(timeToX(clip.start + half), x0 + 0.8f * unit);
+
+            if (std::abs(mouse.x - x0) < 0.35f * unit || std::abs(mouse.x - x1) < 0.35f * unit) {
+                transitionClip = clip.id;
+                break;
+            }
+        }
+    }
+
+    if (transitionClip != InvalidId || _dragMode == DragMode::Transition) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+
     // The other tools than Select do not trim, nor change the fades.
     if (_tool != Tool::Select && hoveredMode != DragMode::None) {
         hoveredMode = DragMode::Move;
@@ -615,6 +643,11 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
 
             // The clips may have moved in memory.
             hoveredClip = nullptr;
+        }
+        else if (transitionClip != InvalidId) {
+            toolClick = true;
+            _dragMode = DragMode::Transition;
+            _grabbedClip = transitionClip;
         }
         else if (const StreamRow* streamRow = (mouse.x >= _timelineLeft && mouse.y >= _tracksTop) ? streamRowAt(mouse.y) : nullptr) {
             // A stream of a clip: the clip, with its links.
@@ -785,7 +818,21 @@ TimelineView::Result TimelineView::draw(Project& project, Time& playhead, std::v
         ImGui::EndPopup();
     }
 
-    if (_dragMode == DragMode::FadeIn || _dragMode == DragMode::FadeOut) {
+    if (_dragMode == DragMode::Transition) {
+        if (Clip* clip = project.findClip(_grabbedClip)) {
+            const Time frame = frameDuration(sequence);
+            const Time half = std::abs(roundToFrame(xToTime(mouse.x), sequence) - clip->start);
+            clip->transitionIn.duration = std::clamp<Time>(2 * half, 2 * frame, std::max(2 * frame, clip->duration));
+        }
+
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            _dragMode = DragMode::None;
+            _grabbedClip = InvalidId;
+            result.edited = true;
+            result.label = "Change transition length";
+        }
+    }
+    else if (_dragMode == DragMode::FadeIn || _dragMode == DragMode::FadeOut) {
         if (Clip* clip = project.findClip(_grabbedClip)) {
             const Time t = roundToFrame(xToTime(mouse.x), sequence);
 

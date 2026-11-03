@@ -1787,12 +1787,20 @@ void GUI::viewerPanel()
     drawList->AddRectFilled(origin, ImVec2(origin.x + area.x, origin.y + area.y), IM_COL32(12, 12, 12, 255));
     drawList->AddRectFilled(frameMin, frameMax, IM_COL32(0, 0, 0, 255));
 
-    // The composited frame.
-    if (_compositor->texture()) {
+    // The composited frame; while recording the screen or a scene, what is
+    // recorded instead (the pictures of its previews).
+    const bool recordingPicture = _screenRecording || _sceneRecording;
+
+    if (recordingPicture) {
+        viewerRecording(drawList, frameMin, frameSize);
+    }
+    else if (_compositor->texture()) {
         drawList->AddImage(_compositor->texture(), frameMin, frameMax);
     }
 
-    viewerInteraction(frameMin, frameSize);
+    if (!recordingPicture) {
+        viewerInteraction(frameMin, frameSize);
+    }
 
     // Waiting for a picture: a spinner and a word, in the corner. Only after
     // a moment: the decoders often finish a frame or two late while playing,
@@ -1864,6 +1872,59 @@ void GUI::viewerPanel()
     ImGui::TextDisabled("%s", duration.c_str());
 
     ImGui::End();
+}
+
+
+void GUI::viewerRecording(ImDrawList* drawList, const ImVec2& frameMin, const ImVec2& frameSize)
+{
+    constexpr float PreviewWidth = (float)capture::SourcePreview::Width;
+    constexpr float PreviewHeight = (float)capture::SourcePreview::Height;
+
+    // A preview texture: the part of it that holds the picture (without
+    // its letterboxing), drawn in a rectangle.
+    auto drawPicture = [&](ImTextureData* texture, int pictureWidth, int pictureHeight, const ImVec2& min, const ImVec2& max) {
+        const float fit = (pictureWidth > 0) ? std::min(PreviewWidth / (float)pictureWidth, PreviewHeight / (float)pictureHeight) : 1.f;
+        const float w = (pictureWidth > 0) ? (float)pictureWidth * fit / PreviewWidth : 1.f;
+        const float h = (pictureHeight > 0) ? (float)pictureHeight * fit / PreviewHeight : 1.f;
+        drawList->AddImage(texture->GetTexRef(), min, max, ImVec2(0.5f - 0.5f * w, 0.5f - 0.5f * h), ImVec2(0.5f + 0.5f * w, 0.5f + 0.5f * h));
+    };
+
+    drawList->PushClipRect(frameMin, ImVec2(frameMin.x + frameSize.x, frameMin.y + frameSize.y), true);
+
+    if (_sceneRecording) {
+        // Each source in its rectangle, as placed once recorded.
+        if (const RecordingScene* scene = currentScene()) {
+            for (size_t i = 0; i < scene->sources.size() && i < _scenePreviews.size(); i++) {
+                const SceneSource& source = scene->sources[i];
+                const ScenePreview& preview = *_scenePreviews[i];
+
+                if (preview.texture && source.available) {
+                    const ImVec2 min(frameMin.x + source.x * frameSize.x, frameMin.y + source.y * frameSize.y);
+                    const ImVec2 max(min.x + source.width * frameSize.x, min.y + source.height * frameSize.y);
+                    drawPicture(preview.texture, preview.frameWidth, preview.frameHeight, min, max);
+                }
+            }
+        }
+    }
+    else if (_previewTexture) {
+        // The screen, fitted in the frame (its shape is the one of the
+        // preview, letterboxed).
+        const float fit = std::min(frameSize.x / PreviewWidth, frameSize.y / PreviewHeight);
+        const ImVec2 size(PreviewWidth * fit, PreviewHeight * fit);
+        const ImVec2 min(frameMin.x + 0.5f * (frameSize.x - size.x), frameMin.y + 0.5f * (frameSize.y - size.y));
+        drawPicture(_previewTexture, 0, 0, min, ImVec2(min.x + size.x, min.y + size.y));
+    }
+
+    // What it is, in the corner.
+    const float unit = ImGui::GetFontSize();
+    const char* label = tr(ICON_MD_FIBER_MANUAL_RECORD " Recording");
+    const ImVec2 textSize = ImGui::CalcTextSize(label);
+    const ImVec2 boxMin(frameMin.x + 0.6f * unit, frameMin.y + 0.6f * unit);
+    const ImVec2 boxMax(boxMin.x + textSize.x + 1.2f * unit, boxMin.y + textSize.y + 0.8f * unit);
+    drawList->AddRectFilled(boxMin, boxMax, IM_COL32(170, 40, 35, 220), 0.4f * unit);
+    drawList->AddText(ImVec2(boxMin.x + 0.6f * unit, boxMin.y + 0.4f * unit), IM_COL32(255, 255, 255, 255), label);
+
+    drawList->PopClipRect();
 }
 
 
@@ -4440,6 +4501,18 @@ void GUI::startScreenRecording()
 }
 
 
+Id GUI::soundTrackOf(Id videoTrack) const
+{
+    const Sequence& sequence = _project.sequence();
+
+    for (size_t i = 0; i < sequence.videoTracks.size() && i < sequence.soundTracks.size(); i++) {
+        if (sequence.videoTracks[i].id == videoTrack) return sequence.soundTracks[i].id;
+    }
+
+    return InvalidId;
+}
+
+
 void GUI::updateScreenRecording()
 {
     if (!_screenJob.valid() || _screenJob.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
@@ -5039,13 +5112,19 @@ void GUI::timelinePanel()
             _timeline.addLiveRecording(std::move(live));
         }
 
-        // Screen recording: the picture, and the microphone beside it.
+        // Screen recording: the picture, its sound, and the microphone
+        // beside them.
         if (_screenRecording) {
             TimelineView::LiveRecording live;
             live.trackId = _screenTrack;
             live.start = _screenStart;
             live.length = secondsToTime(_screenRecorder.seconds());
             _timeline.addLiveRecording(live);
+
+            if (_captureSound) {
+                live.trackId = soundTrackOf(_screenTrack);
+                _timeline.addLiveRecording(live);
+            }
 
             if (!_screenMicrophonePath.empty() && _recorder.recording()) {
                 updateLiveWaveform();
@@ -5057,14 +5136,27 @@ void GUI::timelinePanel()
             }
         }
 
-        // Scene recording: each source on its track, until placed.
+        // Scene recording: each source on its track, until placed. The
+        // sound (computer, microphone) goes with the first source.
         if (_sceneRecording) {
             for (const SceneTake& take : _sceneTakes) {
                 TimelineView::LiveRecording live;
                 live.trackId = take.trackId;
                 live.start = _sceneStart;
                 live.length = secondsToTime(take.recorder->seconds());
-                _timeline.addLiveRecording(std::move(live));
+                _timeline.addLiveRecording(live);
+
+                const bool microphone = &take == &_sceneTakes.front() && !_sceneMicrophonePath.empty() && _recorder.recording();
+
+                if (take.settings.systemAudio || microphone) {
+                    if (microphone) {
+                        updateLiveWaveform();
+                        live.waveform = _liveWaveform;
+                    }
+
+                    live.trackId = soundTrackOf(take.trackId);
+                    _timeline.addLiveRecording(std::move(live));
+                }
             }
         }
 
@@ -6678,6 +6770,16 @@ void GUI::updatePlayback()
     // recording.
     if (_recorder.recording() && !_screenRecording && !_sceneRecording && !_playing) {
         _playhead = _recordStart + mulDivFloor(_recorder.recordedFrames(), TicksPerSecond, audio::Recorder::SampleRate);
+        return;
+    }
+
+    if (_screenRecording && !_playing) {
+        _playhead = _screenStart + secondsToTime(_screenRecorder.seconds());
+        return;
+    }
+
+    if (_sceneRecording && !_playing) {
+        _playhead = _sceneStart + secondsToTime(sceneSeconds());
         return;
     }
 

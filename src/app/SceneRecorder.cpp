@@ -920,6 +920,10 @@ void GUI::stopSceneRecording()
 
     for (const SceneTake& take : _sceneTakes) {
         _sceneFinishingLive.push_back({ take.trackId, secondsToTime(take.recorder->seconds()) });
+
+        if (take.settings.systemAudio || (&take == &_sceneTakes.front() && microphoneFrames > 0)) {
+            _sceneFinishingLive.push_back({ soundTrackOf(take.trackId), secondsToTime(take.recorder->seconds()) });
+        }
     }
 
     // Finishing the files (the last pictures encoded, the microphone added)
