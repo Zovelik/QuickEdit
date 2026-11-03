@@ -5643,6 +5643,109 @@ void GUI::projectPropertiesPopup()
 }
 
 
+namespace {
+
+// Settings for the sites a video is made for, after their upload guidelines
+// (H.264 or H.265, AAC, 48 kHz): the bit rate follows the size and the
+// frame rate chosen.
+struct ExportPreset
+{
+    const char* name;
+    const char* tooltip;
+    ExportSettings::Codec codec;
+    int shortSide;                      // Of the picture; 0 for the sequence's
+    float (*mbps)(int shortSide, double fps);
+    ExportSettings::RateControl rateControl;
+    int quality;
+    ExportSettings::Speed speed;
+    float keyframeSeconds;
+    int bFrames;
+    int audioKbps;
+    float lufs;                         // 0: the loudness left as it is
+};
+
+
+// Mbit/s by height (shortest side) of the picture, 720p to 4K, and for more
+// than 30 frames per second.
+float byHeight(int shortSide, double fps, const float (&rates)[4], float highRate)
+{
+    const float rate = (shortSide >= 2160) ? rates[3] : (shortSide >= 1440) ? rates[2] : (shortSide >= 1080) ? rates[1] : (shortSide >= 720) ? rates[0] : rates[0] * 0.5f;
+    return (fps > 31.0) ? rate * highRate : rate;
+}
+
+
+const std::vector<ExportPreset>& exportPresets()
+{
+    using RC = ExportSettings::RateControl;
+    using Speed = ExportSettings::Speed;
+    using Codec = ExportSettings::Codec;
+
+    static const std::vector<ExportPreset> presets = {
+        { "Custom", "Your own settings", Codec::H264, 0, nullptr, RC::VBR, 23, Speed::Balanced, 2.f, -1, 192, 0.f },
+        { "YouTube", "YouTube's recommended upload settings: H.264 High, bit rate after the size and the frame rate,\nkey frames every half second, 2 B-frames, AAC 384 kbit/s, -14 LUFS (YouTube's level)",
+            Codec::H264, 0, [](int side, double fps) { static const float r[4] = { 5.f, 8.f, 16.f, 45.f }; return byHeight(side, fps, r, 1.5f); },
+            RC::VBR, 23, Speed::Best, 0.5f, 2, 384, -14.f },
+        { "Shorts / Reels / TikTok", "Vertical or square videos for YouTube Shorts, Instagram Reels and TikTok:\n1080 pixels wide, 10 Mbit/s, AAC 256 kbit/s, -14 LUFS",
+            Codec::H264, 1080, [](int, double fps) { return fps > 31.0 ? 12.f : 10.f; },
+            RC::VBR, 23, Speed::Best, 1.f, 2, 256, -14.f },
+        { "Vimeo", "Vimeo's guidelines: H.264, 10 to 60 Mbit/s after the size, AAC 320 kbit/s",
+            Codec::H264, 0, [](int side, double fps) { static const float r[4] = { 10.f, 20.f, 30.f, 60.f }; return byHeight(side, fps, r, 1.25f); },
+            RC::VBR, 23, Speed::Best, 2.f, 2, 320, 0.f },
+        { "X (Twitter)", "1080p at most, H.264, 15 Mbit/s (25 at most), AAC 192 kbit/s",
+            Codec::H264, 1080, [](int, double fps) { return fps > 31.0 ? 20.f : 15.f; },
+            RC::VBR, 23, Speed::Best, 2.f, 2, 192, -14.f },
+        { "Facebook", "1080p, H.264, 10 Mbit/s, AAC 192 kbit/s",
+            Codec::H264, 1080, [](int, double fps) { return fps > 31.0 ? 12.f : 10.f; },
+            RC::VBR, 23, Speed::Best, 2.f, 2, 192, -14.f },
+        { "Archive (best quality)", "To keep or edit again: H.265 at a constant high quality whatever the size, AAC 320 kbit/s",
+            Codec::H265, 0, nullptr, RC::ConstantQuality, 18, Speed::Best, 2.f, -1, 320, 0.f },
+        { "Quick preview", "Small and fast to make: 720p, 4 Mbit/s, AAC 128 kbit/s",
+            Codec::H264, 720, [](int, double) { return 4.f; },
+            RC::VBR, 23, Speed::Fast, 2.f, -1, 128, 0.f },
+    };
+
+    return presets;
+}
+
+}
+
+
+void GUI::applyExportPreset(int index)
+{
+    _exportPreset = index;
+
+    if (index <= 0 || index >= (int)exportPresets().size()) {
+        return;
+    }
+
+    const ExportPreset& preset = exportPresets()[(size_t)index];
+    const Sequence& sequence = _project.sequence();
+
+    _exportSettings.codec = preset.codec;
+    _exportSettings.rateControl = preset.rateControl;
+    _exportSettings.quality = preset.quality;
+    _exportSettings.speed = preset.speed;
+    _exportSettings.keyframeSeconds = preset.keyframeSeconds;
+    _exportSettings.bFrames = preset.bFrames;
+    _exportSettings.audioKbps = preset.audioKbps;
+    _exportSettings.normalizeLoudness = preset.lufs < 0.f;
+
+    if (preset.lufs < 0.f) {
+        _exportSettings.targetLufs = preset.lufs;
+    }
+
+    // The shortest side, never larger than the sequence's.
+    const uint32_t shortest = std::min(sequence.width, sequence.height);
+    _exportSettings.height = 0;
+
+    if (preset.shortSide > 0 && (uint32_t)preset.shortSide < shortest) {
+        _exportSettings.height = (sequence.height > sequence.width)
+            ? (uint32_t)std::lround((double)preset.shortSide * sequence.height / std::max(1u, sequence.width)) & ~1u
+            : (uint32_t)preset.shortSide;
+    }
+}
+
+
 void GUI::exportPopup()
 {
     if (std::exchange(_requestExportPopup, false)) {
@@ -5733,6 +5836,29 @@ void GUI::exportPopup()
         SDL_ShowSaveFileDialog(GUI::onExportFile, this, window(), exportFilters, SDL_arraysize(exportFilters), nullptr);
     }
 
+    // Presets: the settings for a site. A change of the settings below
+    // (but the size and the frame rate) makes them custom.
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", tr("Preset"));
+    ImGui::SameLine(labelWidth);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+
+    const std::vector<ExportPreset>& presets = exportPresets();
+
+    if (ImGui::BeginCombo("##exportPreset", tr(presets[(size_t)std::clamp(_exportPreset, 0, (int)presets.size() - 1)].name))) {
+        for (int i = 0; i < (int)presets.size(); i++) {
+            if (ImGui::Selectable(tr(presets[(size_t)i].name), i == _exportPreset)) {
+                applyExportPreset(i);
+            }
+
+            ImGui::SetItemTooltip("%s", tr(presets[(size_t)i].tooltip));
+        }
+
+        ImGui::EndCombo();
+    }
+
+    bool customized = false;
+
     ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("%s", tr("Codec"));
     ImGui::SameLine(labelWidth);
@@ -5743,25 +5869,38 @@ void GUI::exportPopup()
 
     if (ImGui::Combo("##codec", &codec, codecs, IM_ARRAYSIZE(codecs))) {
         _exportSettings.codec = (ExportSettings::Codec)codec;
+        customized = true;
     }
 
     ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("%s", tr("Quality"));
     ImGui::SameLine(labelWidth);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    ImGui::SliderFloat("##bitrate", &_exportSettings.bitrateMbps, 2.f, 100.f, "%.0f Mbit/s", ImGuiSliderFlags_Logarithmic);
+
+    if (_exportSettings.rateControl == ExportSettings::RateControl::ConstantQuality) {
+        // A quantizer: lower is better (and larger).
+        if (ImGui::SliderInt("##constantQuality", &_exportSettings.quality, 10, 40, tr("Constant quality %d (lower: better)"))) {
+            customized = true;
+        }
+    }
+    else if (ImGui::SliderFloat("##bitrate", &_exportSettings.bitrateMbps, 2.f, 100.f, "%.0f Mbit/s", ImGuiSliderFlags_Logarithmic)) {
+        customized = true;
+    }
 
     ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("%s", tr("Audio"));
     ImGui::SameLine(labelWidth);
-    ImGui::Checkbox(tr("AAC, 192 kbit/s"), &_exportSettings.audio);
+
+    char audioLabel[64];
+    std::snprintf(audioLabel, sizeof(audioLabel), tr("AAC, %d kbit/s"), _exportSettings.audioKbps);
+    ImGui::Checkbox(audioLabel, &_exportSettings.audio);
 
     // Loudness: the usual targets, or any.
     ImGui::BeginDisabled(!_exportSettings.audio);
     ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("%s", tr("Loudness"));
     ImGui::SameLine(labelWidth);
-    ImGui::Checkbox(tr("Normalize to##loudness"), &_exportSettings.normalizeLoudness);
+    customized |= ImGui::Checkbox(tr("Normalize to##loudness"), &_exportSettings.normalizeLoudness);
     ImGui::SetItemTooltip("%s", tr("The whole sound is measured first (EBU R128), then brought to this loudness,\n"
         "its peaks kept under -1 dB."));
     ImGui::SameLine();
@@ -5792,12 +5931,13 @@ void GUI::exportPopup()
         for (const LoudnessTarget& target : targets) {
             if (ImGui::Selectable(tr(target.label), target.lufs == _exportSettings.targetLufs)) {
                 _exportSettings.targetLufs = target.lufs;
+                customized = true;
             }
         }
 
         ImGui::Separator();
         ImGui::SetNextItemWidth(8.f * ImGui::GetFontSize());
-        ImGui::DragFloat(tr("Other##otherLufs"), &_exportSettings.targetLufs, 0.1f, -40.f, -5.f, tr("%.1f LUFS"), ImGuiSliderFlags_AlwaysClamp);
+        customized |= ImGui::DragFloat(tr("Other##otherLufs"), &_exportSettings.targetLufs, 0.1f, -40.f, -5.f, tr("%.1f LUFS"), ImGuiSliderFlags_AlwaysClamp);
         ImGui::EndCombo();
     }
 
@@ -5882,6 +6022,72 @@ void GUI::exportPopup()
         }
 
         ImGui::EndCombo();
+    }
+
+    // Advanced: as the encoders allow (the hardware ones ignore some).
+    if (ImGui::CollapsingHeader(tr("Advanced"))) {
+        auto row = [&](const char* label) {
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", tr(label));
+            ImGui::SameLine(labelWidth);
+            ImGui::SetNextItemWidth(-FLT_MIN);
+        };
+
+        row("Rate control");
+        const char* rateControls[] = { tr("Variable bit rate (VBR)"), tr("Constant bit rate (CBR, streaming)"), tr("Constant quality (size varies)") };
+        int rateControl = (int)_exportSettings.rateControl;
+
+        if (ImGui::Combo("##rateControl", &rateControl, rateControls, IM_ARRAYSIZE(rateControls))) {
+            _exportSettings.rateControl = (ExportSettings::RateControl)rateControl;
+            customized = true;
+        }
+
+        row("Speed");
+        const char* speeds[] = { tr("Fast"), tr("Balanced"), tr("Best quality") };
+        int speed = (int)_exportSettings.speed;
+
+        if (ImGui::Combo("##speed", &speed, speeds, IM_ARRAYSIZE(speeds))) {
+            _exportSettings.speed = (ExportSettings::Speed)speed;
+            customized = true;
+        }
+
+        row("Key frames");
+        customized |= ImGui::SliderFloat("##keyframes", &_exportSettings.keyframeSeconds, 0.5f, 10.f, tr("Every %.1f s"), ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SetItemTooltip("%s", tr("Closer key frames: faster seeking and streaming, a little more data"));
+
+        row("B-frames");
+        customized |= ImGui::SliderInt("##bFrames", &_exportSettings.bFrames, -1, 4,
+            _exportSettings.bFrames < 0 ? tr("Encoder's choice") : "%d", ImGuiSliderFlags_AlwaysClamp);
+
+        row("Audio bit rate");
+        const int audioRates[] = { 128, 192, 256, 320, 384 };
+        char audioRate[32];
+        std::snprintf(audioRate, sizeof(audioRate), "%d kbit/s", _exportSettings.audioKbps);
+
+        if (ImGui::BeginCombo("##audioRate", audioRate)) {
+            for (int rate : audioRates) {
+                std::snprintf(audioRate, sizeof(audioRate), "%d kbit/s", rate);
+
+                if (ImGui::Selectable(audioRate, rate == _exportSettings.audioKbps)) {
+                    _exportSettings.audioKbps = rate;
+                    customized = true;
+                }
+            }
+
+            ImGui::EndCombo();
+        }
+    }
+
+    // A preset changed by hand: custom settings; else its bit rate follows
+    // the size and the frame rate.
+    if (customized) {
+        _exportPreset = 0;
+    }
+    else if (_exportPreset > 0 && _exportPreset < (int)presets.size() && presets[(size_t)_exportPreset].mbps) {
+        const uint32_t outputHeight = _exportSettings.height ? _exportSettings.height : sequence.height;
+        const uint32_t outputWidth = widthFor(outputHeight);
+        const double fps = (_exportSettings.frameRate.num ? _exportSettings.frameRate : sequence.frameRate).toDouble();
+        _exportSettings.bitrateMbps = presets[(size_t)_exportPreset].mbps((int)std::min(outputWidth, outputHeight), fps);
     }
 
     ImGui::TextDisabled(tr("%s long"), formatTimecode(sequence.duration(), sequence.frameRate).c_str());

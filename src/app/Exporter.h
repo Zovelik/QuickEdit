@@ -29,10 +29,34 @@ struct ExportSettings
         AV1
     };
 
+    // How the encoder spends its bits: an average with peaks allowed (VBR),
+    // a constant rate (CBR, for streaming), or a constant quality whatever
+    // the size (quality: a quantizer, lower is better).
+    enum class RateControl
+    {
+        VBR,
+        CBR,
+        ConstantQuality
+    };
+
+    // Encoding speed against quality, as the encoders allow it.
+    enum class Speed
+    {
+        Fast,
+        Balanced,
+        Best
+    };
+
     std::filesystem::path path;         // .mp4, .mov or .mkv
     Codec codec = Codec::H264;
     float bitrateMbps = 16.f;
+    RateControl rateControl = RateControl::VBR;
+    int quality = 23;
+    Speed speed = Speed::Balanced;
+    float keyframeSeconds = 2.f;        // Between key frames (seeking, streaming)
+    int bFrames = -1;                   // In a row; -1 for the encoder's choice
     bool audio = true;
+    int audioKbps = 192;                // AAC
 
     // Brings the loudness of the sound to targetLufs (its peaks under
     // -1 dBFS): the whole mix is measured first (EBU R128).

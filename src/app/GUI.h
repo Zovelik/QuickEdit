@@ -47,6 +47,7 @@ public:
     // Exports the project to path as soon as its media are analyzed, then
     // quits (command line --export).
     void exportAndQuit(const std::filesystem::path& path, ExportSettings::Codec codec, uint32_t height = 0, int frameRate = 0, float lufs = 0.f);
+    ExportSettings& exportSettings() { return _exportSettings; }
 
     // Edits the selected text clip in the viewer (command line --edit).
     void editSelectedText() { if (!_selection.empty()) beginTextEditing(_selection.front()); }
@@ -687,6 +688,8 @@ private:
     std::vector<uint8_t> _defaultFontData;
     std::unique_ptr<Exporter> _exporter;
     ExportSettings _exportSettings;
+    int _exportPreset = 0;              // In exportPresets() (GUI.cpp), 0 for custom settings
+    void applyExportPreset(int preset);
     std::string _exportPathText;
     bool _requestExportPopup = false;
 

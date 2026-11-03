@@ -72,6 +72,83 @@ std::vector<const char*> encoderCandidates(ExportSettings::Codec codec)
 }
 
 
+// The advanced settings in the options of an encoder, each family its own
+// names (the others keep their defaults).
+void applyEncoderOptions(AVCodecContext* context, const std::string& name, const ExportSettings& settings)
+{
+    using RateControl = ExportSettings::RateControl;
+    using Speed = ExportSettings::Speed;
+
+    auto set = [&](const char* option, const std::string& value) {
+        if (av_opt_set(context->priv_data, option, value.c_str(), 0) < 0) {
+            SDL_Log("Export: %s has no option %s=%s", name.c_str(), option, value.c_str());
+        }
+    };
+
+    const RateControl rc = settings.rateControl;
+    const std::string quality = std::to_string(std::clamp(settings.quality, 0, 51));
+
+    if (rc == RateControl::ConstantQuality) {
+        context->bit_rate = 0;
+        context->rc_max_rate = 0;
+        context->rc_buffer_size = 0;
+    }
+    else if (rc == RateControl::CBR) {
+        context->rc_max_rate = context->bit_rate;
+        context->rc_min_rate = context->bit_rate;
+    }
+
+    if (name.find("_vulkan") != std::string::npos) {
+        set("rc_mode", rc == RateControl::CBR ? "cbr" : rc == RateControl::ConstantQuality ? "cqp" : "vbr");
+
+        if (rc == RateControl::ConstantQuality) set("qp", quality);
+        if (settings.speed == Speed::Best) set("tune", "hq");
+
+        set("usage", "record");
+    }
+    else if (name.find("_nvenc") != std::string::npos) {
+        set("preset", settings.speed == Speed::Fast ? "p2" : settings.speed == Speed::Best ? "p7" : "p5");
+        set("tune", "hq");
+        set("rc", rc == RateControl::CBR ? "cbr" : "vbr");
+
+        if (rc == RateControl::ConstantQuality) set("cq", quality);
+    }
+    else if (name.find("_amf") != std::string::npos) {
+        set("quality", settings.speed == Speed::Fast ? "speed" : settings.speed == Speed::Best ? "quality" : "balanced");
+        set("rc", rc == RateControl::CBR ? "cbr" : rc == RateControl::ConstantQuality ? "cqp" : "vbr_peak");
+
+        if (rc == RateControl::ConstantQuality) {
+            set("qp_i", quality);
+            set("qp_p", quality);
+            set("qp_b", quality);
+        }
+    }
+    else if (name.find("_qsv") != std::string::npos) {
+        set("preset", settings.speed == Speed::Fast ? "veryfast" : settings.speed == Speed::Best ? "veryslow" : "medium");
+
+        if (rc == RateControl::ConstantQuality) {
+            context->global_quality = std::clamp(settings.quality, 1, 51);
+            context->flags |= AV_CODEC_FLAG_QSCALE;
+        }
+    }
+    else if (name.find("_mf") != std::string::npos) {
+        set("rate_control", rc == RateControl::CBR ? "cbr" : rc == RateControl::ConstantQuality ? "quality" : "pc_vbr");
+
+        if (rc == RateControl::ConstantQuality) set("quality", std::to_string(std::clamp(100 - 2 * settings.quality, 0, 100)));
+    }
+    else if (name == "libsvtav1") {
+        set("preset", settings.speed == Speed::Fast ? "10" : settings.speed == Speed::Best ? "4" : "7");
+
+        if (rc == RateControl::ConstantQuality) set("crf", std::to_string(std::clamp(settings.quality + 10, 0, 63)));
+    }
+    else if (name == "libaom-av1") {
+        set("cpu-used", settings.speed == Speed::Fast ? "8" : settings.speed == Speed::Best ? "3" : "6");
+
+        if (rc == RateControl::ConstantQuality) set("crf", std::to_string(std::clamp(settings.quality + 10, 0, 63)));
+    }
+}
+
+
 // FFmpeg objects of an export, freed whatever happens.
 struct Encoding
 {
@@ -276,7 +353,11 @@ void Exporter::exportVideo()
         context->bit_rate = bitrate;
         context->rc_max_rate = bitrate * 3 / 2;
         context->rc_buffer_size = (int)std::min<int64_t>(bitrate * 2, INT32_MAX);
-        context->gop_size = (int)std::lround(2.0 * fps.toDouble());
+        context->gop_size = std::max(1, (int)std::lround(std::clamp(_settings.keyframeSeconds, 0.1f, 20.f) * fps.toDouble()));
+
+        if (_settings.bFrames >= 0) {
+            context->max_b_frames = std::clamp(_settings.bFrames, 0, 4);
+        }
         context->color_range = AVCOL_RANGE_MPEG;
         context->colorspace = AVCOL_SPC_BT709;
         context->color_primaries = AVCOL_PRI_BT709;
@@ -305,7 +386,6 @@ void Exporter::exportVideo()
             context->hw_frames_ctx = av_buffer_ref(frames);
             context->pix_fmt = AV_PIX_FMT_VULKAN;
             context->sw_pix_fmt = AV_PIX_FMT_NV12;
-            av_opt_set(context->priv_data, "rc_mode", "vbr", 0);
         }
         else {
             // NV12 when the encoder takes it, its first format otherwise.
@@ -320,6 +400,8 @@ void Exporter::exportVideo()
                 context->pix_fmt = std::find(list, list + count, AV_PIX_FMT_NV12) != list + count ? AV_PIX_FMT_NV12 : list[0];
             }
         }
+
+        applyEncoderOptions(context, name, _settings);
 
         if (avcodec_open2(context, codec, nullptr) < 0) {
             SDL_Log("Export: encoder %s unavailable", name);
@@ -358,7 +440,7 @@ void Exporter::exportVideo()
         encoding.audio = avcodec_alloc_context3(codec);
         encoding.audio->sample_rate = (int)sequence.sampleRate;
         encoding.audio->sample_fmt = AV_SAMPLE_FMT_FLTP;
-        encoding.audio->bit_rate = 192000;
+        encoding.audio->bit_rate = (int64_t)std::clamp(_settings.audioKbps, 64, 512) * 1000;
         encoding.audio->time_base = { 1, (int)sequence.sampleRate };
         av_channel_layout_default(&encoding.audio->ch_layout, 2);
 

@@ -87,6 +87,7 @@ def texts():
 
     gui = read(os.path.join(ROOT, 'src', 'app', 'GUI.cpp'))
     keys.update(key_of(c_string(l)) for l in literals_between(gui, 'timelineTools()\n{', 'return tools;'))
+    keys.update(key_of(c_string(l)) for l in literals_between(gui, 'exportPresets()\n{', 'return presets;'))
 
     inspector = read(os.path.join(ROOT, 'src', 'app', 'Inspector.cpp'))
     for table in ('ResolutionPresets[]', 'LetterAnimationNames[]', 'FrameRatePresets[]', 'ScaleFilterNames[]', 'ScaleFilterTooltips[]'):

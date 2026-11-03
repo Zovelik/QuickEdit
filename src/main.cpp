@@ -129,7 +129,8 @@ int main(int argc, char* argv[])
     // and optionally the time to show and a clip to select (for tests):
     // QuickEdit project.qep [--time seconds] [--select clipId]
     //                       [--edit] [--effect-editor slotId]
-    //                       [--export video.mp4 [--codec h264|h265|av1] [--height h] [--fps n] [--lufs target]]
+    //                       [--export video.mp4 [--codec h264|h265|av1] [--height h] [--fps n] [--lufs target]
+    //                                           [--rc vbr|cbr|quality] [--bframes n]]
     //                       [--drop file x y] [--record seconds]
     //                       [--quit-after seconds] [--record-screen seconds [--source index]]
 #ifdef WIN32
@@ -140,6 +141,8 @@ int main(int argc, char* argv[])
     std::filesystem::path projectPath;
     std::filesystem::path exportPath;
     std::string codec = "h264";
+    std::string rateControl;
+    int bFrames = -1;
     double startTime = 0.0;
     uint64_t selectedClip = 0;
     bool editText = false;
@@ -225,6 +228,12 @@ int main(int argc, char* argv[])
             else if (std::wstring(argv[i]) == L"--export" && i + 1 < argc) {
                 exportPath = argv[++i];
             }
+            else if (std::wstring(argv[i]) == L"--rc" && i + 1 < argc) {
+                for (const wchar_t* c = argv[++i]; *c; c++) rateControl += (char)(*c & 0x7F);
+            }
+            else if (std::wstring(argv[i]) == L"--bframes" && i + 1 < argc) {
+                bFrames = (int)std::wcstol(argv[++i], nullptr, 10);
+            }
             else if (std::wstring(argv[i]) == L"--codec" && i + 1 < argc) {
                 // ASCII codec names.
                 codec.clear();
@@ -304,6 +313,12 @@ int main(int argc, char* argv[])
         else if (std::string(argv[i]) == "--codec" && i + 1 < argc) {
             codec = argv[++i];
         }
+        else if (std::string(argv[i]) == "--rc" && i + 1 < argc) {
+            rateControl = argv[++i];
+        }
+        else if (std::string(argv[i]) == "--bframes" && i + 1 < argc) {
+            bFrames = (int)std::strtol(argv[++i], nullptr, 10);
+        }
         else {
             projectPath = std::filesystem::u8path(argv[i]);
         }
@@ -370,6 +385,16 @@ int main(int argc, char* argv[])
             gui.exportAndQuit(exportPath,
                 codec == "av1" ? ExportSettings::Codec::AV1 :
                 codec == "h265" ? ExportSettings::Codec::H265 : ExportSettings::Codec::H264, exportHeight, exportFps, exportLufs);
+
+            // vbr, cbr, or the quality of a constant quality export.
+            ExportSettings& settings = gui.exportSettings();
+            settings.bFrames = bFrames;
+
+            if (rateControl == "cbr") settings.rateControl = ExportSettings::RateControl::CBR;
+            else if (!rateControl.empty() && rateControl != "vbr") {
+                settings.rateControl = ExportSettings::RateControl::ConstantQuality;
+                settings.quality = std::atoi(rateControl.c_str());
+            }
         }
 
         // The work copied before the application ends on an error.
