@@ -10,6 +10,7 @@
 #include <app/RecordingScene.h>
 #include <app/SubtitleGenerator.h>
 #include <app/KeyframeEditor.h>
+#include <app/LayerCanvas.h>
 #include <app/ViewerTextEditor.h>
 #include <app/TimelineView.h>
 #include <app/UpdateChecker.h>
@@ -556,10 +557,7 @@ private:
     int _sceneSelected = -1;
     std::string _sceneName;
     std::vector<std::unique_ptr<ScenePreview>> _scenePreviews;     // One per source of the current scene
-    int _sceneDrag = 0;             // 1: moving, 2: resizing, 3: cropping
-    int _sceneHandle = 0;           // Corner or edge dragged (see sceneRecorderWindow())
-    ImVec2 _sceneDragStart;
-    SceneSource _sceneDragOriginal;
+    LayerCanvas _sceneCanvas;       // Editing of the sources in the frame, as in the viewer
     bool _sceneRecording = false;
     core::Time _sceneStart = 0;
     std::vector<SceneTake> _sceneTakes;
@@ -598,6 +596,8 @@ private:
     // sound is heard there (View menu option, saved).
     void trimPreview(core::Time time, bool end, bool sound);
     bool _trimPreview = true;
+    bool _viewerFullResolution = false;     // Else drawn at its size on the screen
+    float _viewerPixelWidth = 0.f;          // Of the frame in the viewer, 0 until shown
     core::Time _trimPreviewTime = -1;       // Shown instead of the playhead, -1 for none
     core::Time _trimHeard = -1;             // Where the sound was last heard
 
@@ -767,32 +767,9 @@ private:
     int _mcpPortEdit = 0;
     bool _autoExport = false;
 
-    // Layer moved, scaled or rotated in the viewer: its placement when the
-    // drag started.
-    enum class LayerDrag
-    {
-        Move,
-        Scale,          // Corner handles
-        Rotate,         // Handle above the top edge
-        Crop            // Edge handles, or Alt and a corner (as in OBS)
-    };
-
-    // Sides cropped by the handle dragged.
-    bool _cropLeft = false;
-    bool _cropRight = false;
-    bool _cropTop = false;
-    bool _cropBottom = false;
-
-    core::Id _draggedLayer = core::InvalidId;
-    LayerDrag _layerDrag = LayerDrag::Move;
-    ImVec2 _dragStartMouse;
-    ImVec2 _dragCenter;             // Center of the layer, sequence pixels
-    ImGuiMouseCursor _dragCursor = ImGuiMouseCursor_Arrow;     // Of the handle grabbed
-    float _dragStartX = 0.f;
-    float _dragStartY = 0.f;
-    float _dragStartScale = 1.f;
-    float _dragStartRotation = 0.f;
-    bool _dragMoved = false;
+    // Layers moved, scaled, rotated and cropped in the viewer (the same
+    // editing as in the frame of the recording scenes).
+    LayerCanvas _layerCanvas;
 
     core::Project _project;
     core::History _history;

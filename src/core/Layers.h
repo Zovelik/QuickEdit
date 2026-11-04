@@ -16,8 +16,9 @@ namespace core
         const Clip* clip = nullptr;
         size_t track = 0;               // Video track index, bottom first
 
-        // 0 for the clip at the time on its track, 1 for the other clip of a
-        // transition. Each slot of a track has its own decoder.
+        // Consecutive clips of a track take turns between slots 0 and 1, each
+        // with its own decoder: the next clip is decoded ahead while the
+        // current one plays, and both clips of a transition have theirs.
         int slot = 0;
 
         Time localTime = 0;             // For the animations, in [0, duration]
@@ -60,6 +61,14 @@ namespace core
     std::vector<LayerRequest> layersAt(const Sequence& sequence, Time t,
         const std::function<const Sequence*(Id)>& sequenceOf = {}, uint64_t parentKey = 0, int depth = 0);
 
+
+    // The clips starting after t, within the horizon (a nested sequence's
+    // first layers with them, and the cuts inside the nested sequences
+    // playing at t): the first frame of each, to decode ahead of the cut.
+    // Their keys are the ones layersAt() gives them then; nested layers
+    // come flattened.
+    std::vector<LayerRequest> upcomingLayers(const Sequence& sequence, Time t, Time horizon,
+        const std::function<const Sequence*(Id)>& sequenceOf = {}, uint64_t parentKey = 0, int depth = 0);
 
     const char* transitionName(TransitionType type);
 }

@@ -336,9 +336,10 @@ Json GUI::mcpTools()
         R"(["window", "x", "y", "width", "height"])"));
     tools.push_back(tool("list_capture_sources", "The screens, windows and cameras that can be recorded, with their index."));
     tools.push_back(tool("set_scene",
-        "Replaces the sources of the current recording scene: each {source: index from list_capture_sources, x, y, width (fractions of the "
-        "frame; the height follows the shape of the picture), crop_left, crop_top, crop_right, crop_bottom (fractions)}, the first at the "
-        "bottom. Also computer_sound, microphone, hide_quickedit (keep QuickEdit out of the recording).",
+        "Replaces the sources of the current recording scene, placed as clips: each {source: index from list_capture_sources, "
+        "fit (fit, fill or native), x, y (center from the center of the frame, fractions of its width and height), scale (1 = fitted), "
+        "rotation (degrees), crop_left, crop_top, crop_right, crop_bottom (fractions)} - or {source, x, y, width} for a rectangle "
+        "(top left and width in fractions of the frame, the picture fitted in it) - the first at the bottom. Also computer_sound, microphone, hide_quickedit (keep QuickEdit out of the recording).",
         R"({"sources": {"type": "array", "items": {"type": "object"}}, "computer_sound": {"type": "boolean"}, "microphone": {"type": "boolean"},
             "hide_quickedit": {"type": "boolean"}})",
         R"(["sources"])"));
@@ -1467,10 +1468,21 @@ std::optional<Json> GUI::mcpCall(const std::string& name, const Json& args, int 
 
             SceneSource source;
             source.source = _captureSources[(size_t)index];
-            source.x = (float)item["x"].toDouble(0.0);
-            source.y = (float)item["y"].toDouble(0.0);
-            source.width = (float)std::max(0.03, item["width"].toDouble(1.0));
-            source.height = source.width * 9.f / 16.f * (float)_project.sequence().width / (float)std::max(1u, _project.sequence().height);
+            if (item.contains("width")) {
+                // A rectangle of the shape of a 16:9 picture.
+                const float width = (float)std::max(0.03, item["width"].toDouble(1.0));
+                const float height = width * 9.f / 16.f * (float)_project.sequence().width / (float)std::max(1u, _project.sequence().height);
+                placeInRectangle(source, (float)item["x"].toDouble(0.0), (float)item["y"].toDouble(0.0), width, height);
+            }
+            else {
+                const std::string fit = item["fit"].toString();
+                source.fit = (fit == "fill") ? FitMode::Fill : (fit == "native") ? FitMode::Native : FitMode::Fit;
+                source.x = (float)item["x"].toDouble(0.0);
+                source.y = (float)item["y"].toDouble(0.0);
+                source.scale = (float)std::max(0.01, item["scale"].toDouble(1.0));
+                source.rotation = (float)item["rotation"].toDouble(0.0);
+            }
+
             source.cropLeft = (float)std::clamp(item["crop_left"].toDouble(0.0), 0.0, 0.9);
             source.cropTop = (float)std::clamp(item["crop_top"].toDouble(0.0), 0.0, 0.9);
             source.cropRight = (float)std::clamp(item["crop_right"].toDouble(0.0), 0.0, 0.9 - source.cropLeft);

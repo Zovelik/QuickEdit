@@ -28,17 +28,6 @@
 using namespace core;
 
 
-namespace {
-
-// Height over width of a source, in fractions of the frame: the rectangle of
-// a source keeps the shape of its pictures.
-float shapeOf(int frameWidth, int frameHeight, const Sequence& sequence)
-{
-    const float aspect = (frameWidth > 0 && frameHeight > 0) ? (float)frameHeight / (float)frameWidth : 9.f / 16.f;
-    return aspect * (float)sequence.width / (float)std::max(1u, sequence.height);
-}
-
-} // namespace
 
 
 GUI::ScenePreview::~ScenePreview()
@@ -187,22 +176,6 @@ void GUI::sceneRecorderWindow()
 
     syncScenePreviews(true);
 
-    // A rectangle keeps the shape of the pictures of its source, known once
-    // they come (a guess until then).
-    for (size_t i = 0; i < scene->sources.size() && i < _scenePreviews.size(); i++) {
-        SceneSource& source = scene->sources[i];
-        const ScenePreview& preview = *_scenePreviews[i];
-
-        if (preview.frameWidth > 0 && !(_sceneDrag != 0 && (int)i == _sceneSelected)) {
-            const float height = source.width * shapeOf(preview.frameWidth, preview.frameHeight, sequence);
-
-            if (std::abs(height - source.height) > 1e-4f) {
-                source.height = height;
-                changed = true;
-            }
-        }
-    }
-
     // As in OBS: the frame on top, the panels below it side by side (two
     // rows of two when the window is narrow, scrolling), the record bar at
     // the bottom.
@@ -227,51 +200,53 @@ void GUI::sceneRecorderWindow()
     const bool hovered = ImGui::IsItemHovered();
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     drawList->AddRectFilled(canvasMin, canvasMax, IM_COL32(0, 0, 0, 255));
+
+    const float frameWidth = (float)sequence.width;
+    const float frameHeight = (float)sequence.height;
+    const float toCanvas = canvasSize.x / std::max(1.f, frameWidth);
+
+    auto toScreen = [&](const ImVec2& p) {
+        return ImVec2(canvasMin.x + p.x * toCanvas, canvasMin.y + p.y * toCanvas);
+    };
+
+    // The sources as the viewer edits its layers, top first (id: index + 1).
+    std::vector<LayerCanvas::Layer> layers;
+
+    for (int i = (int)scene->sources.size() - 1; i >= 0; i--) {
+        const SceneSource& source = scene->sources[(size_t)i];
+        const ScenePreview* preview = ((size_t)i < _scenePreviews.size()) ? _scenePreviews[(size_t)i].get() : nullptr;
+        const int pictureWidth = preview ? preview->frameWidth : 0;
+        const int pictureHeight = preview ? preview->frameHeight : 0;
+        const ImVec2 half = sourceHalfSize(source, frameWidth, frameHeight, pictureWidth, pictureHeight);
+
+        LayerCanvas::Layer layer;
+        layer.id = (Id)i + 1;
+        layer.corners = sourceCorners(source, frameWidth, frameHeight, pictureWidth, pictureHeight);
+        layer.x = source.x * frameWidth;
+        layer.y = source.y * frameHeight;
+        layer.scale = source.scale;
+        layer.rotation = source.rotation;
+        layer.halfWidth = half.x;
+        layer.halfHeight = half.y;
+        layer.cropLeft = source.cropLeft;
+        layer.cropTop = source.cropTop;
+        layer.cropRight = source.cropRight;
+        layer.cropBottom = source.cropBottom;
+        layer.movable = !recording;
+        layers.push_back(layer);
+    }
+
+    // The pictures, bottom first.
     drawList->PushClipRect(canvasMin, canvasMax, true);
-
-    auto rectOf = [&](const SceneSource& source) {
-        return ImRect(
-            ImVec2(canvasMin.x + source.x * canvasSize.x, canvasMin.y + source.y * canvasSize.y),
-            ImVec2(canvasMin.x + (source.x + source.width) * canvasSize.x, canvasMin.y + (source.y + source.height) * canvasSize.y));
-    };
-
-    // The part of a source shown, its crop taken off.
-    auto visibleOf = [&](const SceneSource& source) {
-        const ImRect rect = rectOf(source);
-        const float w = rect.GetWidth();
-        const float h = rect.GetHeight();
-        return ImRect(ImVec2(rect.Min.x + source.cropLeft * w, rect.Min.y + source.cropTop * h),
-                      ImVec2(rect.Max.x - source.cropRight * w, rect.Max.y - source.cropBottom * h));
-    };
-
-    // Corners (1 to 4 from the top left, clockwise), edges (5 left, 6 top,
-    // 7 right, 8 bottom) and inside (9) of the visible part of a source.
-    const float handle = 0.45f * fontSize;
-
-    auto handleAt = [&](const ImRect& rect, const ImVec2& point) {
-        const float grab = 1.5f * handle;
-        const bool left = std::abs(point.x - rect.Min.x) < grab;
-        const bool right = std::abs(point.x - rect.Max.x) < grab;
-        const bool top = std::abs(point.y - rect.Min.y) < grab;
-        const bool bottom = std::abs(point.y - rect.Max.y) < grab;
-        const bool insideX = point.x > rect.Min.x - grab && point.x < rect.Max.x + grab;
-        const bool insideY = point.y > rect.Min.y - grab && point.y < rect.Max.y + grab;
-
-        if (top && left) return 1;
-        if (top && right) return 2;
-        if (bottom && right) return 3;
-        if (bottom && left) return 4;
-        if (left && insideY) return 5;
-        if (top && insideX) return 6;
-        if (right && insideY) return 7;
-        if (bottom && insideX) return 8;
-        return rect.Contains(point) ? 9 : 0;
-    };
 
     for (size_t i = 0; i < scene->sources.size(); i++) {
         const SceneSource& source = scene->sources[i];
-        const ImRect rect = visibleOf(source);
+        const LayerCanvas::Layer& layer = layers[layers.size() - 1 - i];
         const ScenePreview* preview = (i < _scenePreviews.size()) ? _scenePreviews[i].get() : nullptr;
+        const ImVec2 c0 = toScreen(layer.corners[0]);
+        const ImVec2 c1 = toScreen(layer.corners[1]);
+        const ImVec2 c2 = toScreen(layer.corners[2]);
+        const ImVec2 c3 = toScreen(layer.corners[3]);
 
         if (preview && preview->texture && source.available) {
             // The picture without the letterboxing of the preview.
@@ -280,31 +255,16 @@ void GUI::sceneRecorderWindow()
                 : 1.f;
             const float w = (preview->frameWidth > 0) ? (float)preview->frameWidth * fit / (float)capture::SourcePreview::Width : 1.f;
             const float h = (preview->frameHeight > 0) ? (float)preview->frameHeight * fit / (float)capture::SourcePreview::Height : 1.f;
-            const ImVec2 uv0(0.5f - 0.5f * w + source.cropLeft * w, 0.5f - 0.5f * h + source.cropTop * h);
-            const ImVec2 uv1(0.5f + 0.5f * w - source.cropRight * w, 0.5f + 0.5f * h - source.cropBottom * h);
+            const float u0 = 0.5f - 0.5f * w + source.cropLeft * w;
+            const float u1 = 0.5f + 0.5f * w - source.cropRight * w;
+            const float v0 = 0.5f - 0.5f * h + source.cropTop * h;
+            const float v1 = 0.5f + 0.5f * h - source.cropBottom * h;
 
-            drawList->AddImage(preview->texture->GetTexRef(), rect.Min, rect.Max, uv0, uv1);
+            drawList->AddImageQuad(preview->texture->GetTexRef(), c0, c1, c2, c3, ImVec2(u0, v0), ImVec2(u1, v0), ImVec2(u1, v1), ImVec2(u0, v1));
         }
         else {
-            drawList->AddRectFilled(rect.Min, rect.Max, IM_COL32(60, 40, 40, 255));
-            drawList->AddText(ImVec2(rect.Min.x + 4.f, rect.Min.y + 4.f), IM_COL32(230, 120, 110, 255), tr("Not found"));
-        }
-
-        const bool selected = (int)i == _sceneSelected;
-        drawList->AddRect(rect.Min, rect.Max, selected ? IM_COL32(255, 122, 0, 255) : IM_COL32(255, 255, 255, 60), 0.f, 0, selected ? 2.f : 1.f);
-
-        // Its corners (resize) and the middles of its edges (crop).
-        if (selected && !recording) {
-            const ImVec2 points[] = {
-                rect.Min, ImVec2(rect.Max.x, rect.Min.y), rect.Max, ImVec2(rect.Min.x, rect.Max.y),
-                ImVec2(rect.Min.x, rect.GetCenter().y), ImVec2(rect.GetCenter().x, rect.Min.y),
-                ImVec2(rect.Max.x, rect.GetCenter().y), ImVec2(rect.GetCenter().x, rect.Max.y) };
-
-            for (int p = 0; p < 8; p++) {
-                const float size = (p < 4) ? handle : 0.75f * handle;
-                const ImU32 color = (p < 4) ? IM_COL32(255, 122, 0, 255) : IM_COL32(80, 160, 255, 255);
-                drawList->AddRectFilled(ImVec2(points[p].x - size, points[p].y - size), ImVec2(points[p].x + size, points[p].y + size), color);
-            }
+            drawList->AddQuadFilled(c0, c1, c2, c3, IM_COL32(60, 40, 40, 255));
+            drawList->AddText(ImVec2(c0.x + 4.f, c0.y + 4.f), IM_COL32(230, 120, 110, 255), tr("Not found"));
         }
     }
 
@@ -317,122 +277,39 @@ void GUI::sceneRecorderWindow()
 
     drawList->PopClipRect();
 
-    // Mouse, as in the viewer: on the selected source, a corner resizes it
-    // (its shape kept, the opposite corner in place), an edge crops it, Alt
-    // + a corner crops two edges; elsewhere, the top source under it is
-    // selected and moved.
-    const ImVec2 mouse = ImGui::GetIO().MousePos;
-    const bool alt = ImGui::GetIO().KeyAlt;
-    const bool selectionValid = _sceneSelected >= 0 && _sceneSelected < (int)scene->sources.size();
-    int hoveredHandle = 0;
+    // Mouse: as in the viewer.
+    std::vector<Id> selection;
 
-    if (!recording && hovered && _sceneDrag == 0) {
-        if (selectionValid) {
-            hoveredHandle = handleAt(visibleOf(scene->sources[(size_t)_sceneSelected]), mouse);
-        }
-
-        if (hoveredHandle == 0 || hoveredHandle == 9) {
-            hoveredHandle = 0;
-
-            for (int i = (int)scene->sources.size() - 1; i >= 0; i--) {
-                if (visibleOf(scene->sources[(size_t)i]).Contains(mouse)) {
-                    hoveredHandle = 9;
-                    break;
-                }
-            }
-        }
+    if (_sceneSelected >= 0 && _sceneSelected < (int)scene->sources.size()) {
+        selection.push_back((Id)_sceneSelected + 1);
     }
 
-    if (!recording && hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        _sceneDrag = 0;
+    const LayerCanvas::Result result = _sceneCanvas.update(canvasMin, canvasSize, frameWidth, frameHeight, layers, selection, hovered && !recording);
 
-        if (selectionValid && hoveredHandle >= 1 && hoveredHandle <= 8) {
-            _sceneHandle = hoveredHandle;
-            _sceneDrag = (hoveredHandle <= 4 && !alt) ? 2 : 3;
-        }
-        else {
-            _sceneSelected = -1;
-
-            for (int i = (int)scene->sources.size() - 1; i >= 0; i--) {
-                if (visibleOf(scene->sources[(size_t)i]).Contains(mouse)) {
-                    _sceneSelected = i;
-                    _sceneDrag = 1;
-                    break;
-                }
-            }
-        }
-
-        if (_sceneDrag != 0) {
-            _sceneDragStart = mouse;
-            _sceneDragOriginal = scene->sources[(size_t)_sceneSelected];
-        }
+    if (result.clicked != InvalidId) {
+        _sceneSelected = (int)result.clicked - 1;
+    }
+    else if (result.clickedEmpty) {
+        _sceneSelected = -1;
     }
 
-    // The cursor tells what a drag does.
-    const int cursorHandle = (_sceneDrag != 0) ? (_sceneDrag == 1 ? 9 : _sceneHandle) : hoveredHandle;
-
-    switch (cursorHandle) {
-        case 1: case 3: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE); break;
-        case 2: case 4: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNESW); break;
-        case 5: case 7: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW); break;
-        case 6: case 8: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS); break;
-        case 9: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll); break;
-        default: break;
+    if (result.edited && result.layer.id != InvalidId && result.layer.id <= scene->sources.size()) {
+        SceneSource& source = scene->sources[(size_t)result.layer.id - 1];
+        source.x = result.layer.x / std::max(1.f, frameWidth);
+        source.y = result.layer.y / std::max(1.f, frameHeight);
+        source.scale = result.layer.scale;
+        source.rotation = result.layer.rotation;
+        source.cropLeft = result.layer.cropLeft;
+        source.cropTop = result.layer.cropTop;
+        source.cropRight = result.layer.cropRight;
+        source.cropBottom = result.layer.cropBottom;
     }
 
-    if (_sceneDrag != 0 && _sceneSelected >= 0 && _sceneSelected < (int)scene->sources.size()) {
-        SceneSource& source = scene->sources[(size_t)_sceneSelected];
-        const SceneSource& original = _sceneDragOriginal;
-        const float dx = (mouse.x - _sceneDragStart.x) / canvasSize.x;
-        const float dy = (mouse.y - _sceneDragStart.y) / canvasSize.y;
-
-        if (_sceneDrag == 1) {
-            source.x = original.x + dx;
-            source.y = original.y + dy;
-        }
-        else if (_sceneDrag == 2) {
-            // Scaled around the opposite corner of the visible part.
-            const float left = original.x + original.cropLeft * original.width;
-            const float right = original.x + (1.f - original.cropRight) * original.width;
-            const bool grabbedLeft = _sceneHandle == 1 || _sceneHandle == 4;
-            const bool grabbedTop = _sceneHandle == 1 || _sceneHandle == 2;
-            const float anchorX = grabbedLeft ? right : left;
-            const float anchorY = grabbedTop ? original.y + (1.f - original.cropBottom) * original.height
-                                             : original.y + original.cropTop * original.height;
-            const float corner = grabbedLeft ? left : right;
-            const float span = corner - anchorX;
-            const float factor = std::max(0.03f / std::max(0.001f, original.width), (std::abs(span) > 1e-5f) ? (span + dx) / span : 1.f);
-
-            source.width = original.width * factor;
-            source.height = original.height * factor;
-            source.x = anchorX + (original.x - anchorX) * factor;
-            source.y = anchorY + (original.y - anchorY) * factor;
-        }
-        else {
-            // Crop: the edges of the handle follow the mouse.
-            const bool cropLeft = _sceneHandle == 1 || _sceneHandle == 4 || _sceneHandle == 5;
-            const bool cropRight = _sceneHandle == 2 || _sceneHandle == 3 || _sceneHandle == 7;
-            const bool cropTop = _sceneHandle == 1 || _sceneHandle == 2 || _sceneHandle == 6;
-            const bool cropBottom = _sceneHandle == 3 || _sceneHandle == 4 || _sceneHandle == 8;
-            const float u = dx / std::max(0.001f, original.width);
-            const float v = dy / std::max(0.001f, original.height);
-            constexpr float Least = 0.02f;      // Kept of the picture
-
-            if (cropLeft)   source.cropLeft = std::clamp(original.cropLeft + u, 0.f, 1.f - original.cropRight - Least);
-            if (cropRight)  source.cropRight = std::clamp(original.cropRight - u, 0.f, 1.f - original.cropLeft - Least);
-            if (cropTop)    source.cropTop = std::clamp(original.cropTop + v, 0.f, 1.f - original.cropBottom - Least);
-            if (cropBottom) source.cropBottom = std::clamp(original.cropBottom - v, 0.f, 1.f - original.cropTop - Least);
-        }
-
-        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-            _sceneDrag = 0;
-            changed = true;
-        }
+    if (result.finished) {
+        changed = true;
     }
 
-    if (hovered && _sceneDrag == 0) {
-        ImGui::SetItemTooltip("%s", tr("Drag a source to move it, a corner to resize it, an edge to crop it (Alt + corner: two edges)."));
-    }
+    _sceneCanvas.draw(drawList, canvasMin, canvasSize, frameWidth, layers, selection);
 
     ImGui::EndChild();
 
@@ -546,13 +423,12 @@ void GUI::sceneRecorderWindow()
 
             if (ImGui::Selectable(available.name.c_str())) {
                 // The whole frame for the first one, then smaller ones,
-                // cascading. Their shape follows their pictures.
+                // cascading.
                 SceneSource source;
                 source.source = available;
-                source.width = scene->sources.empty() ? 1.f : 0.4f;
-                source.height = source.width * shapeOf(0, 0, sequence);
-                source.x = scene->sources.empty() ? 0.f : 0.05f * (float)(scene->sources.size() % 8);
-                source.y = scene->sources.empty() ? 0.f : 0.05f * (float)(scene->sources.size() % 8);
+                source.scale = scene->sources.empty() ? 1.f : 0.4f;
+                source.x = scene->sources.empty() ? 0.f : 0.05f * (float)(scene->sources.size() % 8) - 0.3f;
+                source.y = scene->sources.empty() ? 0.f : 0.05f * (float)(scene->sources.size() % 8) - 0.3f;
                 scene->sources.push_back(source);
                 _sceneSelected = (int)scene->sources.size() - 1;
                 changed = true;
@@ -627,9 +503,8 @@ void GUI::sceneRecorderWindow()
     const bool hasSelection = _sceneSelected >= 0 && _sceneSelected < (int)scene->sources.size();
     const size_t index = hasSelection ? (size_t)_sceneSelected : 0;
     const ScenePreview* selectedPreview = (hasSelection && index < _scenePreviews.size()) ? _scenePreviews[index].get() : nullptr;
-    const int frameWidth = selectedPreview ? selectedPreview->frameWidth : 0;
-    const int frameHeight = selectedPreview ? selectedPreview->frameHeight : 0;
-    const float shape = shapeOf(frameWidth, frameHeight, sequence);
+    const int pictureWidth = selectedPreview ? selectedPreview->frameWidth : 0;
+    const int pictureHeight = selectedPreview ? selectedPreview->frameHeight : 0;
 
     ImGui::PushStyleVarX(ImGuiStyleVar_ItemSpacing, style.ItemInnerSpacing.x);
 
@@ -655,29 +530,35 @@ void GUI::sceneRecorderWindow()
         changed = true;
     }
 
-    if (widgets::panelButton(ICON_MD_FIT_SCREEN, tr("Fit the frame"), false, hasSelection)) {
-        SceneSource& source = scene->sources[index];
-        source.width = std::min(1.f, 1.f / shape);
-        source.height = source.width * shape;
-        source.x = 0.5f * (1.f - source.width);
-        source.y = 0.5f * (1.f - source.height);
-        changed = true;
-    }
-
-    if (widgets::panelButton(ICON_MD_PHOTO_SIZE_SELECT_ACTUAL, tr("Native size: one pixel of the source per pixel of the sequence"), false, hasSelection && frameWidth > 0)) {
-        SceneSource& source = scene->sources[index];
-        source.width = (float)frameWidth / (float)std::max(1u, sequence.width);
-        source.height = source.width * shape;
-        changed = true;
-    }
-
     ImGui::PopStyleVar();
+
+    // Its size in the frame, as the clips: placed again at 100 % in the
+    // middle.
+    ImGui::BeginDisabled(!hasSelection);
+
+    for (FitMode mode : { FitMode::Fit, FitMode::Fill, FitMode::Native }) {
+        ImGui::SameLine(0.f, style.ItemInnerSpacing.x);
+
+        if (widgets::optionButton(fitModeName(mode), hasSelection && scene->sources[index].fit == mode)) {
+            SceneSource& source = scene->sources[index];
+            source.fit = mode;
+            source.x = source.y = 0.f;
+            source.scale = 1.f;
+            changed = true;
+        }
+
+        ImGui::SetItemTooltip("%s", mode == FitMode::Fit ? tr("The whole picture, as large as the frame allows, in the middle")
+            : mode == FitMode::Fill ? tr("The picture covers the whole frame, cut at the edges")
+            : tr("One pixel of the source per pixel of the sequence, in the middle"));
+    }
+
+    ImGui::EndDisabled();
 
     // Size of the pictures of the selected source, at the right of its
     // buttons.
-    if (hasSelection && frameWidth > 0) {
+    if (hasSelection && pictureWidth > 0) {
         char size[32];
-        std::snprintf(size, sizeof(size), "%d x %d", frameWidth, frameHeight);
+        std::snprintf(size, sizeof(size), "%d x %d", pictureWidth, pictureHeight);
         ImGui::SameLine();
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(size).x));
         ImGui::AlignTextToFramePadding();
@@ -1129,20 +1010,16 @@ void GUI::placeSceneRecording(SceneJob job)
             continue;
         }
 
-        // In its rectangle: the picture fits the frame, scaled and moved.
-        const float frameWidth = (float)sequence.width;
-        const float frameHeight = (float)sequence.height;
-        const float fit = fitScale(FitMode::Fit, frameWidth, frameHeight, (float)item->width, (float)item->height);
-        const float fittedWidth = std::max(1.f, (float)item->width * fit);
-
-        clip->fit = FitMode::Fit;
+        // As placed in the scene.
+        clip->fit = take.source.fit;
         clip->frame.cropLeft = take.source.cropLeft;
         clip->frame.cropTop = take.source.cropTop;
         clip->frame.cropRight = take.source.cropRight;
         clip->frame.cropBottom = take.source.cropBottom;
-        clip->transform.scale = take.source.width * frameWidth / fittedWidth;
-        clip->transform.x = (take.source.x + 0.5f * take.source.width) * frameWidth - 0.5f * frameWidth;
-        clip->transform.y = (take.source.y + 0.5f * take.source.height) * frameHeight - 0.5f * frameHeight;
+        clip->transform.scale = take.source.scale;
+        clip->transform.rotation = take.source.rotation;
+        clip->transform.x = take.source.x * (float)sequence.width;
+        clip->transform.y = take.source.y * (float)sequence.height;
 
         end = std::max(end, clip->end());
         TimelineView::addWithLinks(_project, clipId, _selection);

@@ -114,6 +114,7 @@ set(QUICKEDIT_SRC
     app/SceneRecorder.cpp
     app/SubtitleGenerator.cpp
     app/KeyframeEditor.cpp
+    app/LayerCanvas.cpp
     app/McpServer.cpp
     app/McpTools.cpp
     app/ViewerTextEditor.cpp

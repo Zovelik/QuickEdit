@@ -8,6 +8,16 @@ namespace core
 
 namespace {
 
+// The decoder slot of a clip: consecutive clips of a track take turns, so
+// that the next one can be decoded ahead while the current one plays, and
+// both clips of a transition have their own.
+int slotOf(const Track& track, const Clip& clip)
+{
+    return (&clip >= track.clips.data() && &clip < track.clips.data() + track.clips.size())
+        ? (int)((&clip - track.clips.data()) % 2) : 0;
+}
+
+
 LayerRequest makeLayer(const Clip& clip, size_t track, int slot, Time localTime, bool still)
 {
     LayerRequest layer;
@@ -155,7 +165,7 @@ std::vector<LayerRequest> layersAt(const Sequence& sequence, Time t,
 
         if (!incoming) {
             if (current) {
-                layers.push_back(makeLayer(*current, i, 0, t - current->start, false));
+                layers.push_back(makeLayer(*current, i, slotOf(track, *current), t - current->start, false));
             }
 
             continue;
@@ -169,12 +179,12 @@ std::vector<LayerRequest> layersAt(const Sequence& sequence, Time t,
 
         if (outgoing) {
             // Plays until the cut, then holds its last frame.
-            outgoingLayer = makeLayer(*outgoing, i, outgoing == current ? 0 : 1,
+            outgoingLayer = makeLayer(*outgoing, i, slotOf(track, *outgoing),
                 afterCut ? outgoing->duration - 1 : t - outgoing->start, afterCut);
         }
 
         // Holds its first frame until the cut, then plays.
-        LayerRequest incomingLayer = makeLayer(*incoming, i, incoming == current ? 0 : 1,
+        LayerRequest incomingLayer = makeLayer(*incoming, i, slotOf(track, *incoming),
             afterCut ? t - incoming->start : 0, !afterCut);
 
         applyTransition(incoming->transitionIn.type, p, (float)sequence.width, outgoing ? &outgoingLayer : nullptr, incomingLayer);
@@ -203,6 +213,51 @@ std::vector<LayerRequest> layersAt(const Sequence& sequence, Time t,
 
             if (layer.nested) {
                 layer.children = layersAt(*layer.nested, layer.clip->sourceIn + layer.localTime, sequenceOf, layer.key, depth + 1);
+            }
+        }
+    }
+
+    return layers;
+}
+
+
+std::vector<LayerRequest> upcomingLayers(const Sequence& sequence, Time t, Time horizon,
+    const std::function<const Sequence*(Id)>& sequenceOf, uint64_t parentKey, int depth)
+{
+    std::vector<LayerRequest> layers;
+
+    for (size_t i = 0; i < sequence.videoTracks.size(); i++) {
+        const Track& track = sequence.videoTracks[i];
+
+        if (track.muted) {
+            continue;
+        }
+
+        for (const Clip& clip : track.clips) {
+            const uint64_t key = parentKey * 1000003ull + (uint64_t)(i * 2 + (size_t)slotOf(track, clip) + 1);
+            const bool nested = clip.kind == ClipKind::Sequence && sequenceOf && depth < 8;
+
+            // The next clip, at its first frame.
+            if (clip.start > t && clip.start <= t + horizon) {
+                LayerRequest layer = makeLayer(clip, i, slotOf(track, clip), 0, false);
+                layer.key = key;
+                layers.push_back(layer);
+
+                if (nested) {
+                    if (const Sequence* inner = sequenceOf(clip.sequence)) {
+                        std::vector<LayerRequest> first = layersAt(*inner, clip.sourceIn, sequenceOf, key, depth + 1);
+                        layers.insert(layers.end(), first.begin(), first.end());
+                    }
+                }
+            }
+
+            // The cuts inside a nested sequence playing now.
+            if (nested && t >= clip.start && t < clip.end()) {
+                if (const Sequence* inner = sequenceOf(clip.sequence)) {
+                    const Time local = clip.sourceIn + (t - clip.start);
+                    std::vector<LayerRequest> inside = upcomingLayers(*inner, local, std::min(horizon, clip.end() - t), sequenceOf, key, depth + 1);
+                    layers.insert(layers.end(), inside.begin(), inside.end());
+                }
             }
         }
     }

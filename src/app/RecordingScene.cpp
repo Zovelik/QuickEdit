@@ -4,6 +4,7 @@
 #include <core/Paths.h>
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 
@@ -62,10 +63,20 @@ std::vector<RecordingScene> loadScenes(const std::vector<capture::CaptureSource>
                 : (kind == "camera") ? capture::CaptureSource::Kind::Camera : capture::CaptureSource::Kind::Monitor;
             source.source.name = item["name"].toString();
             source.source.device = item["device"].toString();
-            source.x = (float)item["x"].toDouble(0.0);
-            source.y = (float)item["y"].toDouble(0.0);
-            source.width = (float)std::max(0.01, item["width"].toDouble(1.0));
-            source.height = (float)std::max(0.01, item["height"].toDouble(1.0));
+            if (item.contains("scale")) {
+                const std::string fit = item["fit"].toString();
+                source.fit = (fit == "fill") ? core::FitMode::Fill : (fit == "native") ? core::FitMode::Native : core::FitMode::Fit;
+                source.x = (float)item["x"].toDouble(0.0);
+                source.y = (float)item["y"].toDouble(0.0);
+                source.scale = (float)std::max(0.01, item["scale"].toDouble(1.0));
+                source.rotation = (float)item["rotation"].toDouble(0.0);
+            }
+            else {
+                // Saved as a rectangle before.
+                placeInRectangle(source, (float)item["x"].toDouble(0.0), (float)item["y"].toDouble(0.0),
+                    (float)std::max(0.01, item["width"].toDouble(1.0)), (float)std::max(0.01, item["height"].toDouble(1.0)));
+            }
+
             source.cropLeft = (float)std::clamp(item["cropLeft"].toDouble(0.0), 0.0, 0.98);
             source.cropTop = (float)std::clamp(item["cropTop"].toDouble(0.0), 0.0, 0.98);
             source.cropRight = (float)std::clamp(item["cropRight"].toDouble(0.0), 0.0, 0.98 - source.cropLeft);
@@ -101,6 +112,52 @@ std::vector<RecordingScene> loadScenes(const std::vector<capture::CaptureSource>
 }
 
 
+void placeInRectangle(SceneSource& source, float x, float y, float width, float height)
+{
+    // The rectangle had the shape of the picture: fitted in the frame, the
+    // picture is as wide as the frame or as high, so the scale is the
+    // larger of the two fractions.
+    source.fit = core::FitMode::Fit;
+    source.scale = std::max(0.01f, std::max(width, height));
+    source.rotation = 0.f;
+    source.x = x + 0.5f * width - 0.5f;
+    source.y = y + 0.5f * height - 0.5f;
+}
+
+
+ImVec2 sourceHalfSize(const SceneSource& source, float frameWidth, float frameHeight, int pictureWidth, int pictureHeight)
+{
+    const float width = (pictureWidth > 0 && pictureHeight > 0) ? (float)pictureWidth : 1920.f;
+    const float height = (pictureWidth > 0 && pictureHeight > 0) ? (float)pictureHeight : 1080.f;
+    const float fit = core::fitScale(source.fit, frameWidth, frameHeight, width, height);
+
+    return ImVec2(0.5f * width * fit, 0.5f * height * fit);
+}
+
+
+std::array<ImVec2, 4> sourceCorners(const SceneSource& source, float frameWidth, float frameHeight, int pictureWidth, int pictureHeight)
+{
+    const ImVec2 half = sourceHalfSize(source, frameWidth, frameHeight, pictureWidth, pictureHeight);
+    const float left = -half.x + 2.f * half.x * source.cropLeft;
+    const float right = half.x - 2.f * half.x * source.cropRight;
+    const float top = -half.y + 2.f * half.y * source.cropTop;
+    const float bottom = half.y - 2.f * half.y * source.cropBottom;
+    const float angle = source.rotation * 3.14159265358979f / 180.f;
+    const float cosine = std::cos(angle);
+    const float sine = std::sin(angle);
+    const float centerX = 0.5f * frameWidth + source.x * frameWidth;
+    const float centerY = 0.5f * frameHeight + source.y * frameHeight;
+
+    auto place = [&](float px, float py) {
+        const float sx = px * source.scale;
+        const float sy = py * source.scale;
+        return ImVec2(centerX + sx * cosine - sy * sine, centerY + sx * sine + sy * cosine);
+    };
+
+    return { place(left, top), place(right, top), place(right, bottom), place(left, bottom) };
+}
+
+
 void saveScenes(const std::vector<RecordingScene>& scenes)
 {
     Json list = Json::array();
@@ -115,10 +172,11 @@ void saveScenes(const std::vector<RecordingScene>& scenes)
             item["kind"] = kindName(source.source.kind);
             item["name"] = source.source.name;
             item["device"] = source.source.device;
+            item["fit"] = source.fit == core::FitMode::Fill ? "fill" : source.fit == core::FitMode::Native ? "native" : "fit";
             item["x"] = (double)source.x;
             item["y"] = (double)source.y;
-            item["width"] = (double)source.width;
-            item["height"] = (double)source.height;
+            item["scale"] = (double)source.scale;
+            item["rotation"] = (double)source.rotation;
             item["cropLeft"] = (double)source.cropLeft;
             item["cropTop"] = (double)source.cropTop;
             item["cropRight"] = (double)source.cropRight;

@@ -687,16 +687,23 @@ void testTransitions()
     CHECK(layers[1].clip->id == b && layers[1].slot == 1 && layers[1].still && layers[1].localTime == 0);
     CHECK(layers[1].opacity > 0.f && layers[1].opacity < 0.5f);
 
-    // After the cut: the outgoing clip holds its last frame.
+    // After the cut: the outgoing clip holds its last frame; each clip keeps
+    // its slot (its decoder) across the cut.
     layers = layersAt(sequence, 5 * TicksPerSecond + TicksPerSecond / 4);
     CHECK(layers.size() == 2);
-    CHECK(layers[0].clip->id == a && layers[0].slot == 1 && layers[0].still);
+    CHECK(layers[0].clip->id == a && layers[0].slot == 0 && layers[0].still);
     CHECK(layers[0].localTime == project.findClip(a)->duration - 1);
-    CHECK(layers[1].clip->id == b && layers[1].slot == 0 && layers[1].opacity > 0.5f);
+    CHECK(layers[1].clip->id == b && layers[1].slot == 1 && layers[1].opacity > 0.5f);
 
-    // Over: the incoming clip alone.
+    // Over: the incoming clip alone, on the same decoder.
     layers = layersAt(sequence, 6 * TicksPerSecond);
-    CHECK(layers.size() == 1 && layers[0].clip->id == b && layers[0].opacity == 1.f);
+    CHECK(layers.size() == 1 && layers[0].clip->id == b && layers[0].opacity == 1.f && layers[0].slot == 1);
+
+    // Coming next, decoded ahead: its first frame, with the key it gets then.
+    const uint64_t keyOfB = layers[0].key;
+    std::vector<LayerRequest> upcoming = upcomingLayers(sequence, 3 * TicksPerSecond, 2 * TicksPerSecond);
+    CHECK(upcoming.size() == 1 && upcoming[0].clip->id == b && upcoming[0].localTime == 0 && upcoming[0].key == keyOfB);
+    CHECK(upcomingLayers(sequence, TicksPerSecond, 2 * TicksPerSecond).empty());
 
     // Push: the pictures slide.
     incoming->transitionIn.type = TransitionType::Push;

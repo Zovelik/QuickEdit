@@ -230,6 +230,7 @@ GUI::GUI(const std::filesystem::path& projectPath, double startSeconds, Id selec
         }
 
         _trimPreview = loadSettings()["trimPreview"].toBool(true);
+        _viewerFullResolution = loadSettings()["viewerFullResolution"].toBool(false);
         _checkUpdates = loadSettings()["checkUpdates"].toBool(true);
         _mcpPort = (int)loadSettings()["mcpPort"].toInt(defaultMcpPort());
     }
@@ -491,7 +492,12 @@ void GUI::cmdCompose(VkCommandBuffer commandBuffer)
             VideoFrameRenderer::Sync sync;
 
             // Not decoded yet (opening the file, seeking), unless it cannot be.
-            if (!frame || !frame->covers(request.sourceTime)) {
+            // While playing, a frame a little late is shown without a word:
+            // the decoder catches up.
+            const bool late = frame && !frame->covers(request.sourceTime);
+            const bool farBehind = late && std::abs(frame->time - request.sourceTime) > TicksPerSecond / 2;
+
+            if (!frame || (late && (!_playing || farBehind))) {
                 _viewerLoading |= !player.failed(media->id);
             }
 
@@ -529,8 +535,48 @@ void GUI::cmdCompose(VkCommandBuffer commandBuffer)
         _compositor->setSound(sound.level, sound.bass, sound.mid, sound.treble);
     }
 
-    std::vector<Compositor::Layer> layers = build(
-        layersAt(sequence, shown, [this](Id id) { return _project.findSequence(id); }), sequence);
+    const auto sequenceOf = [this](Id id) { return _project.findSequence(id); };
+    std::vector<Compositor::Layer> layers = build(layersAt(sequence, shown, sequenceOf), sequence);
+
+    // While playing: the first frames of the clips coming next, decoded
+    // ahead by their own decoders (consecutive clips of a track take turns
+    // between two), so that a cut shows its picture at once instead of
+    // waiting for the file to open and seek.
+    if (_playing && _trimPreviewTime < 0) {
+        constexpr Time PrerollTime = 2 * TicksPerSecond;
+
+        std::function<void(const std::vector<LayerRequest>&)> preroll = [&](const std::vector<LayerRequest>& requests) {
+            for (const LayerRequest& request : requests) {
+                preroll(request.children);
+
+                const Clip& clip = *request.clip;
+                const MediaItem* media = (clip.kind == ClipKind::Media) ? _project.findMedia(clip.mediaId) : nullptr;
+
+                if (!media || !media->probed || media->type == MediaType::Audio) {
+                    continue;
+                }
+
+                Decoder& decoder = _decoders[request.key];
+
+                // Showing a picture this frame: left alone.
+                if (decoder.used) {
+                    continue;
+                }
+
+                if (!decoder.player) {
+                    decoder.player = std::make_unique<media::VideoPlayer>(_hwDevice ? _hwDevice->context() : nullptr);
+                    decoder.renderer = std::make_unique<VideoFrameRenderer>(device(), *pipelineCache());
+                    decoder.renderer->beginFrame();
+                }
+
+                decoder.used = true;
+                decoder.idleFrames = 0;
+                decoder.player->request(media->id, media->path, request.sourceTime, !request.still);
+            }
+        };
+
+        preroll(upcomingLayers(sequence, shown, PrerollTime, sequenceOf));
+    }
 
     // The subtitles, over everything (kept until the frame is recorded).
     _subtitleClips = subtitleClipsAt(sequence, shown);
@@ -555,7 +601,20 @@ void GUI::cmdCompose(VkCommandBuffer commandBuffer)
         ++it;
     }
 
-    _compositor->cmdComposite(commandBuffer, sequence.width, sequence.height, layers);
+    // The viewer is drawn at its size on the screen (at most the one of the
+    // sequence, in steps of an eighth to keep the same images while it is
+    // resized): much less to draw and blur for a 4K sequence in a small
+    // viewer. A frame asked by the MCP server is at full size.
+    uint32_t outputWidth = sequence.width;
+    uint32_t outputHeight = sequence.height;
+
+    if (!_viewerFullResolution && !_frameCapture.requested && _viewerPixelWidth > 0.f && sequence.width > 0) {
+        const float fraction = std::clamp(std::ceil(8.f * _viewerPixelWidth / (float)sequence.width) / 8.f, 0.125f, 1.f);
+        outputWidth = std::max(16u, (uint32_t)std::lround((float)sequence.width * fraction) & ~1u);
+        outputHeight = std::max(16u, (uint32_t)std::lround((float)sequence.height * fraction) & ~1u);
+    }
+
+    _compositor->cmdComposite(commandBuffer, outputWidth, outputHeight, layers, sequence.width, sequence.height);
 
     // A frame asked by the MCP server.
     cmdCaptureFrame(commandBuffer);
@@ -1869,6 +1928,7 @@ void GUI::viewerPanel()
 
     const ImVec2 frameMin(std::floor(origin.x + 0.5f * (area.x - frameSize.x)), std::floor(origin.y + 0.5f * (area.y - frameSize.y)));
     const ImVec2 frameMax(frameMin.x + frameSize.x, frameMin.y + frameSize.y);
+    _viewerPixelWidth = frameSize.x * ImGui::GetWindowViewport()->FramebufferScale.x;
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     drawList->AddRectFilled(origin, ImVec2(origin.x + area.x, origin.y + area.y), IM_COL32(12, 12, 12, 255));
@@ -1997,14 +2057,16 @@ void GUI::viewerRecording(ImDrawList* drawList, const ImVec2& frameMin, const Im
     // A preview texture: the part of it that holds the picture (without
     // its letterboxing), drawn in a rectangle.
     // Its crop (left, top, right, bottom fractions) taken off.
-    auto drawPicture = [&](ImTextureData* texture, int pictureWidth, int pictureHeight, const ImVec2& min, const ImVec2& max, const ImVec4& crop) {
+    // The quad: its corners on screen, from the top left, clockwise.
+    auto drawPicture = [&](ImTextureData* texture, int pictureWidth, int pictureHeight, const std::array<ImVec2, 4>& quad, const ImVec4& crop) {
         const float fit = (pictureWidth > 0) ? std::min(PreviewWidth / (float)pictureWidth, PreviewHeight / (float)pictureHeight) : 1.f;
         const float w = (pictureWidth > 0) ? (float)pictureWidth * fit / PreviewWidth : 1.f;
         const float h = (pictureHeight > 0) ? (float)pictureHeight * fit / PreviewHeight : 1.f;
-        const ImVec2 size(max.x - min.x, max.y - min.y);
-        drawList->AddImage(texture->GetTexRef(),
-            ImVec2(min.x + crop.x * size.x, min.y + crop.y * size.y), ImVec2(max.x - crop.z * size.x, max.y - crop.w * size.y),
-            ImVec2(0.5f - 0.5f * w + crop.x * w, 0.5f - 0.5f * h + crop.y * h), ImVec2(0.5f + 0.5f * w - crop.z * w, 0.5f + 0.5f * h - crop.w * h));
+        const float u0 = 0.5f - 0.5f * w + crop.x * w;
+        const float u1 = 0.5f + 0.5f * w - crop.z * w;
+        const float v0 = 0.5f - 0.5f * h + crop.y * h;
+        const float v1 = 0.5f + 0.5f * h - crop.w * h;
+        drawList->AddImageQuad(texture->GetTexRef(), quad[0], quad[1], quad[2], quad[3], ImVec2(u0, v0), ImVec2(u1, v0), ImVec2(u1, v1), ImVec2(u0, v1));
     };
 
     drawList->PushClipRect(frameMin, ImVec2(frameMin.x + frameSize.x, frameMin.y + frameSize.y), true);
@@ -2017,9 +2079,15 @@ void GUI::viewerRecording(ImDrawList* drawList, const ImVec2& frameMin, const Im
                 const ScenePreview& preview = *_scenePreviews[i];
 
                 if (preview.texture && source.available) {
-                    const ImVec2 min(frameMin.x + source.x * frameSize.x, frameMin.y + source.y * frameSize.y);
-                    const ImVec2 max(min.x + source.width * frameSize.x, min.y + source.height * frameSize.y);
-                    drawPicture(preview.texture, preview.frameWidth, preview.frameHeight, min, max,
+                    const Sequence& sequence = _project.sequence();
+                    const float toScreen = frameSize.x / std::max(1.f, (float)sequence.width);
+                    std::array<ImVec2, 4> quad = sourceCorners(source, (float)sequence.width, (float)sequence.height, preview.frameWidth, preview.frameHeight);
+
+                    for (ImVec2& p : quad) {
+                        p = ImVec2(frameMin.x + p.x * toScreen, frameMin.y + p.y * toScreen);
+                    }
+
+                    drawPicture(preview.texture, preview.frameWidth, preview.frameHeight, quad,
                         ImVec4(source.cropLeft, source.cropTop, source.cropRight, source.cropBottom));
                 }
             }
@@ -2031,7 +2099,8 @@ void GUI::viewerRecording(ImDrawList* drawList, const ImVec2& frameMin, const Im
         const float fit = std::min(frameSize.x / PreviewWidth, frameSize.y / PreviewHeight);
         const ImVec2 size(PreviewWidth * fit, PreviewHeight * fit);
         const ImVec2 min(frameMin.x + 0.5f * (frameSize.x - size.x), frameMin.y + 0.5f * (frameSize.y - size.y));
-        drawPicture(_previewTexture, 0, 0, min, ImVec2(min.x + size.x, min.y + size.y), ImVec4(0.f, 0.f, 0.f, 0.f));
+        drawPicture(_previewTexture, 0, 0, { min, ImVec2(min.x + size.x, min.y), ImVec2(min.x + size.x, min.y + size.y), ImVec2(min.x, min.y + size.y) },
+            ImVec4(0.f, 0.f, 0.f, 0.f));
     }
 
     // What it is, in the corner.
@@ -2098,8 +2167,6 @@ void GUI::viewerInteraction(const ImVec2& frameMin, const ImVec2& frameSize)
 {
     const Sequence& sequence = _project.sequence();
     const float toSequence = (float)sequence.width / frameSize.x;
-    const ImVec2 mouse = ImGui::GetIO().MousePos;
-    const ImVec2 point((mouse.x - frameMin.x) * toSequence, (mouse.y - frameMin.y) * toSequence);
 
     // The frame is a button: clicks select and drag the layers.
     ImGui::SetCursorScreenPos(frameMin);
@@ -2144,432 +2211,112 @@ void GUI::viewerInteraction(const ImVec2& frameMin, const ImVec2& frameSize)
         endTextEditing();
     }
 
-    auto inside = [](const std::array<ImVec2, 4>& quad, const ImVec2& p) {
-        // Convex quad: same side of the four edges.
-        int sign = 0;
+    // The layers as the canvas edits them, top first. Subtitles are
+    // selected (to edit their text) but placed by their style.
+    std::vector<LayerCanvas::Layer> layers;
 
-        for (int i = 0; i < 4; i++) {
-            const ImVec2& a = quad[i];
-            const ImVec2& b = quad[(i + 1) % 4];
-            const float cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
-            const int s = (cross > 0.f) ? 1 : (cross < 0.f ? -1 : 0);
+    for (const Compositor::LayerBounds& bounds : _compositor->bounds()) {
+        const Clip* clip = _project.findClip(bounds.clipId);
 
-            if (s != 0 && sign != 0 && s != sign) {
-                return false;
-            }
-
-            if (s != 0) {
-                sign = s;
-            }
+        if (!clip) {
+            continue;
         }
 
-        return true;
-    };
+        const Track* track = _project.findTrackOfClip(bounds.clipId);
+        const Time localTime = std::clamp<Time>(_playhead - clip->start, 0, clip->duration);
+        LayerCanvas::Layer layer;
+        layer.id = clip->id;
+        layer.corners = bounds.corners;
+        layer.x = clip->transform.x.at(localTime);
+        layer.y = clip->transform.y.at(localTime);
+        layer.scale = clip->transform.scale.at(localTime);
+        layer.rotation = clip->transform.rotation.at(localTime);
+        layer.movable = !(track && track->type == TrackType::Subtitle);
 
-    // Handles of the selected layer (when a single one is selected): the
-    // corners scale it, the handle above its top edge rotates it.
-    const Compositor::LayerBounds* handleBounds = nullptr;
+        // A video or image can be cropped: its picture fitted in the frame.
+        const MediaItem* media = (clip->kind == ClipKind::Media) ? _project.findMedia(clip->mediaId) : nullptr;
 
-    if (_selection.size() >= 1) {
-        for (const Compositor::LayerBounds& bounds : _compositor->bounds()) {
-            // Subtitles are placed by their style, not by handles.
-            const Track* track = _project.findTrackOfClip(bounds.clipId);
-
-            if (bounds.clipId == _selection.front() && !(track && track->type == TrackType::Subtitle)) {
-                handleBounds = &bounds;
-            }
+        if (media && media->width > 0 && media->height > 0) {
+            const float fit = fitScale(clip->fit, (float)sequence.width, (float)sequence.height, (float)media->width, (float)media->height);
+            layer.halfWidth = 0.5f * (float)media->width * fit;
+            layer.halfHeight = 0.5f * (float)media->height * fit;
+            layer.cropLeft = clip->frame.cropLeft;
+            layer.cropTop = clip->frame.cropTop;
+            layer.cropRight = clip->frame.cropRight;
+            layer.cropBottom = clip->frame.cropBottom;
         }
+
+        layers.push_back(layer);
     }
 
-    const float handleRadius = 6.f * toSequence;     // Screen pixels, in sequence pixels
-    int hoveredHandle = -1;                          // 0..3: corners, 4: rotation, 5..8: edges (top, right, bottom, left)
-    ImVec2 rotationHandle;
-    ImVec2 layerCenter;
-    ImVec2 edgeHandles[4];
+    const LayerCanvas::Result result = _layerCanvas.update(frameMin, frameSize, (float)sequence.width, (float)sequence.height, layers, _selection, hovered);
 
-    // A video or image layer can be cropped: its picture, in the pixels of
-    // the layer (centered, before its transform), and the transform.
-    const Clip* handleClip = handleBounds ? _project.findClip(handleBounds->clipId) : nullptr;
-    const MediaItem* handleMedia = (handleClip && handleClip->kind == ClipKind::Media) ? _project.findMedia(handleClip->mediaId) : nullptr;
-    const bool croppable = handleMedia && handleMedia->width > 0 && handleMedia->height > 0;
-    float pictureHalfWidth = 0.f;
-    float pictureHalfHeight = 0.f;
-
-    if (croppable) {
-        const float fit = fitScale(handleClip->fit, (float)sequence.width, (float)sequence.height, (float)handleMedia->width, (float)handleMedia->height);
-        pictureHalfWidth = 0.5f * (float)handleMedia->width * fit;
-        pictureHalfHeight = 0.5f * (float)handleMedia->height * fit;
-    }
-
-    // Sequence pixels to the pixels of the layer, and back.
-    auto toLayer = [&](const Clip& clip, const ImVec2& p) {
-        const Time localTime = std::clamp<Time>(_playhead - clip.start, 0, clip.duration);
-        const float angle = clip.transform.rotation.at(localTime) * 3.14159265358979f / 180.f;
-        const float scale = std::max(1e-3f, clip.transform.scale.at(localTime));
-        const float dx = p.x - (0.5f * sequence.width + clip.transform.x.at(localTime));
-        const float dy = p.y - (0.5f * sequence.height + clip.transform.y.at(localTime));
-
-        return ImVec2((dx * std::cos(angle) + dy * std::sin(angle)) / scale, (-dx * std::sin(angle) + dy * std::cos(angle)) / scale);
-    };
-
-    auto fromLayer = [&](const Clip& clip, const ImVec2& p) {
-        const Time localTime = std::clamp<Time>(_playhead - clip.start, 0, clip.duration);
-        const float angle = clip.transform.rotation.at(localTime) * 3.14159265358979f / 180.f;
-        const float scale = clip.transform.scale.at(localTime);
-        const float sx = p.x * scale;
-        const float sy = p.y * scale;
-
-        return ImVec2(0.5f * sequence.width + clip.transform.x.at(localTime) + sx * std::cos(angle) - sy * std::sin(angle),
-            0.5f * sequence.height + clip.transform.y.at(localTime) + sx * std::sin(angle) + sy * std::cos(angle));
-    };
-
-    if (handleBounds) {
-        const auto& c = handleBounds->corners;
-        layerCenter = ImVec2(0.25f * (c[0].x + c[1].x + c[2].x + c[3].x), 0.25f * (c[0].y + c[1].y + c[2].y + c[3].y));
-
-        // Above the middle of the top edge, away from the center.
-        const ImVec2 top(0.5f * (c[0].x + c[1].x), 0.5f * (c[0].y + c[1].y));
-        ImVec2 up(top.x - layerCenter.x, top.y - layerCenter.y);
-        const float length = std::max(1.f, std::sqrt(up.x * up.x + up.y * up.y));
-        const float offset = 28.f * toSequence;
-        rotationHandle = ImVec2(top.x + up.x / length * offset, top.y + up.y / length * offset);
-
-        auto near = [&](const ImVec2& p) {
-            return std::abs(point.x - p.x) <= 1.5f * handleRadius && std::abs(point.y - p.y) <= 1.5f * handleRadius;
-        };
-
-        for (int i = 0; i < 4; i++) {
-            if (near(c[i])) hoveredHandle = i;
-        }
-
-        // Middles of the edges, which crop.
-        for (int i = 0; i < 4; i++) {
-            edgeHandles[i] = ImVec2(0.5f * (c[i].x + c[(i + 1) % 4].x), 0.5f * (c[i].y + c[(i + 1) % 4].y));
-
-            if (croppable && near(edgeHandles[i])) hoveredHandle = 5 + i;
-        }
-
-        if (near(rotationHandle)) {
-            hoveredHandle = 4;
-        }
-    }
-
-    const bool cropKey = ImGui::GetIO().KeyAlt && croppable;
-
-    // The arrows of a resize cursor along a direction on screen, from the
-    // center of the layer to the handle: they turn with the layer.
-    auto resizeCursor = [](const ImVec2& direction) {
-        float angle = std::atan2(direction.y, direction.x) * 180.f / 3.14159265358979f;
-        angle = std::fmod(angle + 360.f, 180.f);
-
-        return (angle < 22.5f || angle >= 157.5f) ? ImGuiMouseCursor_ResizeEW
-            : (angle < 67.5f) ? ImGuiMouseCursor_ResizeNWSE
-            : (angle < 112.5f) ? ImGuiMouseCursor_ResizeNS
-            : ImGuiMouseCursor_ResizeNESW;
-    };
-
-    auto handleCursor = [&](int handle) {
-        const ImVec2 at = (handle < 4) ? handleBounds->corners[(size_t)handle] : edgeHandles[handle - 5];
-        return resizeCursor(ImVec2(at.x - layerCenter.x, at.y - layerCenter.y));
-    };
-
-    // Rotation: no such cursor in the system ones, a drawn one.
-    auto rotationCursor = [&]() {
-        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
-        ImDrawList* foreground = ImGui::GetForegroundDrawList();
-        const ImVec2 mouse = ImGui::GetIO().MousePos;
-        const ImVec2 size = ImGui::CalcTextSize(ICON_MD_ROTATE_RIGHT);
-        const ImVec2 at(mouse.x - 0.5f * size.x, mouse.y - 0.5f * size.y);
-
-        for (const ImVec2& offset : { ImVec2(-1.f, 0.f), ImVec2(1.f, 0.f), ImVec2(0.f, -1.f), ImVec2(0.f, 1.f) }) {
-            foreground->AddText(ImVec2(at.x + offset.x, at.y + offset.y), IM_COL32(0, 0, 0, 220), ICON_MD_ROTATE_RIGHT);
-        }
-
-        foreground->AddText(at, IM_COL32(255, 255, 255, 255), ICON_MD_ROTATE_RIGHT);
-    };
-
-    if (hovered && hoveredHandle >= 0 && _draggedLayer == InvalidId) {
-        if (hoveredHandle == 4) {
-            rotationCursor();
-        }
-        else {
-            ImGui::SetMouseCursor(handleCursor(hoveredHandle));
-        }
-    }
-
-    // The layers under the mouse, the top one first (subtitles are not
-    // moved).
-    std::vector<Id> underMouse;
-
-    if (hovered) {
-        for (const Compositor::LayerBounds& bounds : _compositor->bounds()) {
-            if (inside(bounds.corners, point)) {
-                underMouse.push_back(bounds.clipId);
-            }
-        }
-    }
-
-    // A layer that can be moved: the cross of arrows.
-    if (hovered && hoveredHandle < 0 && _draggedLayer == InvalidId && !underMouse.empty()) {
-        const Track* track = _project.findTrackOfClip(underMouse.front());
-
-        if (!(track && track->type == TrackType::Subtitle)) {
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
-        }
-    }
-
-    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hoveredHandle >= 0) {
-        const Clip* clip = _project.findClip(handleBounds->clipId);
-        const Time localTime = _playhead - clip->start;
-
-        _draggedLayer = clip->id;
-        _layerDrag = (hoveredHandle == 4) ? LayerDrag::Rotate
-            : (hoveredHandle >= 5 || cropKey) ? LayerDrag::Crop : LayerDrag::Scale;
-
-        // The sides of the handle: corners top left, top right, bottom
-        // right, bottom left; edges top, right, bottom, left.
-        _cropLeft = hoveredHandle == 0 || hoveredHandle == 3 || hoveredHandle == 8;
-        _cropRight = hoveredHandle == 1 || hoveredHandle == 2 || hoveredHandle == 6;
-        _cropTop = hoveredHandle == 0 || hoveredHandle == 1 || hoveredHandle == 5;
-        _cropBottom = hoveredHandle == 2 || hoveredHandle == 3 || hoveredHandle == 7;
-        _dragStartMouse = point;
-        _dragCenter = layerCenter;
-        _dragCursor = (hoveredHandle == 4) ? ImGuiMouseCursor_None : handleCursor(hoveredHandle);
-        _dragStartScale = clip->transform.scale.at(localTime);
-        _dragStartRotation = clip->transform.rotation.at(localTime);
-        _dragMoved = false;
-        stopPlayback();
-    }
-    else if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        // The top layer under the mouse. Ctrl: the one below the selected
-        // layer there, to reach a layer hidden by another (again and again
-        // to go down, around to the top).
-        Id picked = underMouse.empty() ? InvalidId : underMouse.front();
-
-        if (ImGui::GetIO().KeyCtrl && underMouse.size() > 1) {
-            for (size_t i = 0; i < underMouse.size(); i++) {
-                if (std::find(_selection.begin(), _selection.end(), underMouse[i]) != _selection.end()) {
-                    picked = underMouse[(i + 1) % underMouse.size()];
-                    break;
-                }
-            }
-        }
+    if (result.clicked != InvalidId) {
+        const Clip* clip = _project.findClip(result.clicked);
 
         // Double click on a text: edit it.
-        const Clip* pickedClip = (picked != InvalidId) ? _project.findClip(picked) : nullptr;
-
-        if (pickedClip && pickedClip->kind == ClipKind::Text && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-            beginTextEditing(picked);
+        if (clip && clip->kind == ClipKind::Text && result.doubleClicked) {
+            _layerCanvas.cancel();
+            beginTextEditing(result.clicked);
             return;
         }
 
-        if (picked != InvalidId) {
-            if (std::find(_selection.begin(), _selection.end(), picked) == _selection.end()) {
-                _selection.clear();
-                TimelineView::addWithLinks(_project, picked, _selection);
-            }
-
-            const Clip* clip = _project.findClip(picked);
-            const Time localTime = _playhead - clip->start;
-            const Track* track = _project.findTrackOfClip(picked);
-
-            // A subtitle: selected, to edit its text, but not moved.
-            if (track && track->type == TrackType::Subtitle) {
-                return;
-            }
-
-            _draggedLayer = picked;
-            _layerDrag = LayerDrag::Move;
-            _dragStartMouse = point;
-            _dragStartX = clip->transform.x.at(localTime);
-            _dragStartY = clip->transform.y.at(localTime);
-            _dragMoved = false;
-            stopPlayback();
-        }
-        else {
+        if (std::find(_selection.begin(), _selection.end(), result.clicked) == _selection.end()) {
             _selection.clear();
+            TimelineView::addWithLinks(_project, result.clicked, _selection);
         }
     }
-
-    if (_draggedLayer != InvalidId) {
-        Clip* clip = _project.findClip(_draggedLayer);
-
-        if (!clip || !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-            if (clip && _dragMoved) {
-                commit(_layerDrag == LayerDrag::Move ? "Move layer"
-                    : _layerDrag == LayerDrag::Scale ? "Scale layer"
-                    : _layerDrag == LayerDrag::Crop ? "Crop" : "Rotate layer");
-            }
-
-            _draggedLayer = InvalidId;
-        }
-        else if (_layerDrag == LayerDrag::Scale) {
-            // Uniform scale: the distance to the center, relative to the
-            // one when the drag started.
-            const Time localTime = std::clamp<Time>(_playhead - clip->start, 0, clip->duration);
-            const float startDistance = std::max(1.f, std::hypot(_dragStartMouse.x - _dragCenter.x, _dragStartMouse.y - _dragCenter.y));
-            const float distance = std::hypot(point.x - _dragCenter.x, point.y - _dragCenter.y);
-            float scale = std::max(0.01f, _dragStartScale * distance / startDistance);
-
-            // Snaps to 100 %, Ctrl to scale freely (Alt crops).
-            if (!ImGui::GetIO().KeyCtrl && std::abs(scale - 1.f) < 0.03f) {
-                scale = 1.f;
-            }
-
-            clip->transform.scale.set(localTime, scale);
-            _dragMoved = true;
-            ImGui::SetMouseCursor(_dragCursor);
-        }
-        else if (_layerDrag == LayerDrag::Crop) {
-            // The side follows the mouse, in the picture; the rest of it
-            // stays in place. Snaps to the edges and the middle, Ctrl to
-            // crop freely.
-            if (croppable && handleClip && handleClip->id == clip->id) {
-                const ImVec2 local = toLayer(*clip, point);
-                const float width = 2.f * pictureHalfWidth;
-                const float height = 2.f * pictureHalfHeight;
-                const float snap = 8.f * toSequence / std::max(1e-3f, clip->transform.scale.at(std::clamp<Time>(_playhead - clip->start, 0, clip->duration)));
-                Frame& frame = clip->frame;
-
-                auto snapped = [&](float fraction, float size) {
-                    if (!ImGui::GetIO().KeyCtrl) {
-                        for (float to : { 0.f, 0.5f }) {
-                            if (std::abs(fraction - to) * size < snap) return to;
-                        }
-                    }
-
-                    return fraction;
-                };
-
-                if (_cropLeft) {
-                    frame.cropLeft = std::clamp(snapped((local.x + pictureHalfWidth) / width, width), 0.f, std::max(0.f, 0.99f - frame.cropRight));
-                }
-
-                if (_cropRight) {
-                    frame.cropRight = std::clamp(snapped((pictureHalfWidth - local.x) / width, width), 0.f, std::max(0.f, 0.99f - frame.cropLeft));
-                }
-
-                if (_cropTop) {
-                    frame.cropTop = std::clamp(snapped((local.y + pictureHalfHeight) / height, height), 0.f, std::max(0.f, 0.99f - frame.cropBottom));
-                }
-
-                if (_cropBottom) {
-                    frame.cropBottom = std::clamp(snapped((pictureHalfHeight - local.y) / height, height), 0.f, std::max(0.f, 0.99f - frame.cropTop));
-                }
-
-                _dragMoved = true;
-            }
-
-            ImGui::SetMouseCursor(_dragCursor);
-        }
-        else if (_layerDrag == LayerDrag::Rotate) {
-            const Time localTime = std::clamp<Time>(_playhead - clip->start, 0, clip->duration);
-            const float startAngle = std::atan2(_dragStartMouse.y - _dragCenter.y, _dragStartMouse.x - _dragCenter.x);
-            const float angle = std::atan2(point.y - _dragCenter.y, point.x - _dragCenter.x);
-            float rotation = _dragStartRotation + (angle - startAngle) * 180.f / 3.14159265358979f;
-
-            // Shift: steps of 15 degrees.
-            if (ImGui::GetIO().KeyShift) {
-                rotation = std::round(rotation / 15.f) * 15.f;
-            }
-
-            clip->transform.rotation.set(localTime, rotation);
-            _dragMoved = true;
-            rotationCursor();
-        }
-        else {
-            const float dx = point.x - _dragStartMouse.x;
-            const float dy = point.y - _dragStartMouse.y;
-
-            if (std::abs(dx) > 1.f || std::abs(dy) > 1.f || _dragMoved) {
-                const Time localTime = std::clamp<Time>(_playhead - clip->start, 0, clip->duration);
-                float x = _dragStartX + dx;
-                float y = _dragStartY + dy;
-
-                // Snaps to the center of the frame, Alt to move freely.
-                if (!ImGui::GetIO().KeyAlt) {
-                    const float snap = 8.f * toSequence;
-                    if (std::abs(x) < snap) x = 0.f;
-                    if (std::abs(y) < snap) y = 0.f;
-                }
-
-                clip->transform.x.set(localTime, std::round(x));
-                clip->transform.y.set(localTime, std::round(y));
-                _dragMoved = true;
-                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
-            }
-        }
+    else if (result.clickedEmpty) {
+        _selection.clear();
     }
 
-    // Outline of the selected layers.
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    drawList->PushClipRect(frameMin, ImVec2(frameMin.x + frameSize.x, frameMin.y + frameSize.y), true);
-
-    for (const Compositor::LayerBounds& bounds : _compositor->bounds()) {
-        if (std::find(_selection.begin(), _selection.end(), bounds.clipId) == _selection.end()) {
-            continue;
-        }
-
-        ImVec2 corners[4];
-
-        for (int i = 0; i < 4; i++) {
-            corners[i] = ImVec2(frameMin.x + bounds.corners[i].x / toSequence, frameMin.y + bounds.corners[i].y / toSequence);
-        }
-
-        drawList->AddPolyline(corners, 4, IM_COL32(255, 122, 0, 255), ImDrawFlags_Closed, 1.5f);
-
-        if (&bounds != handleBounds) {
-            continue;
-        }
-
-        // While cropping: the whole picture, faintly.
-        const bool cropping = _draggedLayer == bounds.clipId && _layerDrag == LayerDrag::Crop;
-
-        if (croppable && (cropping || cropKey) && handleClip) {
-            ImVec2 whole[4];
-            const ImVec2 local[4] = {
-                { -pictureHalfWidth, -pictureHalfHeight }, { pictureHalfWidth, -pictureHalfHeight },
-                { pictureHalfWidth, pictureHalfHeight }, { -pictureHalfWidth, pictureHalfHeight } };
-
-            for (int i = 0; i < 4; i++) {
-                const ImVec2 p = fromLayer(*handleClip, local[i]);
-                whole[i] = ImVec2(frameMin.x + p.x / toSequence, frameMin.y + p.y / toSequence);
-            }
-
-            drawList->AddPolyline(whole, 4, IM_COL32(120, 200, 255, 150), ImDrawFlags_Closed, 1.f);
-        }
-
-        // Handles: crop ones in blue (edges, and the corners with Alt).
-        const float size = handleRadius / toSequence;
-        const ImU32 cropColor = IM_COL32(60, 170, 255, 255);
-
-        for (int i = 0; i < 4; i++) {
-            const ImU32 outline = cropKey ? cropColor : IM_COL32(255, 122, 0, 255);
-            const ImU32 fill = (hoveredHandle == i) ? outline : IM_COL32(255, 255, 255, 255);
-            drawList->AddRectFilled(ImVec2(corners[i].x - size, corners[i].y - size), ImVec2(corners[i].x + size, corners[i].y + size), fill);
-            drawList->AddRect(ImVec2(corners[i].x - size, corners[i].y - size), ImVec2(corners[i].x + size, corners[i].y + size), outline);
-        }
-
-        if (croppable) {
-            const float edge = 0.75f * size;
-
-            for (int i = 0; i < 4; i++) {
-                const ImVec2 e(frameMin.x + edgeHandles[i].x / toSequence, frameMin.y + edgeHandles[i].y / toSequence);
-                const ImU32 fill = (hoveredHandle == 5 + i) ? cropColor : IM_COL32(255, 255, 255, 255);
-                drawList->AddRectFilled(ImVec2(e.x - edge, e.y - edge), ImVec2(e.x + edge, e.y + edge), fill);
-                drawList->AddRect(ImVec2(e.x - edge, e.y - edge), ImVec2(e.x + edge, e.y + edge), cropColor);
-            }
-        }
-
-        const ImVec2 rotation(frameMin.x + rotationHandle.x / toSequence, frameMin.y + rotationHandle.y / toSequence);
-        const ImVec2 top(0.5f * (corners[0].x + corners[1].x), 0.5f * (corners[0].y + corners[1].y));
-
-        drawList->AddLine(top, rotation, IM_COL32(255, 122, 0, 255), 1.5f);
-        drawList->AddCircleFilled(rotation, size * 1.1f, (hoveredHandle == 4) ? IM_COL32(255, 122, 0, 255) : IM_COL32(255, 255, 255, 255));
-        drawList->AddCircle(rotation, size * 1.1f, IM_COL32(255, 122, 0, 255), 0, 1.5f);
+    if (result.dragStarted) {
+        stopPlayback();
     }
 
-    drawList->PopClipRect();
+    // The placement at the playhead (a keyframe when animated).
+    auto apply = [&](const LayerCanvas::Layer& layer) {
+        Clip* clip = _project.findClip(layer.id);
+
+        if (!clip) {
+            return;
+        }
+
+        const Time localTime = std::clamp<Time>(_playhead - clip->start, 0, clip->duration);
+
+        switch (result.drag) {
+            case LayerCanvas::Drag::Move:
+                clip->transform.x.set(localTime, layer.x);
+                clip->transform.y.set(localTime, layer.y);
+                break;
+            case LayerCanvas::Drag::Scale:
+                clip->transform.scale.set(localTime, layer.scale);
+                break;
+            case LayerCanvas::Drag::Rotate:
+                clip->transform.rotation.set(localTime, layer.rotation);
+                break;
+            case LayerCanvas::Drag::Crop:
+                clip->frame.cropLeft = layer.cropLeft;
+                clip->frame.cropTop = layer.cropTop;
+                clip->frame.cropRight = layer.cropRight;
+                clip->frame.cropBottom = layer.cropBottom;
+                break;
+            case LayerCanvas::Drag::None:
+                break;
+        }
+    };
+
+    if (result.edited) {
+        apply(result.layer);
+    }
+
+    if (result.finished) {
+        commit(result.drag == LayerCanvas::Drag::Move ? "Move layer"
+            : result.drag == LayerCanvas::Drag::Scale ? "Scale layer"
+            : result.drag == LayerCanvas::Drag::Crop ? "Crop" : "Rotate layer");
+    }
+
+    _layerCanvas.draw(ImGui::GetWindowDrawList(), frameMin, frameSize, (float)sequence.width, layers, _selection);
 }
 
 
@@ -5733,6 +5480,16 @@ void GUI::preferencesPopup()
 
     ImGui::SetItemTooltip("%s", tr("While a clip edge is dragged: the viewer shows its frame, a sound is heard there"));
 
+    // Playback
+    ImGui::SeparatorText(tr(ICON_MD_PLAY_ARROW " Playback"));
+
+    if (ImGui::Checkbox(tr("Viewer at the full resolution of the sequence"), &_viewerFullResolution)) {
+        saveSetting("viewerFullResolution", _viewerFullResolution);
+    }
+
+    ImGui::SetItemTooltip("%s", tr("Otherwise the viewer is drawn at its size on the screen: much faster on a large sequence "
+                                   "(exports are always at full resolution)"));
+
     // AI control
     ImGui::SeparatorText(tr(ICON_MD_SMART_TOY " AI Control"));
     bool mcp = _mcpEnabled;
@@ -7180,7 +6937,7 @@ void GUI::replaceProject(Project project, const std::filesystem::path& path)
     _loggedVideoMedia.clear();
     _resetDecoders = true;
     _effectsTrack = InvalidId;
-    _draggedLayer = InvalidId;
+    _layerCanvas.cancel();
 
     _project = std::move(project);
     _projectPath = path;

@@ -432,8 +432,10 @@ void Inspector::transformSection(Project& project, Clip& clip, Time localTime, s
 
     Transform& t = clip.transform;
 
-    // Pictures: their size in the frame before the scale. Native shows
-    // them at their resolution when the scale is 100 %.
+    // Pictures: their size in the frame. A choice places them again at
+    // 100 % in the middle (unless animated): a clip placed smaller by a
+    // scene fills the frame with Fill. Native shows them at their
+    // resolution.
     if (clip.kind == ClipKind::Media || clip.kind == ClipKind::Sequence) {
         propertyLabel("Size");
 
@@ -447,12 +449,19 @@ void Inspector::transformSection(Project& project, Clip& clip, Time localTime, s
 
             if (widgets::optionButton(fitModeName(mode), clip.fit == mode, ImVec2(width, 0.f))) {
                 clip.fit = mode;
+
+                for (AnimatedValue* value : { &t.scale, &t.x, &t.y }) {
+                    if (!value->animated()) {
+                        value->value = (value == &t.scale) ? 1.f : 0.f;
+                    }
+                }
+
                 edit = "Change size";
             }
 
-            ImGui::SetItemTooltip("%s", mode == FitMode::Fit ? tr("The whole picture, as large as the frame allows")
+            ImGui::SetItemTooltip("%s", mode == FitMode::Fit ? tr("The whole picture, as large as the frame allows, in the middle")
                 : mode == FitMode::Fill ? tr("The picture covers the whole frame, cut at the edges")
-                : tr("One pixel of the picture per pixel of the sequence: 100 % is the native resolution"));
+                : tr("One pixel of the picture per pixel of the sequence, in the middle"));
         }
     }
 
