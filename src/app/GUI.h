@@ -605,6 +605,8 @@ private:
     // without effects, for the sound levels given to the shaders.
     void rebuildMix();
     std::shared_ptr<const audio::MixGraph> _levelsGraph;
+    audio::SoundHistory _soundHistory;
+    audio::SoundPicture _soundPicture;
     core::Id soundTrackOf(core::Id videoTrack) const;   // Paired with it, where the sound of a recording goes
     void beginScreenRecording(ScreenJob job);
     void placeScreenRecording(ScreenJob job);

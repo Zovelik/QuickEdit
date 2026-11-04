@@ -309,7 +309,14 @@ Json GUI::mcpTools()
         "Creates or replaces a shader of the user (GLSL, Documents/QuickEdit/Shaders/<name>.glsl) and compiles it: its id, or the errors (with "
         "their lines) to fix. Its kind comes from the function it defines: vec4 generate(vec2 uv, float time) (iResolution, iTime, iDuration, "
         "param(i)); vec4 transition(vec2 uv) (getFromColor(uv), getToColor(uv), progress, ratio); vec3 blend(vec3 base, vec3 layer); "
-        "vec4 resample(vec2 uv) (source(ivec2), iSourceSize, iResolution, iTime). All get the sound: iLevel, iBass, iMid, iTreble (0 to 1). "
+        "vec4 resample(vec2 uv) (source(ivec2), iSourceSize, iResolution, iTime). All get the sound: iLevel, iBass, iMid, iTreble (0 to 1); "
+        "generators also soundBefore(seconds) (iLevel up to 1.5 s before, for pictures that remember the sound). "
+        "Generators also get the sound in stereo by track: spectrum(track, channel, x) (x 0 to 1: 20 Hz to 20 kHz on a log scale; 0 to 1 "
+        "for -90 to -10 dB, the last 85 ms) and waveform(track, channel, x) (the last 512 samples, -1 to 1); track 0 is the mix, then the "
+        "sound tracks S1, S2..., then the audio tracks A1, A2... (soundTracks() of them, muted ones silent); channel 0 left, 1 right. "
+        "Multi-pass generators: define vec4 bufferA(vec2 uv, float time) (and bufferB, bufferC), drawn first in that order into half float "
+        "pictures of the frame size; every pass reads passA(uv)... (the passes before it, this frame) and lastA(uv)... (all of them at the "
+        "frame before: feedback, black after a jump in time). "
         "Parameters (generators, up to 8): comment lines '// @param Name min max default'.",
         R"({"name": {"type": "string"}, "source": {"type": "string"}})", R"(["name", "source"])"));
 
@@ -1434,6 +1441,9 @@ std::optional<Json> GUI::mcpCall(const std::string& name, const Json& args, int 
     };
 
     if (name == "list_capture_sources") {
+        // Listed again: windows open and close (the indexes given hold
+        // until the next listing).
+        _captureSourcesListed = false;
         ensureSources();
         Json list = Json::array();
 

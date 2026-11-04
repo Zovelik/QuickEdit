@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -52,6 +53,11 @@ namespace audio
         std::vector<MixTrack> subTracks;
 
         std::vector<std::shared_ptr<AudioEffect>> effects;
+
+        // Of a track of the sequence: its place among the sound tracks of
+        // the video tracks then the audio tracks (S1, S2..., A1, A2...),
+        // muted ones included; -1 for a sub-track.
+        int slot = -1;
     };
 
 
@@ -62,6 +68,7 @@ namespace audio
     {
         uint32_t sampleRate = 48000;
         std::vector<MixTrack> tracks;
+        int slots = 0;              // Tracks of the sequence (see MixTrack::slot)
     };
 
 
@@ -99,4 +106,50 @@ namespace audio
     };
 
     SoundLevels soundLevels(const MixGraph& graph, int64_t frame);
+
+    // The level (as SoundLevels::level) over the moments before a frame, for
+    // pictures that remember the sound: now, then every Step back on a fixed
+    // grid of steps, and how far the frame is past the latest step. The
+    // steps already measured are kept, so that playing measures one new
+    // step now and then.
+    class SoundHistory
+    {
+    public:
+        static constexpr double Step = 0.05;                // Seconds
+        static constexpr int Steps = 30;                    // Back to 1.5 s
+
+        struct Levels
+        {
+            float now = 0.f;
+            float steps[Steps] = {};                        // The latest step first
+            float phase = 0.f;                              // Steps since the latest one, 0 to 1
+        };
+
+        Levels at(const MixGraph& graph, int64_t frame);
+
+    private:
+        const MixGraph* _graph = nullptr;
+        uint32_t _sampleRate = 0;
+        std::map<int64_t, float> _levels;                   // By step
+    };
+
+
+    // The sound before a frame as a picture for the shaders, in stereo: for
+    // the mix (source 0) and each track of the sequence (1 + its slot), 4
+    // rows of Width values: the spectrum of the left channel, its waveform,
+    // then those of the right. Spectrum: 20 Hz to 20 kHz on a log scale,
+    // -90 dB to -10 dB as 0 to 1, over the last 85 ms. Waveform: the last
+    // Width samples (11 ms at 48 kHz), -1 to 1. The last row holds the
+    // number of tracks in its first value. Without the effects of the graph
+    // (a graph for the levels).
+    struct SoundPicture
+    {
+        static constexpr int Width = 512;
+        static constexpr int Rows = 64;
+        static constexpr int MaxSources = 15;               // The mix and 14 tracks
+
+        std::vector<float> texels = std::vector<float>((size_t)Width * Rows, 0.f);
+    };
+
+    void soundPicture(const MixGraph& graph, int64_t frame, SoundPicture& picture);
 }

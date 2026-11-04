@@ -42,6 +42,9 @@ struct Compositor::GlyphInstance
 namespace {
 
 constexpr VkFormat OutputFormat = VK_FORMAT_R8G8B8A8_UNORM;
+// The buffers of multi-pass generators: in half floats, for light above 1
+// and frames fed back again and again without banding.
+constexpr VkFormat BufferFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
 // Most layers drawn in a frame (descriptor sets of the pool).
 constexpr uint32_t MaxLayers = 64;
@@ -195,6 +198,17 @@ Compositor::Compositor(const GPU::Device& device, const GPU::PipelineCache& pipe
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     _atlasStaging->bind();
+
+    // The sound of the frame for the generators (audio::SoundPicture), black
+    // until set.
+    _soundImage = std::make_unique<GPU::Image>("Sound picture", _device, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        VK_FORMAT_R32_SFLOAT, audio::SoundPicture::Width, audio::SoundPicture::Rows);
+    _soundStaging = std::make_unique<GPU::Buffer>("Sound picture upload", _device,
+        (VkDeviceSize)audio::SoundPicture::Width * audio::SoundPicture::Rows * sizeof(float),
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    _soundStaging->bind();
+    _soundTexels.assign((size_t)audio::SoundPicture::Width * audio::SoundPicture::Rows, 0.f);
+    _soundDirty = true;
 }
 
 
@@ -225,6 +239,7 @@ Compositor::~Compositor()
     vkDestroyPipelineLayout(device, _generatorPipelineLayout, nullptr);
     vkDestroyPipelineLayout(device, _transitionPipelineLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, _transitionSetLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device, _generatorSetLayout, nullptr);
     vkDestroyPipeline(device, _layerPipeline, nullptr);
 
     for (int mode = 1; mode < (int)BlendMode::Count; mode++) {
@@ -331,9 +346,26 @@ void Compositor::createPipelines(const GPU::PipelineCache& pipelineCache)
     // Shaders of the user: generators (parameters only), transitions (the
     // two pictures). Their pipelines are made when first used.
     {
-        const VkPushConstantRange generatorConstants = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 64 };
+        // 128 bytes: the most every device takes (the sound history fills
+        // the second half).
+        const VkPushConstantRange generatorConstants = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 128 };
+
+        // Their buffers: those of this frame (A, B, C), then of the frame before.
+        // And the sound picture.
+        VkDescriptorSetLayoutBinding generatorBindings[7] = {};
+
+        for (uint32_t i = 0; i < 7; i++) {
+            generatorBindings[i] = { i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
+        }
+
+        VkDescriptorSetLayoutCreateInfo generatorSetInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+        generatorSetInfo.bindingCount = 7;
+        generatorSetInfo.pBindings = generatorBindings;
+        VK_THROW_IF_FAILED(vkCreateDescriptorSetLayout(device, &generatorSetInfo, nullptr, &_generatorSetLayout));
 
         VkPipelineLayoutCreateInfo generatorLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+        generatorLayoutInfo.setLayoutCount = 1;
+        generatorLayoutInfo.pSetLayouts = &_generatorSetLayout;
         generatorLayoutInfo.pushConstantRangeCount = 1;
         generatorLayoutInfo.pPushConstantRanges = &generatorConstants;
         VK_THROW_IF_FAILED(vkCreatePipelineLayout(device, &generatorLayoutInfo, nullptr, &_generatorPipelineLayout));
@@ -360,7 +392,7 @@ void Compositor::createPipelines(const GPU::PipelineCache& pipelineCache)
 
     // Sets of the frame, recycled by beginFrame().
     const VkDescriptorPoolSize poolSizes[] = {
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MaxSets },
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MaxSets * 7 },
         { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MaxLayers },
     };
 
@@ -373,8 +405,12 @@ void Compositor::createPipelines(const GPU::PipelineCache& pipelineCache)
 
 
 VkPipeline Compositor::createPipeline(const GPU::PipelineCache& pipelineCache, VkPipelineLayout layout,
-    const uint32_t* vertexCode, size_t vertexSize, const uint32_t* fragmentCode, size_t fragmentSize, bool blending, int blendMode)
+    const uint32_t* vertexCode, size_t vertexSize, const uint32_t* fragmentCode, size_t fragmentSize, bool blending, int blendMode, VkFormat format)
 {
+    if (format == VK_FORMAT_UNDEFINED) {
+        format = OutputFormat;
+    }
+
     VkDevice device = _device.device();
 
     VkShaderModuleCreateInfo moduleInfo = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
@@ -475,7 +511,7 @@ VkPipeline Compositor::createPipeline(const GPU::PipelineCache& pipelineCache, V
     // Dynamic rendering into the output.
     VkPipelineRenderingCreateInfo rendering = { VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
     rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachmentFormats = &OutputFormat;
+    rendering.pColorAttachmentFormats = &format;
 
     VkGraphicsPipelineCreateInfo pipelineInfo = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
     pipelineInfo.pNext = &rendering;
@@ -504,6 +540,10 @@ VkPipeline Compositor::createPipeline(const GPU::PipelineCache& pipelineCache, V
 void Compositor::beginFrame()
 {
     vkResetDescriptorPool(_device.device(), _descriptorPool, 0);
+    _frameNumber++;
+
+    // The buffers of generators no longer drawn for a while (some seconds).
+    std::erase_if(_generatorBuffers, [this](const auto& entry) { return entry.second.usedFrame + 600 < _frameNumber; });
 
     for (PassTarget& target : _passTargets) {
         target.used = false;
@@ -886,6 +926,21 @@ void Compositor::cmdComposite(VkCommandBuffer commandBuffer, uint32_t outputWidt
         cmdUploadAtlas(commandBuffer);
     }
 
+    // The sound picture, when it changed (the previous upload is done, see
+    // beginFrame()).
+    if (_soundDirty) {
+        std::memcpy(_soundStaging->mappedMemory(), _soundTexels.data(), _soundTexels.size() * sizeof(float));
+        _soundImage->cmdBarrierTransition(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+        VkBufferImageCopy region = {};
+        region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        region.imageExtent = { (uint32_t)audio::SoundPicture::Width, (uint32_t)audio::SoundPicture::Rows, 1 };
+        vkCmdCopyBufferToImage(commandBuffer, _soundStaging->buffer(), _soundImage->image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+        _soundImage->cmdBarrierTransition(commandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        _soundDirty = false;
+    }
+
     if (!instances.empty()) {
         const VkDeviceSize size = instances.size() * sizeof(GlyphInstance);
 
@@ -1265,13 +1320,13 @@ void Compositor::cmdEndPass(VkCommandBuffer commandBuffer, GPU::Image* target)
 namespace {
 
 // The code of the user inside what Vulkan needs (see core/Shaders.h).
-std::string wrapShader(const ShaderDef& shader)
+std::string wrapShader(const ShaderDef& shader, int pass = 0)
 {
     std::string code = "#version 460\n";
 
     if (shader.kind == ShaderKind::Generator) {
         code +=
-            "layout(push_constant) uniform QuickEditParameters { vec2 resolution; float time; float duration; vec4 p0; vec4 p1; vec4 sound; } qe;\n"
+            "layout(push_constant) uniform QuickEditParameters { vec2 resolution; float time; float duration; vec4 p0; vec4 p1; vec4 sound; uvec4 history[4]; } qe;\n"
             "layout(location = 0) in vec2 qeUV;\n"
             "layout(location = 0) out vec4 qeColor;\n"
             "#define iResolution qe.resolution\n"
@@ -1283,8 +1338,48 @@ std::string wrapShader(const ShaderDef& shader)
             "#define iMid qe.sound.z\n"
             "#define iTreble qe.sound.w\n"
             "float param(int i) { return i < 4 ? qe.p0[i] : qe.p1[i - 4]; }\n"
+            // The buffers (see Compositor::cmdGenerate()).
+            "layout(set = 0, binding = 0) uniform sampler2D qeA;\n"
+            "layout(set = 0, binding = 1) uniform sampler2D qeB;\n"
+            "layout(set = 0, binding = 2) uniform sampler2D qeC;\n"
+            "layout(set = 0, binding = 3) uniform sampler2D qeLastA;\n"
+            "layout(set = 0, binding = 4) uniform sampler2D qeLastB;\n"
+            "layout(set = 0, binding = 5) uniform sampler2D qeLastC;\n"
+            "vec4 passA(vec2 uv) { return texture(qeA, uv); }\n"
+            "vec4 passB(vec2 uv) { return texture(qeB, uv); }\n"
+            "vec4 passC(vec2 uv) { return texture(qeC, uv); }\n"
+            "vec4 lastA(vec2 uv) { return texture(qeLastA, uv); }\n"
+            "vec4 lastB(vec2 uv) { return texture(qeLastB, uv); }\n"
+            "vec4 lastC(vec2 uv) { return texture(qeLastC, uv); }\n"
+            // The sound in stereo, by track (see audio::SoundPicture).
+            "layout(set = 0, binding = 6) uniform sampler2D qeSound;\n"
+            "int soundTracks() { return int(texelFetch(qeSound, ivec2(0, 63), 0).r + 0.5); }\n"
+            "float qeSoundRow(int track, int row, float x) {\n"
+            "    if (track < 0 || track > soundTracks()) return 0.0;\n"
+            "    float u = clamp(x, 0.0, 1.0) * 511.0;\n"
+            "    int i = int(u);\n"
+            "    int y = track * 4 + row;\n"
+            "    return mix(texelFetch(qeSound, ivec2(i, y), 0).r, texelFetch(qeSound, ivec2(min(i + 1, 511), y), 0).r, u - float(i));\n"
+            "}\n"
+            "float spectrum(int track, int channel, float x) { return qeSoundRow(track, clamp(channel, 0, 1) * 2, x); }\n"
+            "float waveform(int track, int channel, float x) { return qeSoundRow(track, clamp(channel, 0, 1) * 2 + 1, x); }\n"
+            // The history as 32 halves (see Compositor::setSoundHistory()):
+            // the level now, then every step back, the last half the time
+            // since the latest step, in steps.
+            "float qeHistory(int i) { vec2 v = unpackHalf2x16(qe.history[i >> 3][(i >> 1) & 3]); return ((i & 1) == 0) ? v.x : v.y; }\n"
+            "float soundBefore(float seconds) {\n"
+            "    float step = " + std::to_string(audio::SoundHistory::Step) + ";\n"
+            "    float recent = qeHistory(31) * step;\n"
+            "    if (seconds <= recent) return mix(qeHistory(0), qeHistory(1), clamp(seconds / max(recent, 1e-4), 0.0, 1.0));\n"
+            "    float u = clamp((seconds - recent) / step, 0.0, 28.999) + 1.0;\n"
+            "    int k = int(u);\n"
+            "    return mix(qeHistory(k), qeHistory(k + 1), u - float(k));\n"
+            "}\n"
             "#line 1\n" + shader.source + "\n"
-            "void main() { qeColor = generate(qeUV, qe.time); }\n";
+            + std::string(pass == 1 ? "void main() { qeColor = bufferA(qeUV, qe.time); }\n" :
+                          pass == 2 ? "void main() { qeColor = bufferB(qeUV, qe.time); }\n" :
+                          pass == 3 ? "void main() { qeColor = bufferC(qeUV, qe.time); }\n" :
+                                      "void main() { qeColor = generate(qeUV, qe.time); }\n");
     }
     else if (shader.kind == ShaderKind::Blend) {
         // The base (premultiplied, as drawn) and the layer alone (the same):
@@ -1355,9 +1450,9 @@ std::string wrapShader(const ShaderDef& shader)
 } // namespace
 
 
-VkPipeline Compositor::userPipeline(const ShaderDef& shader)
+VkPipeline Compositor::userPipeline(const ShaderDef& shader, int pass)
 {
-    const std::string code = wrapShader(shader);
+    const std::string code = wrapShader(shader, pass);
 
     if (const auto it = _userPipelines.find(code); it != _userPipelines.end()) {
         return it->second;
@@ -1370,7 +1465,19 @@ VkPipeline Compositor::userPipeline(const ShaderDef& shader)
     if (compileFragmentShader(code, shader.name, spirv, error)) {
         // The others read pictures as the transitions do.
         const VkPipelineLayout layout = (shader.kind == ShaderKind::Generator) ? _generatorPipelineLayout : _transitionPipelineLayout;
-        pipeline = createPipeline(_pipelineCache, layout, effect_vert, effect_vert_size, spirv.data(), spirv.size() * sizeof(uint32_t), false);
+
+        if (shader.kind == ShaderKind::Generator && shader.source.find("soundBefore") != std::string::npos) {
+            _soundHistoryUsed = true;
+        }
+
+        if (shader.kind == ShaderKind::Generator && (shader.source.find("spectrum") != std::string::npos ||
+                                                     shader.source.find("waveform") != std::string::npos ||
+                                                     shader.source.find("soundTracks") != std::string::npos)) {
+            _soundPictureUsed = true;
+        }
+
+        pipeline = createPipeline(_pipelineCache, layout, effect_vert, effect_vert_size, spirv.data(), spirv.size() * sizeof(uint32_t), false, 0,
+            (pass > 0) ? BufferFormat : VK_FORMAT_UNDEFINED);
         _shaderErrors.erase(shader.id);
     }
     else {
@@ -1393,6 +1500,34 @@ std::string Compositor::checkShader(const ShaderDef& shader)
 }
 
 
+void Compositor::setSoundHistory(const audio::SoundHistory::Levels& history)
+{
+    // To half floats (values of 0 to 1: normal numbers or zero).
+    const auto half = [](float value) -> uint32_t {
+        value = std::clamp(value, 0.f, 1.f);
+
+        if (value < 6.2e-5f) {
+            return 0;
+        }
+
+        uint32_t bits;
+        std::memcpy(&bits, &value, sizeof bits);
+        const uint32_t exponent = ((bits >> 23) & 0xff) - 127 + 15;
+        const uint32_t mantissa = (bits >> 13) & 0x3ff;
+        return (exponent << 10) | mantissa;
+    };
+
+    static_assert(audio::SoundHistory::Steps == 30);
+    float values[32] = { history.now };
+    std::copy(std::begin(history.steps), std::end(history.steps), values + 1);
+    values[31] = history.phase;
+
+    for (int i = 0; i < 16; i++) {
+        _soundHistory[i] = half(values[i * 2]) | (half(values[i * 2 + 1]) << 16);
+    }
+}
+
+
 std::string Compositor::shaderError(const std::string& shaderId) const
 {
     const auto it = _shaderErrors.find(shaderId);
@@ -1400,9 +1535,41 @@ std::string Compositor::shaderError(const std::string& shaderId) const
 }
 
 
+namespace {
+
+// The buffers a generator defines: bit 0 for bufferA(), 1 for bufferB(), 2
+// for bufferC().
+int generatorBuffers(const std::string& source)
+{
+    int buffers = 0;
+
+    for (int i = 0; i < 3; i++) {
+        const std::string name = std::string("buffer") + (char)('A' + i);
+
+        for (size_t at = source.find(name); at != std::string::npos; at = source.find(name, at + 1)) {
+            size_t next = at + name.size();
+
+            while (next < source.size() && (source[next] == ' ' || source[next] == '\t')) {
+                next++;
+            }
+
+            if (next < source.size() && source[next] == '(') {
+                buffers |= 1 << i;
+                break;
+            }
+        }
+    }
+
+    return buffers;
+}
+
+} // namespace
+
+
 GPU::Image* Compositor::cmdGenerate(VkCommandBuffer commandBuffer, const Layer& layer, uint32_t width, uint32_t height)
 {
-    const VkPipeline pipeline = userPipeline(*layer.generator);
+    const ShaderDef& shader = *layer.generator;
+    const VkPipeline pipeline = userPipeline(shader);
 
     if (!pipeline) {
         return nullptr;
@@ -1415,9 +1582,12 @@ GPU::Image* Compositor::cmdGenerate(VkCommandBuffer commandBuffer, const Layer& 
         float duration;
         float parameters[8];
         float sound[4];
+        uint32_t history[16];
     } parameters = {};
 
+    static_assert(sizeof(parameters) == 128);
     std::copy(std::begin(_sound), std::end(_sound), parameters.sound);
+    std::copy(std::begin(_soundHistory), std::end(_soundHistory), parameters.history);
 
     parameters.resolution[0] = (float)width;
     parameters.resolution[1] = (float)height;
@@ -1428,16 +1598,121 @@ GPU::Image* Compositor::cmdGenerate(VkCommandBuffer commandBuffer, const Layer& 
         parameters.parameters[i] = layer.clip->shaderParameters[i].at(layer.localTime);
     }
 
+    // A picture in black, for the buffers a pass cannot read.
+    if (!_blackImage) {
+        _blackImage = std::make_unique<GPU::Image>("Black", _device, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, OutputFormat, 1, 1);
+        cmdBeginPass(commandBuffer, _blackImage.get(), true);
+        cmdEndPass(commandBuffer, _blackImage.get());
+    }
+
+    const GPU::Image* black = _blackImage.get();
+    std::array<const GPU::Image*, 7> inputs = { black, black, black, black, black, black, _soundImage.get() };
+
+    // One pass into a target, reading the inputs.
+    const auto cmdPass = [&](VkPipeline passPipeline, GPU::Image* target) {
+        const VkDescriptorSet set = allocateSet(_generatorSetLayout);
+
+        if (!set) {
+            return false;
+        }
+
+        VkDescriptorImageInfo images[7];
+        VkWriteDescriptorSet writes[7] = {};
+
+        for (uint32_t i = 0; i < 7; i++) {
+            images[i] = { _sampler, inputs[i]->imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = set;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[i].pImageInfo = &images[i];
+        }
+
+        vkUpdateDescriptorSets(_device.device(), 7, writes, 0, nullptr);
+
+        cmdBeginPass(commandBuffer, target, false);
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, passPipeline);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _generatorPipelineLayout, 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(commandBuffer, _generatorPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(parameters), &parameters);
+        vkCmdDraw(commandBuffer, 4, 1, 0, 0);
+        cmdEndPass(commandBuffer, target);
+        return true;
+    };
+
+    // Multi-pass: bufferA(), bufferB(), bufferC() first, in that order, each
+    // into a picture of its own kept from frame to frame (by clip), so that
+    // a pass reads the passes before it (passA()...) and all of them as
+    // they were at the frame before (lastA()...). The frames before are
+    // forgotten (black) when the time jumps: a seek, the playhead moved back.
+    const int buffers = generatorBuffers(shader.source);
+
+    if (buffers) {
+        GeneratorBuffers& state = _generatorBuffers[layer.clip->id];
+        state.usedFrame = _frameNumber;
+        const double time = timeToSeconds(layer.localTime);
+        const bool sized = state.current[0] && state.current[0]->width() == width && state.current[0]->height() == height;
+
+        if (!sized) {
+            for (int i = 0; i < 3; i++) {
+                for (std::unique_ptr<GPU::Image>* image : { &state.current[i], &state.last[i] }) {
+                    *image = std::make_unique<GPU::Image>("Generator buffer", _device,
+                        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, BufferFormat, width, height);
+                    cmdBeginPass(commandBuffer, image->get(), true);
+                    cmdEndPass(commandBuffer, image->get());
+                }
+            }
+
+            state.time = -1.0;
+        }
+
+        const bool same = state.time >= 0.0 && std::abs(time - state.time) < 1e-6;
+
+        if (!same) {
+            const bool following = state.time >= 0.0 && time > state.time && time - state.time < 0.25;
+
+            if (following) {
+                std::swap(state.current, state.last);
+            }
+            else {
+                for (std::unique_ptr<GPU::Image>& image : state.last) {
+                    cmdBeginPass(commandBuffer, image.get(), true);
+                    cmdEndPass(commandBuffer, image.get());
+                }
+            }
+
+            for (int i = 0; i < 3; i++) {
+                inputs[3 + i] = state.last[i].get();
+            }
+
+            for (int i = 0; i < 3; i++) {
+                if (!(buffers & (1 << i))) {
+                    continue;
+                }
+
+                const VkPipeline passPipeline = userPipeline(shader, 1 + i);
+
+                if (!passPipeline || !cmdPass(passPipeline, state.current[i].get())) {
+                    return nullptr;
+                }
+
+                inputs[i] = state.current[i].get();
+            }
+
+            state.time = time;
+        }
+
+        for (int i = 0; i < 3; i++) {
+            if (buffers & (1 << i)) {
+                inputs[i] = state.current[i].get();
+            }
+
+            inputs[3 + i] = state.last[i].get();
+        }
+    }
+
     GPU::Image* target = passTarget(width, height);
-    cmdBeginPass(commandBuffer, target, false);
-
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    vkCmdPushConstants(commandBuffer, _generatorPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(parameters), &parameters);
-    vkCmdDraw(commandBuffer, 4, 1, 0, 0);
-
-    cmdEndPass(commandBuffer, target);
-
-    return target;
+    return cmdPass(pipeline, target) ? target : nullptr;
 }
 
 

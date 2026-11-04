@@ -533,6 +533,15 @@ void GUI::cmdCompose(VkCommandBuffer commandBuffer)
     if (_levelsGraph) {
         const audio::SoundLevels sound = audio::soundLevels(*_levelsGraph, mulDivFloor(shown, _levelsGraph->sampleRate, TicksPerSecond));
         _compositor->setSound(sound.level, sound.bass, sound.mid, sound.treble);
+
+        if (_compositor->usesSoundHistory()) {
+            _compositor->setSoundHistory(_soundHistory.at(*_levelsGraph, mulDivFloor(shown, _levelsGraph->sampleRate, TicksPerSecond)));
+        }
+
+        if (_compositor->usesSoundPicture()) {
+            audio::soundPicture(*_levelsGraph, mulDivFloor(shown, _levelsGraph->sampleRate, TicksPerSecond), _soundPicture);
+            _compositor->setSoundPicture(_soundPicture);
+        }
     }
 
     const auto sequenceOf = [this](Id id) { return _project.findSequence(id); };
@@ -2639,6 +2648,13 @@ const char* const GeneratorExample =
     "//   iResolution: size of the picture in pixels\n"
     "//   param(i): the parameters declared below (up to 8), animated in the Inspector\n"
     "//   iLevel, iBass, iMid, iTreble: the sound at that time, 0 (silence) to 1\n"
+    "//   soundBefore(seconds): iLevel that long before (up to 1.5 s)\n"
+    "//   spectrum(track, channel, x), waveform(track, channel, x): the sound in stereo,\n"
+    "//     track 0 the mix, then S1, S2..., A1, A2... (soundTracks() of them), channel\n"
+    "//     0 left, 1 right; spectrum: x 20 Hz to 20 kHz (log), 0 to 1; waveform: -1 to 1\n"
+    "// Multi-pass: define vec4 bufferA(vec2 uv, float time) (and bufferB, bufferC),\n"
+    "//   drawn first, in half floats; read them with passA(uv)... (this frame)\n"
+    "//   and lastA(uv)... (the frame before, black after a jump in time).\n"
     "// Saved with Ctrl + S, and used at once.\n"
     "//\n"
     "// @param Speed 0 5 1\n"

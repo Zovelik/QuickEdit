@@ -504,6 +504,8 @@ void Exporter::exportVideo()
         });
 
     // Without effects: the sound levels given to the shaders, frame by frame.
+    audio::SoundHistory soundHistory;
+    audio::SoundPicture soundPicture;
     std::shared_ptr<const audio::MixGraph> levelsGraph = audio::buildMixGraph(_project,
         [this](Id mediaId, int stream) {
             const auto it = _audio.find({ mediaId, stream });
@@ -756,6 +758,16 @@ void Exporter::exportVideo()
 
         const audio::SoundLevels sound = audio::soundLevels(*levelsGraph, mulDivFloor(t, levelsGraph->sampleRate, TicksPerSecond));
         compositor.setSound(sound.level, sound.bass, sound.mid, sound.treble);
+
+        if (compositor.usesSoundHistory()) {
+            compositor.setSoundHistory(soundHistory.at(*levelsGraph, mulDivFloor(t, levelsGraph->sampleRate, TicksPerSecond)));
+        }
+
+        if (compositor.usesSoundPicture()) {
+            audio::soundPicture(*levelsGraph, mulDivFloor(t, levelsGraph->sampleRate, TicksPerSecond), soundPicture);
+            compositor.setSoundPicture(soundPicture);
+        }
+
         compositor.cmdComposite(gpu.commandBuffer, width, height, layers, sequence.width, sequence.height);
 
         AVFrame* videoFrame = av_frame_alloc();

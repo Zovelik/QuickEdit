@@ -2,6 +2,7 @@
 
 #include <render/FontLibrary.h>
 
+#include <audio/Mixer.h>
 #include <core/Project.h>
 
 #include <vkutils/Buffer.h>
@@ -115,6 +116,18 @@ public:
     // cmdComposite().
     void setSound(float level, float bass, float mid, float treble) { _sound[0] = level; _sound[1] = bass; _sound[2] = mid; _sound[3] = treble; }
 
+    // The level before the frame, for soundBefore() in the generators (see
+    // audio::SoundHistory). Set before cmdComposite(), only needed once a
+    // generator has used it.
+    void setSoundHistory(const audio::SoundHistory::Levels& history);
+    bool usesSoundHistory() const { return _soundHistoryUsed; }
+
+    // The sound in stereo by track, for spectrum() and waveform() in the
+    // generators. Set before cmdComposite(), only needed once a generator
+    // has used them.
+    void setSoundPicture(const audio::SoundPicture& picture) { _soundTexels = picture.texels; _soundDirty = true; }
+    bool usesSoundPicture() const { return _soundPictureUsed; }
+
     // The composited frame, in the shader read only layout after the
     // commands of cmdComposite().
     GPU::Image* output() const { return _output.get(); }
@@ -137,7 +150,8 @@ private:
 
     void createPipelines(const GPU::PipelineCache& pipelineCache);
     VkPipeline createPipeline(const GPU::PipelineCache& pipelineCache, VkPipelineLayout layout,
-        const uint32_t* vertexCode, size_t vertexSize, const uint32_t* fragmentCode, size_t fragmentSize, bool blending = true, int blendMode = 0);
+        const uint32_t* vertexCode, size_t vertexSize, const uint32_t* fragmentCode, size_t fragmentSize, bool blending = true, int blendMode = 0,
+        VkFormat format = VK_FORMAT_UNDEFINED);
 
     // The picture of a layer through its effects (the picture itself
     // without any), in the shader read only layout.
@@ -177,8 +191,9 @@ private:
         const GPU::Image* from, const GPU::Image* to, uint32_t width, uint32_t height, float z = 0.f);
 
     // The pipeline of a shader of the user, compiled once (null when it
-    // does not compile, see shaderError()).
-    VkPipeline userPipeline(const core::ShaderDef& shader);
+    // does not compile, see shaderError()); pass: of a generator, 1 to 3 for
+    // its bufferA() to bufferC(), 0 for generate().
+    VkPipeline userPipeline(const core::ShaderDef& shader, int pass = 0);
 
     void ensureOutput(uint32_t width, uint32_t height);
     void cmdUploadAtlas(VkCommandBuffer commandBuffer);
@@ -216,8 +231,30 @@ private:
 
     const GPU::PipelineCache& _pipelineCache;
     float _sound[4] = {};
+    uint32_t _soundHistory[16] = {};                        // 32 halves
+    bool _soundHistoryUsed = false;
     VkDescriptorSetLayout _transitionSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout _generatorPipelineLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout _generatorSetLayout = VK_NULL_HANDLE;
+
+    // The buffers of the multi-pass generators, by clip: of this frame and of
+    // the frame before.
+    struct GeneratorBuffers
+    {
+        std::array<std::unique_ptr<GPU::Image>, 3> current;
+        std::array<std::unique_ptr<GPU::Image>, 3> last;
+        double time = -1.0;                         // Of current, in the clip
+        uint64_t usedFrame = 0;
+    };
+
+    std::map<core::Id, GeneratorBuffers> _generatorBuffers;
+    std::unique_ptr<GPU::Image> _blackImage;
+    std::unique_ptr<GPU::Image> _soundImage;
+    std::unique_ptr<GPU::Buffer> _soundStaging;
+    std::vector<float> _soundTexels;
+    bool _soundDirty = false;
+    bool _soundPictureUsed = false;
+    uint64_t _frameNumber = 0;
     VkPipelineLayout _transitionPipelineLayout = VK_NULL_HANDLE;
     std::map<std::string, VkPipeline> _userPipelines;        // By wrapped source
     std::map<std::string, std::string> _shaderErrors;        // By shader id

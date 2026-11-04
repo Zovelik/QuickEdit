@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstring>
 #include <set>
 
@@ -153,14 +154,17 @@ std::shared_ptr<const MixGraph> buildMixGraph(
     const bool anySolo = std::any_of(tracks.begin(), tracks.end(),
         [](const Track* track) { return track->solo && !track->muted; });
 
-    for (const Track* trackPointer : tracks) {
-        const Track& track = *trackPointer;
+    graph->slots = (int)tracks.size();
+
+    for (size_t slot = 0; slot < tracks.size(); slot++) {
+        const Track& track = *tracks[slot];
 
         if (track.muted || (anySolo && !track.solo)) {
             continue;
         }
 
         MixTrack& mixTrack = graph->tracks.emplace_back();
+        mixTrack.slot = (int)slot;
 
         mixTrack.effects = effectsOnce(effectsOf, track.id, track.effects, usedOwners);
 
@@ -421,6 +425,176 @@ SoundLevels soundLevels(const MixGraph& graph, int64_t frame)
     };
 
     return { scaled(sums[0]), scaled(sums[1]), scaled(sums[2]), scaled(sums[3]) };
+}
+
+
+
+SoundHistory::Levels SoundHistory::at(const MixGraph& graph, int64_t frame)
+{
+    // Another graph (the sequence was edited): nothing measured holds.
+    if (&graph != _graph || graph.sampleRate != _sampleRate) {
+        _graph = &graph;
+        _sampleRate = graph.sampleRate;
+        _levels.clear();
+    }
+
+    const double stepFrames = Step * (double)std::max(1u, graph.sampleRate);
+    const int64_t latest = (int64_t)std::floor((double)frame / stepFrames);
+    Levels levels;
+    levels.now = soundLevels(graph, frame).level;
+    levels.phase = (float)((double)frame / stepFrames - (double)latest);
+
+    for (int i = 0; i < Steps; i++) {
+        const int64_t step = latest - i;
+        auto it = _levels.find(step);
+
+        if (it == _levels.end()) {
+            it = _levels.emplace(step, (step >= 0) ? soundLevels(graph, (int64_t)std::llround((double)step * stepFrames)).level : 0.f).first;
+        }
+
+        levels.steps[i] = it->second;
+    }
+
+    // Only around the frame (a seek elsewhere starts again).
+    _levels.erase(_levels.begin(), _levels.lower_bound(latest - Steps - 8));
+    _levels.erase(_levels.upper_bound(latest + 8), _levels.end());
+    return levels;
+}
+
+
+
+namespace {
+
+// In place, radix 2 (size a power of 2).
+void fft(std::vector<std::complex<float>>& x)
+{
+    const size_t n = x.size();
+
+    for (size_t i = 1, j = 0; i < n; i++) {
+        size_t bit = n >> 1;
+
+        for (; j & bit; bit >>= 1) {
+            j ^= bit;
+        }
+
+        j ^= bit;
+
+        if (i < j) {
+            std::swap(x[i], x[j]);
+        }
+    }
+
+    for (size_t length = 2; length <= n; length <<= 1) {
+        const float angle = -2.f * 3.14159265f / (float)length;
+        const std::complex<float> unit(std::cos(angle), std::sin(angle));
+
+        for (size_t i = 0; i < n; i += length) {
+            std::complex<float> w(1.f, 0.f);
+
+            for (size_t k = 0; k < length / 2; k++) {
+                const std::complex<float> a = x[i + k];
+                const std::complex<float> b = x[i + k + length / 2] * w;
+                x[i + k] = a + b;
+                x[i + k + length / 2] = a - b;
+                w *= unit;
+            }
+        }
+    }
+}
+
+} // namespace
+
+
+void soundPicture(const MixGraph& graph, int64_t frame, SoundPicture& picture)
+{
+    constexpr int W = SoundPicture::Width;
+    constexpr size_t N = 4096;                          // 85 ms at 48 kHz
+    constexpr int64_t channels = media::AudioBuffer::Channels;
+    const double rate = (double)std::max(1u, graph.sampleRate);
+
+    std::fill(picture.texels.begin(), picture.texels.end(), 0.f);
+
+    const int sources = std::min(1 + graph.slots, SoundPicture::MaxSources);
+    picture.texels[(size_t)(SoundPicture::Rows - 1) * W] = (float)(sources - 1);
+
+    // Up to the frame (what has just been heard); before 0: silence.
+    const int64_t first = frame - (int64_t)N;
+    const int64_t start = std::max<int64_t>(0, first);
+    const int64_t count = frame - start;
+
+    if (count <= 0) {
+        return;
+    }
+
+    std::vector<float> samples((size_t)N * channels, 0.f);
+    float* into = samples.data() + (size_t)(start - first) * channels;
+
+    static const std::vector<float> window = [] {
+        std::vector<float> w(N);
+
+        for (size_t i = 0; i < N; i++) {
+            w[i] = 0.5f - 0.5f * std::cos(2.f * 3.14159265f * (float)i / (float)(N - 1));
+        }
+
+        return w;
+    }();
+
+    std::vector<std::complex<float>> spectrum(N);
+
+    const auto analyse = [&](int source) {
+        for (int channel = 0; channel < 2; channel++) {
+            float* spectrumRow = picture.texels.data() + (size_t)(source * 4 + channel * 2) * W;
+            float* waveRow = spectrumRow + W;
+
+            for (int i = 0; i < W; i++) {
+                waveRow[i] = samples[(N - W + (size_t)i) * channels + (size_t)channel];
+            }
+
+            for (size_t i = 0; i < N; i++) {
+                spectrum[i] = std::complex<float>(samples[i * channels + (size_t)channel] * window[i], 0.f);
+            }
+
+            fft(spectrum);
+
+            // Amplitudes (a full scale sine: 1), then on a log scale of
+            // frequencies: the loudest bin of each band, or between bins.
+            const float scale = 2.f / (0.5f * (float)N);
+            const auto amplitude = [&](double bin) {
+                const size_t b = std::min((size_t)bin, N / 2 - 1);
+                const float a = std::abs(spectrum[b]);
+                const float c = std::abs(spectrum[std::min(b + 1, N / 2 - 1)]);
+                return scale * (a + (c - a) * (float)(bin - (double)b));
+            };
+
+            for (int i = 0; i < W; i++) {
+                const double low = 20.0 * std::pow(1000.0, (double)i / W) * (double)N / rate;
+                const double high = 20.0 * std::pow(1000.0, (double)(i + 1) / W) * (double)N / rate;
+                float value = amplitude(low);
+
+                for (double bin = std::ceil(low); bin < high; bin += 1.0) {
+                    value = std::max(value, amplitude(bin));
+                }
+
+                const float db = 20.f * std::log10(std::max(value, 1e-9f));
+                spectrumRow[i] = std::clamp((db + 90.f) / 80.f, 0.f, 1.f);
+            }
+        }
+    };
+
+    // The mix.
+    mix(graph, start, count, into);
+    analyse(0);
+
+    // Each track alone.
+    for (const MixTrack& track : graph.tracks) {
+        if (track.slot < 0 || 1 + track.slot >= sources) {
+            continue;
+        }
+
+        std::memset(into, 0, (size_t)(count * channels) * sizeof(float));
+        mixTrack(graph, track, start, count, into, 0);
+        analyse(1 + track.slot);
+    }
 }
 
 }
