@@ -265,6 +265,10 @@ foreach(license
     endif()
 endforeach()
 
+# The license of QuickEdit and the notices of the libraries and resources.
+install(FILES ${CMAKE_SOURCE_DIR}/LICENSE DESTINATION ${QUICKEDIT_LICENSE_DIR} RENAME "QuickEdit.txt")
+install(FILES ${CMAKE_SOURCE_DIR}/THIRD-PARTY-NOTICES.md DESTINATION ${QUICKEDIT_LICENSE_DIR})
+
 # Installation: everything beside the executable on Windows; the
 # freedesktop layout elsewhere (the translations in share/quickedit).
 if (WIN32)

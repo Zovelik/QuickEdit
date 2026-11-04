@@ -185,3 +185,10 @@ A new language is a new catalog, with its name in `"_language"`.
 
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) describes the modules, the
 threads and the formats.
+
+## License
+
+QuickEdit is under the [BSD 3-Clause License](LICENSE). The libraries it
+uses keep their own licenses (FFmpeg: LGPL, shared libraries; the others:
+MIT, Zlib, Apache-2.0, OFL): see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
