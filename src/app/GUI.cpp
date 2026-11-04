@@ -1393,6 +1393,25 @@ void GUI::mediaPanel()
         ImGui::TableSetupColumn(tr("Duration"), ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("00:00:00:00").x);
         ImGui::TableHeadersRow();
 
+        // Every row of the list (media, folders, sequences) as tall as the
+        // picture of a media; a tree node gets that height through its frame
+        // padding, a text of the second column is centered in it.
+        const float rowHeight = 2.f * ImGui::GetTextLineHeight();
+        const ImVec2 rowPadding(ImGui::GetStyle().FramePadding.x, std::round(0.5f * (rowHeight - ImGui::GetFontSize())));
+
+        auto centerInRow = [&]() {
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + std::round(0.5f * (rowHeight - ImGui::GetTextLineHeight())));
+        };
+
+        // A row without a picture: its icon on a frame of the size of one.
+        auto drawIconPicture = [&](ImDrawList* drawList, const ImVec2& min, const ImVec2& max, const char* icon) {
+            const ImVec2 iconSize = ImGui::CalcTextSize(icon);
+
+            drawList->AddRectFilled(min, max, ImGui::GetColorU32(ImGuiCol_FrameBg), ImGui::GetStyle().FrameRounding);
+            drawList->AddText(ImVec2(std::round(0.5f * (min.x + max.x - iconSize.x)), std::round(0.5f * (min.y + max.y - iconSize.y))),
+                ImGui::GetColorU32(ImGuiCol_TextDisabled), icon);
+        };
+
         // A media: its row.
         auto drawItem = [&](const MediaItem& item) {
             ImGui::PushID((int)item.id);
@@ -1406,7 +1425,7 @@ void GUI::mediaPanel()
             // Every row as tall as a picture; the picture (or a placeholder
             // with the icon of the media) and the name are drawn over the
             // row once it is laid out.
-            const float pictureHeight = 2.f * ImGui::GetTextLineHeight();
+            const float pictureHeight = rowHeight;
             const TimelineView::Thumbnails thumbnails = thumbnailsOf(item.id, pictureHeight);
             const ImVec2 pictureSize(std::round(pictureHeight * 16.f / 9.f), pictureHeight);
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
@@ -1445,12 +1464,7 @@ void GUI::mediaPanel()
                     drawList->AddImage(thumbnails.texture, rowMin, pictureMax, ImVec2(u, v), ImVec2(u + thumbnails.tileU, v + thumbnails.tileV));
                 }
                 else {
-                    const char* icon = mediaIcon(item.type);
-                    const ImVec2 iconSize = ImGui::CalcTextSize(icon);
-
-                    drawList->AddRectFilled(rowMin, pictureMax, ImGui::GetColorU32(ImGuiCol_FrameBg), ImGui::GetStyle().FrameRounding);
-                    drawList->AddText(ImVec2(std::round(0.5f * (rowMin.x + pictureMax.x - iconSize.x)), std::round(0.5f * (rowMin.y + pictureMax.y - iconSize.y))),
-                        ImGui::GetColorU32(ImGuiCol_TextDisabled), icon);
+                    drawIconPicture(drawList, rowMin, pictureMax, mediaIcon(item.type));
                 }
 
                 const ImU32 textColor = missing ? IM_COL32(230, 90, 80, 255) : ImGui::GetColorU32(ImGuiCol_Text);
@@ -1576,7 +1590,9 @@ void GUI::mediaPanel()
                 const ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_OpenOnArrow |
                     ImGuiTreeNodeFlags_OpenOnDoubleClick | ImGuiTreeNodeFlags_DefaultOpen | (selected ? ImGuiTreeNodeFlags_Selected : 0);
 
-                const bool open = ImGui::TreeNodeEx("##folder", nodeFlags, "%s %s", ICON_MD_FOLDER, renaming ? "" : name.c_str());
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, rowPadding);
+                const bool open = ImGui::TreeNodeEx("##folder", nodeFlags | ImGuiTreeNodeFlags_FramePadding, "%s %s", ICON_MD_FOLDER, renaming ? "" : name.c_str());
+                ImGui::PopStyleVar();
 
                 if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
                     _selectedFolder = child;
@@ -1639,6 +1655,8 @@ void GUI::mediaPanel()
                     return item.folder == child;
                 });
 
+                // Aligned with the name by the table (same row as a tree
+                // node with frame padding).
                 ImGui::TextDisabled("%zu", count);
 
                 if (open) {
@@ -1663,14 +1681,34 @@ void GUI::mediaPanel()
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
 
-            if (ImGui::TreeNodeEx("##sequences", ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_DefaultOpen, tr("%s Sequences"), ICON_MD_VIDEO_LIBRARY)) {
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, rowPadding);
+            const bool sequencesOpen = ImGui::TreeNodeEx("##sequences", ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_FramePadding,
+                tr("%s Sequences"), ICON_MD_VIDEO_LIBRARY);
+            ImGui::PopStyleVar();
+
+            if (sequencesOpen) {
                 for (const Sequence* sequence : _project.sequences()) {
                     ImGui::PushID((int)sequence->id);
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
 
                     const bool current = sequence->id == _project.sequence().id;
-                    ImGui::Selectable((std::string(ICON_MD_MOVIE_FILTER " ") + sequence->name + (current ? tr("  (shown)") : "")).c_str(), false, ImGuiSelectableFlags_SpanAllColumns);
+                    // As a media row: its icon in the place of a picture, then its name.
+                    const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+                    const float columnRight = rowMin.x + ImGui::GetContentRegionAvail().x;
+                    ImGui::Selectable("##sequence", false, ImGuiSelectableFlags_SpanAllColumns, ImVec2(0.f, rowHeight));
+
+                    {
+                        ImDrawList* drawList = ImGui::GetWindowDrawList();
+                        const ImVec2 pictureMax(rowMin.x + std::round(rowHeight * 16.f / 9.f), rowMin.y + rowHeight);
+                        const std::string name = sequence->name + (current ? tr("  (shown)") : "");
+                        const float textX = pictureMax.x + ImGui::GetStyle().ItemInnerSpacing.x;
+
+                        drawIconPicture(drawList, rowMin, pictureMax, ICON_MD_MOVIE_FILTER);
+                        drawList->PushClipRect(ImVec2(textX, rowMin.y), ImVec2(columnRight, pictureMax.y), true);
+                        drawList->AddText(ImVec2(textX, std::round(rowMin.y + 0.5f * (rowHeight - ImGui::GetFontSize()))), ImGui::GetColorU32(ImGuiCol_Text), name.c_str());
+                        drawList->PopClipRect();
+                    }
 
                     if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                         showSequence(sequence->id);
@@ -1683,6 +1721,7 @@ void GUI::mediaPanel()
                     }
 
                     ImGui::TableNextColumn();
+                    centerInRow();
                     ImGui::TextDisabled("%s", formatTimecode(sequence->duration(), sequence->frameRate).c_str());
                     ImGui::PopID();
                 }
