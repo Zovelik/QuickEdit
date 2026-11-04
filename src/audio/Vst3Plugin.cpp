@@ -17,6 +17,11 @@
 #include <core/Paths.h>
 
 #include <algorithm>
+#include <type_traits>
+
+#ifdef _WIN32
+#include <excpt.h>
+#endif
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -90,6 +95,40 @@ public:
 private:
     SDL_Window* _window;
 };
+
+} // namespace
+
+
+namespace {
+
+// Runs code of a plugin. On Windows an access violation or an exception
+// in it is caught (structured exception handling) and false returned,
+// instead of ending QuickEdit. sehCall() holds no object with a destructor,
+// as __try requires.
+#ifdef _WIN32
+bool sehCall(void (*thunk)(void*), void* context) noexcept
+{
+    __try {
+        thunk(context);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+#endif
+
+
+template<typename Function>
+bool pluginCall(Function&& function)
+{
+#ifdef _WIN32
+    return sehCall([](void* context) { (*static_cast<std::remove_reference_t<Function>*>(context))(); }, &function);
+#else
+    function();
+    return true;
+#endif
+}
 
 } // namespace
 
@@ -207,7 +246,9 @@ std::vector<PluginFile> findVst3Plugins()
 }
 
 
-std::vector<PluginClass> listPluginClasses(const std::string& path, std::string& error)
+namespace {
+
+std::vector<PluginClass> listPluginClassesUnguarded(const std::string& path, std::string& error)
 {
     std::vector<PluginClass> classes;
     VST3::Hosting::Module::Ptr module = VST3::Hosting::Module::create(path, error);
@@ -229,6 +270,22 @@ std::vector<PluginClass> listPluginClasses(const std::string& path, std::string&
 
     if (classes.empty()) {
         error = "No audio effect in this plugin";
+    }
+
+    return classes;
+}
+
+} // namespace
+
+
+std::vector<PluginClass> listPluginClasses(const std::string& path, std::string& error)
+{
+    std::vector<PluginClass> classes;
+
+    // A plugin that crashes when it is opened is left out, not QuickEdit.
+    if (!pluginCall([&]() { classes = listPluginClassesUnguarded(path, error); })) {
+        error = "the plugin crashed when opened";
+        classes.clear();
     }
 
     return classes;
@@ -439,6 +496,20 @@ void PluginScanner::run(bool rescan)
 
 std::unique_ptr<Vst3Plugin> Vst3Plugin::load(const std::string& path, const std::string& classId, std::string& error)
 {
+    std::unique_ptr<Vst3Plugin> plugin;
+
+    // A plugin that crashes when it is opened is not used.
+    if (!pluginCall([&]() { plugin = loadUnguarded(path, classId, error); })) {
+        error = "the plugin crashed when opened";
+        (void)plugin.release();
+    }
+
+    return plugin;
+}
+
+
+std::unique_ptr<Vst3Plugin> Vst3Plugin::loadUnguarded(const std::string& path, const std::string& classId, std::string& error)
+{
     std::unique_ptr<Vst3Plugin> plugin(new Vst3Plugin());
     plugin->_impl = std::make_unique<Impl>();
     Impl& impl = *plugin->_impl;
@@ -540,12 +611,91 @@ std::unique_ptr<Vst3Plugin> Vst3Plugin::load(const std::string& path, const std:
 
 Vst3Plugin::~Vst3Plugin()
 {
+    // A crashed plugin is not called again, not even to be released.
+    if (_crashed) {
+        (void)_impl.release();
+        return;
+    }
+
     closeEditor();
     _impl.reset();
 }
 
 
+void Vst3Plugin::crash(const char* during)
+{
+    if (!_crashed.exchange(true)) {
+        core::reportError("VST3 plugin " + _name, std::string("it crashed while ") + during +
+            " and is turned off (the sound goes through it unchanged). Save the project and restart QuickEdit to use it again.");
+    }
+}
+
+
 bool Vst3Plugin::prepare(double sampleRate, int maxFrames)
+{
+    bool result = false;
+
+    if (!_crashed && !pluginCall([&]() { result = prepareUnguarded(sampleRate, maxFrames); })) {
+        crash("starting");
+    }
+
+    return result && !_crashed;
+}
+
+
+void Vst3Plugin::process(float* samples, int frames, int64_t position)
+{
+    if (!_crashed && !pluginCall([&]() { processUnguarded(samples, frames, position); })) {
+        crash("processing the sound");
+    }
+}
+
+
+std::vector<uint8_t> Vst3Plugin::saveState()
+{
+    std::vector<uint8_t> state;
+
+    if (!_crashed && !pluginCall([&]() { state = saveStateUnguarded(); })) {
+        crash("saving its settings");
+    }
+
+    return state;
+}
+
+
+bool Vst3Plugin::loadState(const std::vector<uint8_t>& state)
+{
+    bool result = false;
+
+    if (!_crashed && !pluginCall([&]() { result = loadStateUnguarded(state); })) {
+        crash("loading its settings");
+    }
+
+    return result && !_crashed;
+}
+
+
+bool Vst3Plugin::openEditor()
+{
+    bool result = false;
+
+    if (!_crashed && !pluginCall([&]() { result = openEditorUnguarded(); })) {
+        crash("opening its editor");
+    }
+
+    return result && !_crashed;
+}
+
+
+void Vst3Plugin::closeEditor()
+{
+    if (!_crashed && !pluginCall([&]() { closeEditorUnguarded(); })) {
+        crash("closing its editor");
+    }
+}
+
+
+bool Vst3Plugin::prepareUnguarded(double sampleRate, int maxFrames)
 {
     Impl& impl = *_impl;
 
@@ -585,7 +735,7 @@ bool Vst3Plugin::prepare(double sampleRate, int maxFrames)
 }
 
 
-void Vst3Plugin::process(float* samples, int frames, int64_t position)
+void Vst3Plugin::processUnguarded(float* samples, int frames, int64_t position)
 {
     Impl& impl = *_impl;
 
@@ -649,7 +799,7 @@ void Vst3Plugin::process(float* samples, int frames, int64_t position)
 }
 
 
-std::vector<uint8_t> Vst3Plugin::saveState()
+std::vector<uint8_t> Vst3Plugin::saveStateUnguarded()
 {
     Impl& impl = *_impl;
 
@@ -679,7 +829,7 @@ std::vector<uint8_t> Vst3Plugin::saveState()
 }
 
 
-bool Vst3Plugin::loadState(const std::vector<uint8_t>& state)
+bool Vst3Plugin::loadStateUnguarded(const std::vector<uint8_t>& state)
 {
     Impl& impl = *_impl;
     size_t offset = 0;
@@ -738,7 +888,7 @@ bool Vst3Plugin::hasEditor() const
 }
 
 
-bool Vst3Plugin::openEditor()
+bool Vst3Plugin::openEditorUnguarded()
 {
 #ifdef _WIN32
     Impl& impl = *_impl;
@@ -794,7 +944,7 @@ bool Vst3Plugin::openEditor()
 }
 
 
-void Vst3Plugin::closeEditor()
+void Vst3Plugin::closeEditorUnguarded()
 {
     if (!_window) {
         return;

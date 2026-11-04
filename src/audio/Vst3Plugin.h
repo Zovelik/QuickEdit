@@ -98,6 +98,12 @@ namespace audio
         const std::string& name() const { return _name; }
         const std::string& classId() const { return _classId; }
 
+        // The plugin crashed in its own code (access violation, exception):
+        // it was reported and is no longer called, the sound goes through
+        // it unchanged. Windows only for now: elsewhere a crash in a plugin
+        // still ends QuickEdit.
+        bool crashed() const { return _crashed; }
+
         // Activates the processing. maxFrames: largest block given to
         // process().
         bool prepare(double sampleRate, int maxFrames);
@@ -121,6 +127,20 @@ namespace audio
 
     private:
         Vst3Plugin() = default;
+
+        // The calls into the plugin, guarded by the public functions.
+        static std::unique_ptr<Vst3Plugin> loadUnguarded(const std::string& path, const std::string& classId, std::string& error);
+        bool prepareUnguarded(double sampleRate, int maxFrames);
+        void processUnguarded(float* samples, int frames, int64_t position);
+        std::vector<uint8_t> saveStateUnguarded();
+        bool loadStateUnguarded(const std::vector<uint8_t>& state);
+        bool openEditorUnguarded();
+        void closeEditorUnguarded();
+
+        // Reports a crash during an action, once, and turns the plugin off.
+        void crash(const char* during);
+
+        std::atomic<bool> _crashed { false };
 
         struct Impl;
         std::unique_ptr<Impl> _impl;

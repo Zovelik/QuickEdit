@@ -137,8 +137,10 @@ cpack -C Release --config out/build/x64-Release/CPackConfig.cmake
 - Windows: an installer (NSIS, which must be installed) and a zip. The
   installer puts QuickEdit in `Program Files\QuickEdit` with a Start menu
   shortcut and an optional desktop shortcut, opens the `.qep` projects with
-  it, and registers an uninstaller. The settings of the users stay in their
-  own folders (see below), the uninstaller leaves them.
+  it, and registers an uninstaller. The uninstaller offers to delete the
+  settings and caches of the user who runs it (kept by default, and when it
+  runs silently, as before an upgrade); the user's files in
+  `Documents\QuickEdit` always stay.
 - Linux: an AppImage (a recent CMake, 4.3 in the workflow, with
   `appimagetool` and `patchelf` on the `PATH`), with a desktop entry, the
   `.qep` file type and AppStream data. FFmpeg and shaderc are inside it; the
