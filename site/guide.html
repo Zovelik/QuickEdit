@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>QuickEdit guide: from the first import to the export</title>
+    <meta name="description" content="Learn QuickEdit: install it, import media, edit on the timeline, add texts, titles and transitions, record a voice-over or the screen, and export your video.">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+    <div class="wrap">
+        <a class="brand" href="./"><img src="favicon.svg" alt="">QuickEdit</a>
+        <nav class="links">
+            <a class="hide-small" href="./#features">Features</a>
+            <a class="current" href="guide.html">Guide</a>
+            <a href="./#download">Download</a>
+            <a href="https://github.com/Zovelik/QuickEdit">GitHub</a>
+        </nav>
+    </div>
+</header>
+
+<div class="wrap guide">
+    <aside>
+        <ol>
+            <li><a href="#install">Install</a></li>
+            <li><a href="#window">The window</a></li>
+            <li><a href="#import">Import media</a></li>
+            <li><a href="#timeline">Edit on the timeline</a></li>
+            <li><a href="#pictures">Place the pictures</a></li>
+            <li><a href="#texts">Texts and titles</a></li>
+            <li><a href="#transitions">Transitions and effects</a></li>
+            <li><a href="#sound">Sound</a></li>
+            <li><a href="#record">Record</a></li>
+            <li><a href="#subtitles">Subtitles</a></li>
+            <li><a href="#export">Export</a></li>
+            <li><a href="#ai">AI control</a></li>
+            <li><a href="#shortcuts">Shortcuts</a></li>
+        </ol>
+    </aside>
+
+    <article>
+        <h1>QuickEdit guide</h1>
+        <p>This guide walks through a typical video: a voice-over, music under it, and pictures and texts over it. Each part stands on its own, so jump to the one you need.</p>
+
+        <h2 id="install">Install</h2>
+        <p>Download QuickEdit from the <a href="./#download">download section</a>. It needs a GPU with Vulkan 1.3 and an up-to-date graphics driver.</p>
+        <ul>
+            <li><strong>Windows</strong>: run the installer. It adds a Start menu shortcut (and a desktop one if you want it), and opens the <code>.qep</code> project files with QuickEdit. The zip runs without installing anything.</li>
+            <li><strong>Linux</strong>: make the AppImage executable and run it:
+                <pre><code>chmod +x QuickEdit-*-Linux.AppImage
+./QuickEdit-*-Linux.AppImage</code></pre>
+            </li>
+        </ul>
+        <p>The interface is in English and French: pick one in <em>View &gt; Language</em> (the language of the system by default).</p>
+
+        <h2 id="window">The window</h2>
+        <figure class="shot"><img src="img/editor.jpg" width="1920" height="1056" alt="The QuickEdit window with its four panels" loading="lazy"></figure>
+        <ul>
+            <li><strong>Media</strong> (top left): the files of the project, in folders if you like, and the sequences.</li>
+            <li><strong>Viewer</strong> (center): the picture at the playhead. Texts are edited right here, and the selected clip shows handles to move and scale it.</li>
+            <li><strong>Inspector</strong> (right): the properties of the selected clip, or of the sequence when nothing is selected (resolution, frame rate, sample rate). Its <em>Effects</em> tab holds the video and audio effects.</li>
+            <li><strong>Timeline</strong> (bottom): video tracks (V1, V2…) with the sound of their videos folded under them, audio tracks (A1, A2…) and subtitle tracks (T1…). A track higher up covers the ones below it.</li>
+        </ul>
+        <p>Panels can be moved and resized. <em>View &gt; Reset Layout</em> puts them back.</p>
+
+        <h2 id="import">Import media</h2>
+        <p>Drag files from your file manager onto the media list or straight onto the timeline, or click <em>Import…</em>. Videos, images and sound files are all welcome. Then drag a media from the list to a track.</p>
+        <div class="tip"><p>Save the project early (<kbd>Ctrl</kbd>+<kbd>S</kbd>). The media in the folder of the project are stored with relative paths, so the whole folder can be moved or shared.</p></div>
+
+        <h2 id="timeline">Edit on the timeline</h2>
+        <ol class="steps">
+            <li><strong>Move clips</strong> by dragging them. With snapping on (<kbd>N</kbd>), they stick to the playhead and to the edges of other clips. A clip dropped over others replaces what it covers.</li>
+            <li><strong>Trim</strong> a clip by dragging one of its edges.</li>
+            <li><strong>Cut</strong> at the playhead with <kbd>Ctrl</kbd>+<kbd>K</kbd>, or click with the blade tool (<kbd>C</kbd>).</li>
+            <li><strong>Remove</strong> a clip with <kbd>Delete</kbd>, or close the gap behind it at the same time with <kbd>Shift</kbd>+<kbd>Delete</kbd> (ripple delete).</li>
+            <li><strong>Select several clips</strong> by drawing a rectangle around them, or with the select-forward tool (<kbd>A</kbd>), which takes everything after the click.</li>
+        </ol>
+        <p>The slip tool (<kbd>Y</kbd>) changes which part of a video a clip shows without moving it. A clip can be sped up or slowed down in the inspector, and <kbd>Shift</kbd>+<kbd>F</kbd> freezes the frame at the playhead.</p>
+        <p>The picture and the sound of a video are linked: they move and cut together. A video with several sound streams unfolds them under its track, each one can be muted or removed.</p>
+        <p>A project can hold several sequences, in tabs above the timeline (<kbd>+</kbd> adds one). A sequence can be dropped into another one as a clip.</p>
+        <p>Zoom the timeline with <kbd>Ctrl</kbd> and the mouse wheel; <kbd>Ctrl</kbd>+<kbd>0</kbd> shows all of it. Every change can be undone with <kbd>Ctrl</kbd>+<kbd>Z</kbd>.</p>
+
+        <h2 id="pictures">Place the pictures</h2>
+        <figure class="shot"><img src="img/picture-in-picture.jpg" width="1920" height="1056" alt="A clip on V3 shown small in a corner of the picture, its transform in the inspector" loading="lazy"></figure>
+        <p>Select a clip to see its properties in the inspector:</p>
+        <ul>
+            <li><strong>Size</strong>: fit the frame, fill it, or keep the native size; and the sampling (bilinear, bicubic, Lanczos or nearest, the latter for pixel art and sharp screen captures).</li>
+            <li><strong>Transform</strong>: position, scale, rotation and opacity. You can also drag the clip and its handles in the viewer.</li>
+            <li><strong>Crop &amp; Frame</strong>: crop each side, round the corners, add a border and a shadow. Ideal for a camera in a corner of a screen recording.</li>
+            <li><strong>Blend mode</strong>: how the clip mixes with the tracks below it.</li>
+        </ul>
+        <h3>Animate with keyframes</h3>
+        <p>Click the button just left of a property to add a keyframe at the playhead, move the playhead, and change the value: QuickEdit animates between them. The <em>Keyframes</em> panel, next to the timeline, shows the curves; right-click a keyframe to change its easing. The inspector also has ready-made animations such as zoom in, Ken Burns, fade in and fade out.</p>
+
+        <h2 id="texts">Texts and titles</h2>
+        <p>Press <kbd>T</kbd> to add a text at the playhead, then type in the viewer. In the inspector, choose the alignment, the font, its size and color, an outline and a shadow, and a background box. A text can hold several parts with different styles.</p>
+        <p><em>Letter animation</em> brings the text in and out letter by letter (typewriter and other effects). A text can also roll up like end credits, or crawl from the right like a ticker.</p>
+        <figure class="shot"><img src="img/titles.jpg" width="1500" height="330" alt="End credits, a lower third and a news bar" loading="lazy"></figure>
+        <p><em>Add Title</em> in the Edit menu gives ready-made titles to fill in: <strong>End Credits</strong>, <strong>Lower Third</strong> and <strong>News Bar</strong>.</p>
+
+        <h2 id="transitions">Transitions and effects</h2>
+        <p>Select a clip and press <kbd>Ctrl</kbd>+<kbd>D</kbd> to add a transition from the clip before it (or to remove it). In the inspector, choose dissolve, dip to black, push, wipe or zoom, and its duration.</p>
+        <figure class="shot"><img src="img/transitions.jpg" width="1440" height="540" alt="Frames of several transitions" loading="lazy"></figure>
+        <p>The <em>Effects</em> tab of the inspector adds video effects to a clip or to a whole track: color correction, blur, sharpen, vignette, chroma key (green screen) and pixelate.</p>
+        <h3>Shaders</h3>
+        <figure class="shot"><img src="img/shaders.jpg" width="1920" height="1056" alt="The shader editor open over the media list, a generator clip at the end of V1" loading="lazy"></figure>
+        <p>Generators (pictures computed by the GPU), transitions, blend modes and resampling filters are small GLSL programs. <em>Edit &gt; Add Generator</em> lists the generators; the same menu creates new shaders, or copies a built-in one to start from. The shader editor compiles as you type and shows errors on their line. Shaders can react to the sound of the sequence (level, bass, mid, treble). Yours are saved in <code>Documents/QuickEdit/Shaders</code>, and inside the projects that use them.</p>
+
+        <h2 id="sound">Sound</h2>
+        <ul>
+            <li>Each audio clip shows its waveform. Drag the fade handles at its ends, and set its volume in the inspector.</li>
+            <li>Each track has mute, solo and lock buttons, and its own effects.</li>
+            <li>VST3 plugins can be added to a clip or to a track, from the <em>Effects</em> tab; their own window opens to set them.</li>
+            <li>When you drag the playhead, you hear the sound under it (scrubbing).</li>
+            <li>At export, the loudness can be normalized so that every video sounds as loud.</li>
+        </ul>
+
+        <h2 id="record">Record</h2>
+        <h3>A voice-over</h3>
+        <p>Press <kbd>R</kbd>, pick the microphone, and record. The recording lands on an audio track at the playhead, while you watch the video. Recordings are saved in a <code>Recordings</code> folder next to the project.</p>
+        <h3>The screen, a window or a camera</h3>
+        <p>Press <kbd>Shift</kbd>+<kbd>R</kbd>, choose what to record (a screen, a window, or a camera with its format and frame rate), and whether to record the sound of the computer and the microphone. On Linux under Wayland, the system asks which screen or window to share, and remembers it.</p>
+        <h3>A scene</h3>
+        <p>Press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> to record several sources at once: for example the screen and the camera in a corner. Place them in the frame beforehand; each one is recorded to its own file and lands on its own track, so you can still move or crop it afterwards. Scenes are saved for later.</p>
+
+        <h2 id="subtitles">Subtitles</h2>
+        <p>Press <kbd>Shift</kbd>+<kbd>T</kbd> to add a subtitle at the playhead, or let QuickEdit write them: <em>Generate Subtitles…</em> transcribes the speech with whisper.cpp on the GPU (it offers to download a speech model the first time). Subtitles can also be imported from and exported to <code>.srt</code> files. At export, they are burnt into the picture, saved beside the video, or both.</p>
+
+        <h2 id="export">Export</h2>
+        <p>Click the export button in the toolbar (or <em>File &gt; Export Video…</em>).</p>
+        <figure><img src="img/export.png" width="575" height="463" alt="The Export Video window" loading="lazy" style="border-radius:8px;border:1px solid var(--line)"></figure>
+        <ul>
+            <li><strong>File</strong>: an MP4, MOV or MKV file.</li>
+            <li><strong>Preset</strong>: YouTube, Shorts / Reels / TikTok, Vimeo, X, Facebook, Archive or Quick preview set everything below for you.</li>
+            <li><strong>Codec and quality</strong>: H.264 (the most compatible), H.265 or AV1, and the bitrate. The video is encoded on the GPU when the codec allows it.</li>
+            <li><strong>Loudness</strong>: normalize the sound, for example to −14 LUFS for YouTube and Spotify.</li>
+            <li><strong>Subtitles</strong>: in the picture, in a <code>.srt</code> file beside the video, or both.</li>
+            <li><strong>Size and frame rate</strong>: those of the sequence, or others.</li>
+            <li><strong>Advanced</strong>: variable, constant bitrate or constant quality, speed against quality, and the spacing of the key frames.</li>
+        </ul>
+
+        <h2 id="ai">AI control</h2>
+        <p>QuickEdit can let an AI assistant edit the project you have open. In <em>Edit &gt; Preferences &gt; AI Control</em>, turn on the server. It listens on <code>http://127.0.0.1:8765/mcp</code>, on this computer only, and is off by default.</p>
+        <p>Then connect your assistant to it. With Claude Code:</p>
+        <pre><code>claude mcp add --transport http quickedit http://127.0.0.1:8765/mcp</code></pre>
+        <p>The assistant sees the tracks, clips, media, rendered frames and transcriptions, and can import media, cut, add texts, titles, transitions, effects, keyframes and subtitles, write its own shaders, and export. You watch it work in the window, and every edit it makes is a step of the history: <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes it.</p>
+        <div class="tip"><p>Try: <em>"Cut the silences of the voice-over, put the music 12 dB under it, and add a lower third with my name at the start."</em></p></div>
+
+        <h2 id="shortcuts">Shortcuts</h2>
+        <table>
+            <tr><th>Keys</th><th>Action</th></tr>
+            <tr><td><kbd>Space</kbd></td><td>Play / pause</td></tr>
+            <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Previous / next frame</td></tr>
+            <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td>Start / end of the sequence</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>Split at the playhead</td></tr>
+            <tr><td><kbd>Delete</kbd> / <kbd>Shift</kbd>+<kbd>Delete</kbd></td><td>Delete / ripple delete</td></tr>
+            <tr><td><kbd>V</kbd> <kbd>C</kbd> <kbd>Y</kbd> <kbd>A</kbd></td><td>Select, blade, slip, select forward</td></tr>
+            <tr><td><kbd>N</kbd></td><td>Snapping</td></tr>
+            <tr><td><kbd>T</kbd> / <kbd>Shift</kbd>+<kbd>T</kbd></td><td>Add a text / a subtitle</td></tr>
+            <tr><td><kbd>Shift</kbd>+<kbd>F</kbd></td><td>Freeze frame</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>D</kbd></td><td>Add or remove a transition</td></tr>
+            <tr><td><kbd>R</kbd> / <kbd>Shift</kbd>+<kbd>R</kbd></td><td>Record a voice-over / the screen</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd></td><td>Record a scene</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Undo / redo</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+wheel, <kbd>Ctrl</kbd>+<kbd>0</kbd></td><td>Zoom the timeline, show all of it</td></tr>
+        </table>
+
+        <p style="margin-top:48px">Something missing or not working? <a href="https://github.com/Zovelik/QuickEdit/issues">Open an issue</a>.</p>
+    </article>
+</div>
+
+<footer>
+    <div class="wrap">
+        <span>QuickEdit &middot; BSD 3-Clause License &middot; FFmpeg under the LGPL</span>
+        <span><a href="https://github.com/Zovelik/QuickEdit">Source code</a> &middot; <a href="https://github.com/Zovelik/QuickEdit/issues">Report a problem</a></span>
+    </div>
+</footer>
+
+</body>
+</html>

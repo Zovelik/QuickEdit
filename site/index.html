@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>QuickEdit: a simple, powerful video editor</title>
+    <meta name="description" content="QuickEdit is a free, open source video editor for Windows and Linux, rendered entirely on the GPU with Vulkan. Record and clean a voice-over, put music under it, screen captures, videos and animated texts over it.">
+    <meta property="og:title" content="QuickEdit">
+    <meta property="og:description" content="A simple, powerful video editor for Windows and Linux, rendered entirely with Vulkan.">
+    <meta property="og:image" content="img/editor.jpg">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+    <div class="wrap">
+        <a class="brand" href="./"><img src="favicon.svg" alt="">QuickEdit</a>
+        <nav class="links">
+            <a class="hide-small" href="#features">Features</a>
+            <a href="guide.html">Guide</a>
+            <a href="#download">Download</a>
+            <a href="https://github.com/Zovelik/QuickEdit">GitHub</a>
+        </nav>
+    </div>
+</header>
+
+<main>
+    <div class="hero">
+        <div class="wrap">
+            <h1>Video editing that is <em>quick</em>,<br>without giving up power.</h1>
+            <p class="lead">
+                QuickEdit is a free video editor for Windows and Linux, made for videos built around a voice-over:
+                record and clean the voice, put music under it, and screen captures, videos and animated texts over it.
+                Everything is drawn on the GPU with Vulkan.
+            </p>
+            <div class="buttons">
+                <a class="button" data-os="windows" data-asset="-Windows.exe" href="https://github.com/Zovelik/QuickEdit/releases/latest">
+                    Download for Windows <span class="size"></span>
+                </a>
+                <a class="button" data-os="linux" data-asset="-Linux.AppImage" href="https://github.com/Zovelik/QuickEdit/releases/latest">
+                    Download for Linux <span class="size"></span>
+                </a>
+            </div>
+            <p class="note">
+                <span data-version hidden></span>Free and open source (BSD 3-Clause) &middot;
+                <a href="https://github.com/Zovelik/QuickEdit/releases">All releases</a>
+            </p>
+            <div class="shot"><img src="img/editor.jpg" width="1920" height="1056" alt="The QuickEdit window: media list, viewer with an animated title, inspector and a timeline with video, voice, music and subtitle tracks"></div>
+        </div>
+    </div>
+
+    <section id="features">
+        <div class="wrap">
+            <h2>Everything a voice-over video needs</h2>
+            <p class="section-lead">The tools you reach for every day are one click or one key away. The deeper ones are there when you need them.</p>
+            <div class="grid">
+                <div class="card">
+                    <h3><span class="dot" style="background:var(--blue)"></span>A real timeline</h3>
+                    <p>Video, audio and subtitle tracks, snapping, ripple delete, linked picture and sound, blade, slip and select-forward tools, clip speed, freeze frames and nested sequences.</p>
+                </div>
+                <div class="card">
+                    <h3><span class="dot" style="background:var(--orange)"></span>GPU from end to end</h3>
+                    <p>Decoding with Vulkan Video, compositing, effects and encoding (Vulkan Video, NVENC, AMF) without the pictures ever leaving the graphics card.</p>
+                </div>
+                <div class="card">
+                    <h3><span class="dot" style="background:var(--green)"></span>Recording built in</h3>
+                    <p>Voice-over, screen, window or camera, with the sound of the computer. Record several sources at once as a scene, each on a track of its own.</p>
+                </div>
+                <div class="card">
+                    <h3><span class="dot" style="background:#c678dd"></span>Texts and titles</h3>
+                    <p>Rich text edited right in the viewer, with per-letter animations, backgrounds, shadows, rolling credits and tickers.</p>
+                </div>
+                <div class="card">
+                    <h3><span class="dot" style="background:#e5c07b"></span>Sound that sounds right</h3>
+                    <p>Waveforms, fades, VST3 effects per clip and per track, scrubbing, and loudness normalization at export.</p>
+                </div>
+                <div class="card">
+                    <h3><span class="dot" style="background:#56b6c2"></span>Subtitles from speech</h3>
+                    <p>Generate subtitles from the voice with whisper.cpp on the GPU, import and export SRT, or burn them into the picture.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="alt">
+        <div class="wrap split">
+            <div>
+                <h2>Pictures, placed precisely</h2>
+                <p class="section-lead">Every clip has a transform and a frame, animated with keyframes and curves.</p>
+                <ul>
+                    <li><strong>Position, scale, rotation, opacity</strong> with keyframes</li>
+                    <li><strong>Crop, rounded corners, border, shadow</strong> for picture-in-picture</li>
+                    <li><strong>Fit, fill or native size</strong>; bilinear, bicubic, Lanczos or nearest sampling</li>
+                    <li><strong>Video effects</strong>: color, blur, sharpen, vignette, chroma key, pixelate</li>
+                </ul>
+            </div>
+            <figure class="shot"><img src="img/picture-in-picture.jpg" width="1920" height="1056" alt="A picture-in-picture clip with rounded corners selected, its transform shown in the inspector" loading="lazy"></figure>
+        </div>
+    </section>
+
+    <section>
+        <div class="wrap split reverse">
+            <div>
+                <h2>Transitions and shaders</h2>
+                <p class="section-lead">Dissolve, dip to black, push, wipe and zoom are built in. Need something else? Write it.</p>
+                <ul>
+                    <li><strong>Generators, transitions, blend modes and resampling</strong> are GLSL shaders</li>
+                    <li><strong>A built-in editor</strong> compiles them as you type</li>
+                    <li><strong>Shaders can follow the sound</strong>: level, bass, mid and treble</li>
+                </ul>
+            </div>
+            <figure class="shot"><img src="img/shaders.jpg" width="1920" height="1056" alt="The shader editor next to the viewer, showing the rings drawn by the generator shader being edited" loading="lazy"></figure>
+        </div>
+    </section>
+
+    <section class="alt">
+        <div class="wrap">
+            <h2>Titles in a click</h2>
+            <p class="section-lead">End credits, lower thirds and news tickers, ready to fill in, every letter animated.</p>
+            <figure class="shot"><img src="img/titles.jpg" width="1500" height="330" alt="Three title templates: rolling end credits, a lower third and a breaking-news ticker" loading="lazy"></figure>
+        </div>
+    </section>
+
+    <section>
+        <div class="wrap split">
+            <div>
+                <h2>Let an AI assistant edit with you</h2>
+                <p class="section-lead">
+                    QuickEdit can run a Model Context Protocol server on your own computer. An assistant such as Claude
+                    then sees your project and edits it live: clips, texts, titles, transitions, effects, subtitles, shaders it writes itself, export.
+                </p>
+                <p>Each of its edits is a step of the history, undone like any other. <a href="guide.html#ai">How to set it up</a></p>
+            </div>
+            <pre><code>claude mcp add --transport http quickedit http://127.0.0.1:8765/mcp</code></pre>
+        </div>
+    </section>
+
+    <section class="alt" id="download">
+        <div class="wrap" style="text-align:center">
+            <h2>Get QuickEdit</h2>
+            <p class="section-lead" style="margin-left:auto;margin-right:auto">
+                64-bit Windows or Linux, with a GPU that supports Vulkan 1.3.
+                Hardware video decoding and encoding are used when the GPU has them.
+            </p>
+            <div class="buttons">
+                <a class="button" data-os="windows" data-asset="-Windows.exe" href="https://github.com/Zovelik/QuickEdit/releases/latest">Windows installer <span class="size"></span></a>
+                <a class="button" data-asset="-Windows.zip" href="https://github.com/Zovelik/QuickEdit/releases/latest">Windows zip <span class="size"></span></a>
+                <a class="button" data-os="linux" data-asset="-Linux.AppImage" href="https://github.com/Zovelik/QuickEdit/releases/latest">Linux AppImage <span class="size"></span></a>
+            </div>
+            <p class="note">New to QuickEdit? The <a href="guide.html">guide</a> takes you from the first import to the export.</p>
+        </div>
+    </section>
+</main>
+
+<footer>
+    <div class="wrap">
+        <span>QuickEdit &middot; BSD 3-Clause License &middot; FFmpeg under the LGPL</span>
+        <span><a href="https://github.com/Zovelik/QuickEdit">Source code</a> &middot; <a href="https://github.com/Zovelik/QuickEdit/issues">Report a problem</a></span>
+    </div>
+</footer>
+
+<script src="download.js"></script>
+</body>
+</html>
