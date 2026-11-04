@@ -51,7 +51,7 @@ namespace capture
 
         Kind kind = Kind::Monitor;
         uint64_t handle = 0;        // HMONITOR or HWND (X11 window); a camera or an X11 monitor: its number from 1
-        std::string device;         // Camera: its DirectShow name, its V4L2 device (/dev/video0)
+        std::string device;         // Camera: its DirectShow name, its V4L2 device (/dev/video0); "portal:<key>" (Wayland)
         std::string name;
 
         // Linux: the place of a monitor on the X11 display, the size of a
@@ -95,9 +95,17 @@ namespace capture
     void excludeFromCapture(bool exclude);
     bool canExcludeFromCapture();
 
-    // Linux under Wayland: only the windows of X11 applications can be
-    // recorded for now (the screens need the desktop portal).
+    // Linux under Wayland without the ScreenCast portal: only the windows of
+    // X11 applications can be recorded.
     bool onlyX11Windows();
+
+    // A screen or a window chosen in the dialog of the system (Linux under
+    // Wayland, through the desktop portal), not listed.
+    bool chosenBySystem(const CaptureSource& source);
+
+    // The source to add to a scene: one chosen in the dialog of the system
+    // gets a choice of its own, remembered apart from the others.
+    CaptureSource sceneSource(const CaptureSource& source);
 
 
     // Live picture of a source, a few times a second, for choosing it:
@@ -169,8 +177,9 @@ namespace capture
     // (NVENC, AMF, Quick Sync; Media Foundation otherwise), WASAPI loopback
     // for the sound, DirectShow for the cameras.
     //
-    // Linux: x11grab (X11 screens and windows; under Wayland only the
-    // windows of X11 applications for now), V4L2 cameras, the monitor of
+    // Linux: under Wayland the ScreenCast portal and its PipeWire stream
+    // (WaylandCapture.h), the windows of X11 applications too; x11grab
+    // under X11. V4L2 cameras, the monitor of
     // the default PulseAudio / PipeWire output for the sound; NVENC, else
     // OpenH264 on the processor.
     class ScreenRecorder

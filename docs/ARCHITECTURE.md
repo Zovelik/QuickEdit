@@ -130,9 +130,16 @@ the computer.
 - Linux (`LinuxCapture`): the monitors (XRandR) and windows
   (`_NET_CLIENT_LIST`) of the X11 display read by `x11grab`, the V4L2
   cameras and their formats, the monitor of the default PulseAudio /
-  PipeWire output; NVENC, else OpenH264. Under Wayland only the windows of
-  X11 applications for now: the screens need the desktop portal and
-  PipeWire (to come).
+  PipeWire output; NVENC, else OpenH264.
+- Wayland (`WaylandCapture`): the screen or the window is chosen in the
+  dialog of the ScreenCast desktop portal (D-Bus through GIO), then read
+  from its PipeWire stream (shared memory, BGRx...) into AVFrames; the
+  recording takes the last picture at each frame, for a constant frame
+  rate. The restore token of each choice is kept by key in
+  `screencast.json` (one per source of a scene), so that the source opens
+  again without the dialog. A capture is shared by the preview and the
+  recording, and kept 5 s after its last user. The windows of X11
+  applications are still listed (x11grab).
 
 ### `app/`: the application
 

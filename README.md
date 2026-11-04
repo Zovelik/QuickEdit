@@ -29,8 +29,8 @@ Windows and Linux. C++20, SDL3, Dear ImGui, Vulkan, FFmpeg.
   such as WaveShell included), scrubbing, loudness normalization at export.
 - **Recording**: voice-over, screen, window or camera (format and frame rate
   of the camera), with the sound of the computer. On Linux: X11 screens and
-  windows, V4L2 cameras; under Wayland only the windows of X11 applications
-  for now.
+  windows, V4L2 cameras; under Wayland the screen or window chosen in the
+  dialog of the system (desktop portal and PipeWire), remembered.
 - **Scenes**: several screens, windows and cameras recorded at once, placed
   in the frame beforehand as in OBS; each one gets a file and a track of its
   own, and stays movable. Scenes are saved for later.

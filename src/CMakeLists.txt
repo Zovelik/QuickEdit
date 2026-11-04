@@ -127,6 +127,7 @@ set(QUICKEDIT_SRC
 
     capture/LinuxCapture.cpp
     capture/ScreenRecorder.cpp
+    capture/WaylandCapture.cpp
 
     render/Compositor.cpp
     render/FontLibrary.cpp
@@ -218,6 +219,13 @@ if (UNIX AND NOT APPLE)
     # (capture/LinuxCapture.cpp); libraries of the system, not packaged.
     find_package(X11 REQUIRED COMPONENTS Xrandr)
     target_link_libraries(QuickEdit PRIVATE X11::X11 X11::Xrandr)
+
+    # The screens and windows of a Wayland session: the ScreenCast portal
+    # over D-Bus (GIO) and its PipeWire stream (capture/WaylandCapture.cpp).
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0 gio-unix-2.0)
+    pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
+    target_link_libraries(QuickEdit PRIVATE PkgConfig::GIO PkgConfig::PIPEWIRE)
 endif()
 
 if (WIN32)

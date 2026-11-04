@@ -425,7 +425,7 @@ void GUI::sceneRecorderWindow()
                 // The whole frame for the first one, then smaller ones,
                 // cascading.
                 SceneSource source;
-                source.source = available;
+                source.source = capture::sceneSource(available);
                 source.scale = scene->sources.empty() ? 1.f : 0.4f;
                 source.x = scene->sources.empty() ? 0.f : 0.05f * (float)(scene->sources.size() % 8) - 0.3f;
                 source.y = scene->sources.empty() ? 0.f : 0.05f * (float)(scene->sources.size() % 8) - 0.3f;

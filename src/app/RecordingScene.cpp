@@ -91,17 +91,23 @@ std::vector<RecordingScene> loadScenes(const std::vector<capture::CaptureSource>
 
             // The same source now: its handle (windows and screens change
             // from one session to the other).
+            // One chosen in the dialog of the system keeps its own choice.
+            const bool chosenBySystem = capture::chosenBySystem(source.source);
             const auto found = std::find_if(available.begin(), available.end(), [&](const capture::CaptureSource& candidate) {
                 return candidate.kind == source.source.kind &&
-                    (candidate.kind == capture::CaptureSource::Kind::Camera ? candidate.device == source.source.device
-                                                                           : candidate.name == source.source.name);
+                    (chosenBySystem ? capture::chosenBySystem(candidate)
+                        : candidate.kind == capture::CaptureSource::Kind::Camera ? candidate.device == source.source.device
+                                                                                 : candidate.name == source.source.name);
             });
 
             source.available = found != available.end();
 
             if (source.available) {
                 source.source.handle = found->handle;
-                source.source.device = found->device;
+
+                if (!chosenBySystem) {
+                    source.source.device = found->device;
+                }
             }
 
             scene.sources.push_back(std::move(source));

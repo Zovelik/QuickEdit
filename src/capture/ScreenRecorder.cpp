@@ -36,6 +36,7 @@ extern "C" {
 
 #ifdef __linux__
 #include <capture/LinuxCapture.h>
+#include <capture/WaylandCapture.h>
 #endif
 
 #include <SDL3/SDL.h>
@@ -187,7 +188,7 @@ bool openScreen(const CaptureSource& source, int frameRate, bool cursor, AVForma
     }
 
     if (display.empty()) {
-        error = "No X11 display to capture (Wayland screens need the desktop portal, not supported yet).";
+        error = "No X11 display to capture.";
         return false;
     }
 
@@ -493,7 +494,17 @@ std::vector<CaptureSource> listSources()
 
     EnumWindows(addWindow, (LPARAM)&sources);
 #elif defined(__linux__)
-    for (std::vector<CaptureSource> part : { linux_capture::monitors(), linux_capture::cameras(), linux_capture::windows() }) {
+    // Wayland: the screen or the window chosen in the dialog of the portal,
+    // then the windows of the X11 applications.
+    const bool usePortal = portal::available();
+    std::vector<CaptureSource> monitors = usePortal ? std::vector<CaptureSource>{ portal::listed(CaptureSource::Kind::Monitor) } : linux_capture::monitors();
+    std::vector<CaptureSource> windows = linux_capture::windows();
+
+    if (usePortal) {
+        windows.insert(windows.begin(), portal::listed(CaptureSource::Kind::Window));
+    }
+
+    for (std::vector<CaptureSource> part : { monitors, linux_capture::cameras(), windows }) {
         sources.insert(sources.end(), part.begin(), part.end());
     }
 #endif
@@ -884,9 +895,30 @@ bool canExcludeFromCapture()
 bool onlyX11Windows()
 {
 #ifdef __linux__
-    return linux_capture::wayland();
+    return linux_capture::wayland() && !portal::available();
 #else
     return false;
+#endif
+}
+
+
+bool chosenBySystem(const CaptureSource& source)
+{
+#ifdef __linux__
+    return portal::isPortal(source);
+#else
+    (void)source;
+    return false;
+#endif
+}
+
+
+CaptureSource sceneSource(const CaptureSource& source)
+{
+#ifdef __linux__
+    return portal::own(source);
+#else
+    return source;
 #endif
 }
 
@@ -933,6 +965,12 @@ struct ScreenRecorder::Video
     AVFormatContext* input = nullptr;
     AVCodecContext* decoder = nullptr;
     int streamIndex = -1;
+
+#ifdef __linux__
+    // Wayland: the stream of the portal, its last picture taken at each
+    // frame of the recording.
+    std::shared_ptr<portal::Stream> portal;
+#endif
 
     ~Video()
     {
@@ -1085,6 +1123,29 @@ bool ScreenRecorder::start(const std::filesystem::path& path, const ScreenRecord
         AVRational timeBase = { _frameRateDen, _frameRateNum };
         AVRational frameRate = { _frameRateNum, _frameRateDen };
 
+#ifdef __linux__
+        if (portal::isPortal(settings.source)) {
+            // Its size from its first picture; at the frame rate asked.
+            video->portal = portal::open(settings.source, settings.cursor, &_stop, lastError);
+
+            if (!video->portal) {
+                break;
+            }
+
+            AVFrame* first = av_frame_alloc();
+            uint64_t serial = 0;
+            const bool pictured = video->portal->next(first, serial, 5000);
+            width = first->width & ~1;
+            height = first->height & ~1;
+            av_frame_free(&first);
+
+            if (!pictured) {
+                lastError = "The screen sharing gave no picture.";
+                break;
+            }
+        }
+        else
+#endif
         if (camera) {
 #ifdef _WIN32
             const bool opened = openCamera(settings.source, true, video->input, video->decoder, video->streamIndex, lastError);
@@ -1268,7 +1329,8 @@ void ScreenRecorder::videoLoop()
     AVFrame* frame = av_frame_alloc();
     AVPacket* packet = av_packet_alloc();
     AVPacket* input = av_packet_alloc();
-    const AVRational sourceTimeBase = video.input ? video.input->streams[video.streamIndex]->time_base : av_buffersink_get_time_base(video.sink);
+    const AVRational sourceTimeBase = video.input ? video.input->streams[video.streamIndex]->time_base
+        : video.sink ? av_buffersink_get_time_base(video.sink) : video.encoder->time_base;
     int64_t firstPts = AV_NOPTS_VALUE;
     int64_t lastPts = -1;
 
@@ -1317,7 +1379,52 @@ void ScreenRecorder::videoLoop()
         _seconds = (double)pts * av_q2d(video.encoder->time_base) + 1.0 / std::max(1.0, av_q2d(video.encoder->framerate));
     };
 
+#ifdef __linux__
+    // Wayland: the compositor gives a picture when the screen changes; the
+    // last one is taken at each frame, so that the frame rate is constant.
+    if (video.portal) {
+        const double period = (double)_frameRateDen / (double)_frameRateNum;
+        const auto origin = std::chrono::steady_clock::now();
+        uint64_t serial = 0;
+        int64_t tick = 0;
+        bool pictured = false;
+
+        while (!_stop) {
+            std::this_thread::sleep_until(origin + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>((double)tick * period)));
+
+            if (video.portal->next(frame, serial, 0)) {
+                pictured = true;
+            }
+
+            std::string error;
+
+            if (video.portal->ended(error)) {
+                fail("The screen sharing stopped: " + error);
+                break;
+            }
+
+            if (pictured && !_paused) {
+                frame->pts = tick;
+                frame->best_effort_timestamp = tick;
+                encode(frame);
+            }
+
+            // Frames skipped when late.
+            const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - origin).count();
+            tick = std::max(tick + 1, (int64_t)(elapsed / period));
+        }
+
+        av_frame_unref(frame);
+    }
+#endif
+
     while (!_stop) {
+#ifdef __linux__
+        if (video.portal) {
+            break;
+        }
+#endif
+
         if (video.input) {
             const int result = av_read_frame(video.input, input);
 
@@ -1889,6 +1996,10 @@ void previewLoop(std::shared_ptr<SourcePreview::State> state, CaptureSource sour
     AVCodecContext* decoder = nullptr;
     int streamIndex = -1;
     std::string error;
+#ifdef __linux__
+    std::shared_ptr<portal::Stream> portalStream;
+    uint64_t serial = 0;
+#endif
 
     // Not more pictures than the preview shows (the screens give one per
     // refresh of the display).
@@ -1915,6 +2026,11 @@ void previewLoop(std::shared_ptr<SourcePreview::State> state, CaptureSource sour
         opened = openCamera(source, false, input, decoder, streamIndex, error);
     }
 #ifdef __linux__
+    else if (portal::isPortal(source)) {
+        // The dialog of the system, until the source is chosen.
+        portalStream = portal::open(source, true, &state->stop, error);
+        opened = portalStream != nullptr;
+    }
     else {
         // Read whole, fewer pictures than on Windows: reduced on the
         // processor.
@@ -1949,6 +2065,22 @@ void previewLoop(std::shared_ptr<SourcePreview::State> state, CaptureSource sour
     }
 
     while (opened && !state->stop) {
+#ifdef __linux__
+        if (portalStream) {
+            if (portalStream->next(frame, serial, 100)) {
+                publish();
+            }
+
+            if (portalStream->ended(error)) {
+                std::scoped_lock lock(state->mutex);
+                state->error = error;
+                break;
+            }
+
+            continue;
+        }
+#endif
+
         if (input) {
             const int result = av_read_frame(input, packet);
 
