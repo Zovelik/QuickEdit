@@ -613,7 +613,16 @@ void GUI::sceneRecorderWindow()
     }
 
     ImGui::Checkbox(tr("Mouse cursor"), &_captureCursor);
-    ImGui::Checkbox(tr("Hide QuickEdit from the recording"), &_hideFromCapture);
+
+    if (capture::canExcludeFromCapture()) {
+        ImGui::Checkbox(tr("Hide QuickEdit from the recording"), &_hideFromCapture);
+    }
+
+    if (capture::onlyX11Windows()) {
+        ImGui::PushTextWrapPos(0.f);
+        ImGui::TextDisabled("%s", tr("Wayland session: only the windows of X11 applications can be recorded for now."));
+        ImGui::PopTextWrapPos();
+    }
 
     // Sound: the computer's with the first source, the microphone apart.
     ImGui::TableNextColumn();

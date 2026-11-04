@@ -4158,8 +4158,17 @@ void GUI::screenRecorderWindow()
         ImGui::SameLine();
         ImGui::RadioButton("60", &_captureFrameRate, 60);
         ImGui::Checkbox(tr("Mouse cursor"), &_captureCursor);
-        ImGui::SameLine();
-        ImGui::Checkbox(tr("Hide QuickEdit from the recording"), &_hideFromCapture);
+
+        if (capture::canExcludeFromCapture()) {
+            ImGui::SameLine();
+            ImGui::Checkbox(tr("Hide QuickEdit from the recording"), &_hideFromCapture);
+        }
+
+        if (capture::onlyX11Windows()) {
+            ImGui::PushTextWrapPos(0.f);
+            ImGui::TextDisabled("%s", tr("Wayland session: only the windows of X11 applications can be recorded for now."));
+            ImGui::PopTextWrapPos();
+        }
     }
     ImGui::EndDisabled();
 

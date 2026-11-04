@@ -121,11 +121,18 @@ loudness normalization at export.
 
 ### `capture/`: screen and camera recording
 
-`ScreenRecorder` records a screen or a window (the `gfxcapture` filter of
-FFmpeg, Windows Graphics Capture, the pictures staying on the GPU up to
-NVENC / AMF) or a camera (DirectShow, its formats read with
-`listCameraFormats`), with the sound of the computer (WASAPI loopback).
-Windows only for now.
+`ScreenRecorder` records a screen, a window or a camera with the sound of
+the computer.
+
+- Windows: the `gfxcapture` filter of FFmpeg (Windows Graphics Capture),
+  the pictures staying on the GPU up to NVENC / AMF; cameras through
+  DirectShow (formats read with `listCameraFormats`); WASAPI loopback.
+- Linux (`LinuxCapture`): the monitors (XRandR) and windows
+  (`_NET_CLIENT_LIST`) of the X11 display read by `x11grab`, the V4L2
+  cameras and their formats, the monitor of the default PulseAudio /
+  PipeWire output; NVENC, else OpenH264. Under Wayland only the windows of
+  X11 applications for now: the screens need the desktop portal and
+  PipeWire (to come).
 
 ### `app/`: the application
 

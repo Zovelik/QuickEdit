@@ -638,6 +638,7 @@
   "Vignette": "Vignette",
   "Vimeo": "Vimeo",
   "Vimeo's guidelines: H.264, 10 to 60 Mbit/s after the size, AAC 320 kbit/s": "Recommandations de Vimeo : H.264, 10 à 60 Mbit/s selon la taille, AAC 320 kbit/s",
+  "Wayland session: only the windows of X11 applications can be recorded for now.": "Session Wayland : seules les fenêtres des applications X11 peuvent être enregistrées pour l'instant.",
   "While a clip edge is dragged: the viewer shows its frame, a sound is heard there": "Pendant qu'on tire le bord d'un clip : le viewer montre son image, un son y est entendu",
   "Whole Text": "Texte entier",
   "Whole sequence": "Séquence entière",

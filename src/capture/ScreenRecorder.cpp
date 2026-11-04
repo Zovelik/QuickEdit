@@ -34,6 +34,10 @@ extern "C" {
 
 #include <core/Guard.h>
 
+#ifdef __linux__
+#include <capture/LinuxCapture.h>
+#endif
+
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -58,7 +62,13 @@ bool openCamera(const CaptureSource& source, bool best, AVFormatContext*& input,
 {
     avdevice_register_all();
 
+#ifdef _WIN32
     const AVInputFormat* format = av_find_input_format("dshow");
+    const std::string url = "video=" + source.device;
+#else
+    const AVInputFormat* format = av_find_input_format("v4l2");
+    const std::string url = source.device;
+#endif
 
     if (!format) {
         error = "No camera support in this build of FFmpeg.";
@@ -87,22 +97,32 @@ bool openCamera(const CaptureSource& source, bool best, AVFormatContext*& input,
 
     attempts.emplace_back(CameraFormat(), 0.0);
 
-    const std::string url = "video=" + source.device;
     int result = -1;
 
     for (const auto& [attempt, frameRate] : attempts) {
         AVDictionary* options = nullptr;
+#ifdef _WIN32
         av_dict_set(&options, "rtbufsize", "256M", 0);
+#endif
 
         if (!attempt.automatic()) {
             av_dict_set(&options, "video_size", (std::to_string(attempt.width) + "x" + std::to_string(attempt.height)).c_str(), 0);
 
+#ifdef _WIN32
             if (!attempt.codec.empty()) {
                 av_dict_set(&options, "vcodec", attempt.codec.c_str(), 0);
             }
             else if (!attempt.pixelFormat.empty()) {
                 av_dict_set(&options, "pixel_format", attempt.pixelFormat.c_str(), 0);
             }
+#else
+            // V4L2: one option for the compressed and raw formats.
+            const std::string& input = !attempt.codec.empty() ? attempt.codec : attempt.pixelFormat;
+
+            if (!input.empty()) {
+                av_dict_set(&options, "input_format", input.c_str(), 0);
+            }
+#endif
 
             if (frameRate > 0.0) {
                 char rate[32];
@@ -148,6 +168,73 @@ bool openCamera(const CaptureSource& source, bool best, AVFormatContext*& input,
 
     return true;
 }
+
+
+#ifdef __linux__
+
+// Opens the capture of an X11 monitor or window (x11grab) and the decoder of
+// its raw pictures, at a frame rate.
+bool openScreen(const CaptureSource& source, int frameRate, bool cursor, AVFormatContext*& input, AVCodecContext*& decoder, int& streamIndex, std::string& error)
+{
+    avdevice_register_all();
+
+    const AVInputFormat* format = av_find_input_format("x11grab");
+    const std::string display = linux_capture::display();
+
+    if (!format) {
+        error = "No screen capture in this build of FFmpeg.";
+        return false;
+    }
+
+    if (display.empty()) {
+        error = "No X11 display to capture (Wayland screens need the desktop portal, not supported yet).";
+        return false;
+    }
+
+    AVDictionary* options = nullptr;
+    av_dict_set(&options, "framerate", std::to_string(std::max(1, frameRate)).c_str(), 0);
+    av_dict_set(&options, "draw_mouse", cursor ? "1" : "0", 0);
+
+    if (source.kind == CaptureSource::Kind::Window) {
+        av_dict_set(&options, "window_id", std::to_string(source.handle).c_str(), 0);
+    }
+    else if (source.width > 0 && source.height > 0) {
+        av_dict_set(&options, "video_size", (std::to_string(source.width) + "x" + std::to_string(source.height)).c_str(), 0);
+        av_dict_set(&options, "grab_x", std::to_string(source.x).c_str(), 0);
+        av_dict_set(&options, "grab_y", std::to_string(source.y).c_str(), 0);
+    }
+
+    const int result = avformat_open_input(&input, display.c_str(), format, &options);
+    av_dict_free(&options);
+
+    if (result < 0) {
+        error = "Could not capture this source (closed window?).";
+        return false;
+    }
+
+    streamIndex = av_find_best_stream(input, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+
+    if (streamIndex < 0) {
+        error = "The capture gives no pictures.";
+        avformat_close_input(&input);
+        return false;
+    }
+
+    const AVCodecParameters* parameters = input->streams[streamIndex]->codecpar;
+    const AVCodec* codec = avcodec_find_decoder(parameters->codec_id);
+    decoder = avcodec_alloc_context3(codec);
+
+    if (!codec || avcodec_parameters_to_context(decoder, parameters) < 0 || avcodec_open2(decoder, codec, nullptr) < 0) {
+        error = "Could not read the pictures of the capture.";
+        avcodec_free_context(&decoder);
+        avformat_close_input(&input);
+        return false;
+    }
+
+    return true;
+}
+
+#endif
 
 
 // Scales a picture into the preview, letterboxed.
@@ -203,6 +290,13 @@ std::pair<int, int> previewSize(const CaptureSource& source)
             width = rect.right - rect.left;
             height = rect.bottom - rect.top;
         }
+    }
+#elif defined(__linux__)
+    width = source.width;
+    height = source.height;
+
+    if (source.kind == CaptureSource::Kind::Window) {
+        linux_capture::windowSize(source.handle, width, height);
     }
 #endif
 
@@ -398,6 +492,10 @@ std::vector<CaptureSource> listSources()
     avdevice_free_list_devices(&devices);
 
     EnumWindows(addWindow, (LPARAM)&sources);
+#elif defined(__linux__)
+    for (std::vector<CaptureSource> part : { linux_capture::monitors(), linux_capture::cameras(), linux_capture::windows() }) {
+        sources.insert(sources.end(), part.begin(), part.end());
+    }
 #endif
 
     return sources;
@@ -624,6 +722,8 @@ std::vector<CameraFormat> listCameraFormats(const CaptureSource& camera)
     }
 
     SDL_Log("Camera %s: %d formats", camera.name.c_str(), (int)formats.size());
+#elif defined(__linux__)
+    formats = linux_capture::cameraFormats(camera.device);
 #else
     (void)camera;
 #endif
@@ -771,6 +871,26 @@ bool addAudioStream(const std::filesystem::path& recording, const std::filesyste
 }
 
 
+bool canExcludeFromCapture()
+{
+#ifdef _WIN32
+    return true;
+#else
+    return false;
+#endif
+}
+
+
+bool onlyX11Windows()
+{
+#ifdef __linux__
+    return linux_capture::wayland();
+#else
+    return false;
+#endif
+}
+
+
 void excludeFromCapture(bool exclude)
 {
 #ifdef _WIN32
@@ -883,10 +1003,10 @@ bool ScreenRecorder::start(const std::filesystem::path& path, const ScreenRecord
 {
     stop();
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__linux__)
     (void)path;
     (void)settings;
-    error = "Screen recording is only available on Windows for now.";
+    error = "Screen recording is not available on this system.";
     return false;
 #else
     _error.clear();
@@ -918,21 +1038,35 @@ bool ScreenRecorder::start(const std::filesystem::path& path, const ScreenRecord
     // sizes rounded down to even numbers for the encoders. Hardware encoders
     // take its pictures on the GPU; Media Foundation gets them downloaded.
     // A camera: its pictures decoded, converted to NV12 for any encoder.
+    // Linux: the screens and windows read as the cameras (x11grab), their
+    // raw pictures converted for the encoder.
+#ifdef _WIN32
     const bool camera = settings.source.kind == CaptureSource::Kind::Camera;
     const std::string capture = captureFilter(settings.source, maxFrameRate, settings.cursor) +
         ":width=-2:height=-2,fps=" + std::to_string(_frameRateNum) + "/" + std::to_string(_frameRateDen);
+#else
+    const bool camera = true;
+#endif
 
     struct Candidate
     {
         const char* encoder;
         bool download;
+        AVPixelFormat format;       // Of the pictures given to it when downloaded
     };
 
+#ifdef _WIN32
     const Candidate candidates[] = {
-        { "h264_nvenc", false },
-        { "h264_amf", false },
-        { "h264_mf", true },
+        { "h264_nvenc", false, AV_PIX_FMT_NV12 },
+        { "h264_amf", false, AV_PIX_FMT_NV12 },
+        { "h264_mf", true, AV_PIX_FMT_NV12 },
     };
+#else
+    const Candidate candidates[] = {
+        { "h264_nvenc", true, AV_PIX_FMT_NV12 },
+        { "libopenh264", true, AV_PIX_FMT_YUV420P },
+    };
+#endif
 
     std::string lastError = "No H.264 encoder could be opened.";
 
@@ -952,7 +1086,15 @@ bool ScreenRecorder::start(const std::filesystem::path& path, const ScreenRecord
         AVRational frameRate = { _frameRateNum, _frameRateDen };
 
         if (camera) {
-            if (!openCamera(settings.source, true, video->input, video->decoder, video->streamIndex, lastError)) {
+#ifdef _WIN32
+            const bool opened = openCamera(settings.source, true, video->input, video->decoder, video->streamIndex, lastError);
+#else
+            const bool opened = (settings.source.kind == CaptureSource::Kind::Camera)
+                ? openCamera(settings.source, true, video->input, video->decoder, video->streamIndex, lastError)
+                : openScreen(settings.source, maxFrameRate, settings.cursor, video->input, video->decoder, video->streamIndex, lastError);
+#endif
+
+            if (!opened) {
                 break;
             }
 
@@ -965,6 +1107,7 @@ bool ScreenRecorder::start(const std::filesystem::path& path, const ScreenRecord
                 frameRate = stream->avg_frame_rate;
             }
         }
+#ifdef _WIN32
         else {
             const std::string description = capture + (candidate.download ? ",hwdownload,format=bgra" : "");
             video->graph = openGraph(description, video->sink, result);
@@ -977,6 +1120,7 @@ bool ScreenRecorder::start(const std::filesystem::path& path, const ScreenRecord
             width = av_buffersink_get_w(video->sink);
             height = av_buffersink_get_h(video->sink);
         }
+#endif
 
         AVCodecContext* encoder = avcodec_alloc_context3(codec);
         video->encoder = encoder;
@@ -997,7 +1141,7 @@ bool ScreenRecorder::start(const std::filesystem::path& path, const ScreenRecord
         }
 
         if (video->download) {
-            encoder->pix_fmt = AV_PIX_FMT_NV12;
+            encoder->pix_fmt = candidate.format;
         }
         else {
             AVBufferRef* frames = av_buffersink_get_hw_frames_ctx(video->sink);
@@ -1031,7 +1175,7 @@ bool ScreenRecorder::start(const std::filesystem::path& path, const ScreenRecord
 
         if (video->download) {
             video->converted = av_frame_alloc();
-            video->converted->format = AV_PIX_FMT_NV12;
+            video->converted->format = candidate.format;
             video->converted->width = width;
             video->converted->height = height;
             av_frame_get_buffer(video->converted, 0);
@@ -1154,7 +1298,7 @@ void ScreenRecorder::videoLoop()
 
         if (video.download) {
             video.sws = sws_getCachedContext(video.sws, picture->width, picture->height, (AVPixelFormat)picture->format,
-                video.encoder->width, video.encoder->height, AV_PIX_FMT_NV12, SWS_BILINEAR, nullptr, nullptr, nullptr);
+                video.encoder->width, video.encoder->height, video.encoder->pix_fmt, SWS_BILINEAR, nullptr, nullptr, nullptr);
             av_frame_make_writable(video.converted);
             sws_scale(video.sws, picture->data, picture->linesize, 0, picture->height, video.converted->data, video.converted->linesize);
             in = video.converted;
@@ -1438,6 +1582,162 @@ void ScreenRecorder::audioLoop()
 
     av_frame_free(&frame);
     av_packet_free(&packet);
+#elif defined(__linux__)
+    // The monitor of the default output (PulseAudio, or PipeWire through
+    // its PulseAudio server), read by FFmpeg as 48 kHz stereo 16-bit.
+    Audio& audio = *_audio;
+    AVPacket* packet = av_packet_alloc();
+    AVPacket* input = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    frame->format = AV_SAMPLE_FMT_FLTP;
+    frame->sample_rate = AudioSampleRate;
+    frame->nb_samples = audio.encoder->frame_size;
+    av_channel_layout_default(&frame->ch_layout, 2);
+    av_frame_get_buffer(frame, 0);
+
+    avdevice_register_all();
+    AVFormatContext* source = nullptr;
+    AVDictionary* options = nullptr;
+    av_dict_set(&options, "sample_rate", std::to_string(AudioSampleRate).c_str(), 0);
+    av_dict_set(&options, "channels", "2", 0);
+    av_dict_set(&options, "fragment_size", "3840", 0);     // 20 ms
+
+    const AVInputFormat* pulse = av_find_input_format("pulse");
+    const bool captured = pulse && avformat_open_input(&source, "@DEFAULT_MONITOR@", pulse, &options) >= 0;
+    av_dict_free(&options);
+
+    if (!captured) {
+        SDL_Log("Screen recording: no capture of the computer sound (PulseAudio monitor), recording silence");
+    }
+
+    AVChannelLayout inputLayout = {};
+    av_channel_layout_default(&inputLayout, 2);
+    swr_alloc_set_opts2(&audio.swr, &audio.encoder->ch_layout, AV_SAMPLE_FMT_FLTP, AudioSampleRate, &inputLayout, AV_SAMPLE_FMT_S16, AudioSampleRate, 0, nullptr);
+    swr_init(audio.swr);
+    av_channel_layout_uninit(&inputLayout);
+
+    constexpr int BytesPerFrame = 2 * 2;
+    std::vector<uint8_t> silence;
+    std::vector<float> converted[2];
+
+    auto encodeAvailable = [&](bool flush) {
+        while (av_audio_fifo_size(audio.fifo) >= frame->nb_samples || (flush && av_audio_fifo_size(audio.fifo) > 0)) {
+            av_frame_make_writable(frame);
+            const int count = av_audio_fifo_read(audio.fifo, (void**)frame->data, frame->nb_samples);
+
+            for (int c = 0; c < 2; c++) {
+                std::fill((float*)frame->data[c] + count, (float*)frame->data[c] + frame->nb_samples, 0.f);
+            }
+
+            frame->pts = audio.samplesEncoded;
+            audio.samplesEncoded += frame->nb_samples;
+
+            if (avcodec_send_frame(audio.encoder, frame) < 0) {
+                break;
+            }
+
+            while (avcodec_receive_packet(audio.encoder, packet) >= 0) {
+                av_packet_rescale_ts(packet, audio.encoder->time_base, audio.stream->time_base);
+                packet->stream_index = audio.stream->index;
+                write(packet);
+            }
+        }
+    };
+
+    auto feed = [&](const uint8_t* data, int frames) {
+        const int outCount = swr_get_out_samples(audio.swr, frames);
+
+        for (auto& channel : converted) {
+            channel.resize((size_t)std::max(outCount, 1));
+        }
+
+        uint8_t* out[2] = { (uint8_t*)converted[0].data(), (uint8_t*)converted[1].data() };
+        const uint8_t* in[1] = { data };
+        const int count = swr_convert(audio.swr, out, outCount, in, frames);
+
+        if (count <= 0) {
+            return;
+        }
+
+        float peak = 0.f;
+
+        for (int i = 0; i < count; i++) {
+            peak = std::max({ peak, std::fabs(converted[0][i]), std::fabs(converted[1][i]) });
+        }
+
+        float previous = _audioPeak.load();
+        while (peak > previous && !_audioPeak.compare_exchange_weak(previous, peak)) {}
+
+        av_audio_fifo_write(audio.fifo, (void**)out, count);
+        encodeAvailable(false);
+    };
+
+    auto feedSilence = [&](int64_t frames) {
+        while (frames > 0) {
+            const int chunk = (int)std::min<int64_t>(frames, 4800);
+            silence.assign((size_t)chunk * BytesPerFrame, 0);
+            feed(silence.data(), chunk);
+            frames -= chunk;
+        }
+    };
+
+    // From the first picture on, to start together: the sound read until
+    // then is dropped.
+    while (!_stop && !_videoStarted) {
+        if (captured && av_read_frame(source, input) >= 0) {
+            av_packet_unref(input);
+        }
+        else {
+            SDL_Delay(2);
+        }
+    }
+
+    const auto startTime = std::chrono::steady_clock::now();
+    int64_t inputFrames = 0;
+
+    while (!_stop) {
+        if (captured) {
+            const int result = av_read_frame(source, input);
+
+            if (result >= 0) {
+                const int frames = input->size / BytesPerFrame;
+                feed(input->data, frames);
+                inputFrames += frames;
+                av_packet_unref(input);
+                continue;
+            }
+
+            if (result != AVERROR(EAGAIN)) {
+                SDL_Delay(10);
+            }
+        }
+        else {
+            SDL_Delay(10);
+        }
+
+        // Nothing came: silence, to stay in time with the pictures.
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - startTime).count();
+        const int64_t late = (int64_t)(elapsed * AudioSampleRate) - inputFrames - AudioSampleRate / 20;
+
+        if (late > 0) {
+            feedSilence(late);
+            inputFrames += late;
+        }
+    }
+
+    encodeAvailable(true);
+    avcodec_send_frame(audio.encoder, nullptr);
+
+    while (avcodec_receive_packet(audio.encoder, packet) >= 0) {
+        av_packet_rescale_ts(packet, audio.encoder->time_base, audio.stream->time_base);
+        packet->stream_index = audio.stream->index;
+        write(packet);
+    }
+
+    avformat_close_input(&source);
+    av_frame_free(&frame);
+    av_packet_free(&input);
+    av_packet_free(&packet);
 #endif
 }
 
@@ -1614,6 +1914,13 @@ void previewLoop(std::shared_ptr<SourcePreview::State> state, CaptureSource sour
     if (source.kind == CaptureSource::Kind::Camera) {
         opened = openCamera(source, false, input, decoder, streamIndex, error);
     }
+#ifdef __linux__
+    else {
+        // Read whole, fewer pictures than on Windows: reduced on the
+        // processor.
+        opened = openScreen(source, 15, true, input, decoder, streamIndex, error);
+    }
+#else
     else {
         // Reduced by the capture itself (on the GPU, bicubic) to the size of
         // the preview, its shape kept, then downloaded: a whole screen
@@ -1634,6 +1941,7 @@ void previewLoop(std::shared_ptr<SourcePreview::State> state, CaptureSource sour
             error = "No picture from this source: " + averror(result);
         }
     }
+#endif
 
     if (!opened) {
         std::scoped_lock lock(state->mutex);

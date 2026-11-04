@@ -50,9 +50,16 @@ namespace capture
         };
 
         Kind kind = Kind::Monitor;
-        uint64_t handle = 0;        // HMONITOR or HWND; for a camera, its number from 1
-        std::string device;         // Camera: its DirectShow name
+        uint64_t handle = 0;        // HMONITOR or HWND (X11 window); a camera or an X11 monitor: its number from 1
+        std::string device;         // Camera: its DirectShow name, its V4L2 device (/dev/video0)
         std::string name;
+
+        // Linux: the place of a monitor on the X11 display, the size of a
+        // monitor or a window when listed.
+        int x = 0;
+        int y = 0;
+        int width = 0;
+        int height = 0;
 
         // Camera: the format asked for, and its frame rate (0: the
         // camera's choice).
@@ -78,13 +85,19 @@ namespace capture
     bool addAudioStream(const std::filesystem::path& recording, const std::filesystem::path& audio,
         const std::string& title, std::string& error);
 
-    // The formats a camera offers (DirectShow capabilities), the largest
-    // first. Empty when unknown (other systems).
+    // The formats a camera offers (DirectShow capabilities, V4L2 formats),
+    // the largest first. Empty when unknown.
     std::vector<CameraFormat> listCameraFormats(const CaptureSource& camera);
 
     // Keeps the windows of the calling thread out of the captures (or puts
-    // them back), so that QuickEdit does not record itself.
+    // them back), so that QuickEdit does not record itself. Windows only:
+    // canExcludeFromCapture() is false elsewhere.
     void excludeFromCapture(bool exclude);
+    bool canExcludeFromCapture();
+
+    // Linux under Wayland: only the windows of X11 applications can be
+    // recorded for now (the screens need the desktop portal).
+    bool onlyX11Windows();
 
 
     // Live picture of a source, a few times a second, for choosing it:
@@ -147,13 +160,19 @@ namespace capture
     };
 
 
-    // Records a screen or a window to a Matroska file (readable even when
-    // the recording stops unexpectedly): Windows Graphics Capture through
-    // the gfxcapture filter of FFmpeg, the pictures staying on the GPU up
-    // to a hardware encoder (NVENC, AMF, Quick Sync; Media Foundation
-    // otherwise), and the sound of the computer (WASAPI loopback) in AAC.
+    // Records a screen, a window or a camera to a Matroska file (readable
+    // even when the recording stops unexpectedly), with the sound of the
+    // computer in AAC.
     //
-    // Windows only for now: start() fails elsewhere.
+    // Windows: Windows Graphics Capture through the gfxcapture filter of
+    // FFmpeg, the pictures staying on the GPU up to a hardware encoder
+    // (NVENC, AMF, Quick Sync; Media Foundation otherwise), WASAPI loopback
+    // for the sound, DirectShow for the cameras.
+    //
+    // Linux: x11grab (X11 screens and windows; under Wayland only the
+    // windows of X11 applications for now), V4L2 cameras, the monitor of
+    // the default PulseAudio / PipeWire output for the sound; NVENC, else
+    // OpenH264 on the processor.
     class ScreenRecorder
     {
     public:

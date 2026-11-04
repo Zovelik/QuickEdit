@@ -125,6 +125,7 @@ set(QUICKEDIT_SRC
     audio/Recorder.cpp
     audio/Vst3Plugin.cpp
 
+    capture/LinuxCapture.cpp
     capture/ScreenRecorder.cpp
 
     render/Compositor.cpp
@@ -210,6 +211,13 @@ else()
     get_filename_component(VULKAN_SDK_LIB_DIR "${Vulkan_LIBRARY}" DIRECTORY)
     find_library(SHADERC_LIBRARY NAMES shaderc_shared shaderc HINTS "${VULKAN_SDK_LIB_DIR}" "$ENV{VULKAN_SDK}/lib" REQUIRED)
     target_link_libraries(QuickEdit PRIVATE ${SHADERC_LIBRARY})
+endif()
+
+if (UNIX AND NOT APPLE)
+    # The monitors and windows of the X11 display to capture
+    # (capture/LinuxCapture.cpp); libraries of the system, not packaged.
+    find_package(X11 REQUIRED COMPONENTS Xrandr)
+    target_link_libraries(QuickEdit PRIVATE X11::X11 X11::Xrandr)
 endif()
 
 if (WIN32)
