@@ -562,6 +562,22 @@ void GUI::cmdCompose(VkCommandBuffer commandBuffer)
 }
 
 
+void GUI::applyWindowPlacement(const char* id)
+{
+    const auto it = _windowPlacements.find(id);
+
+    if (it == _windowPlacements.end()) {
+        return;
+    }
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImVec4 r = it->second;
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + r.x * viewport->WorkSize.x, viewport->WorkPos.y + r.y * viewport->WorkSize.y));
+    ImGui::SetNextWindowSize(ImVec2(r.z * viewport->WorkSize.x, r.w * viewport->WorkSize.y));
+    _windowPlacements.erase(it);
+}
+
+
 void GUI::render(
     VkCommandBuffer commandBuffer,
     VkImage targetImage,
@@ -569,6 +585,19 @@ void GUI::render(
     VkImageLayout targetLayout
 )
 {
+    // The default layout, asked by the MCP server (rebuilt with the
+    // dockspace, below).
+    if (std::exchange(_requestResetLayout, false)) {
+        _dockLayoutInitialized = false;
+        _resetDockLayout = true;
+        _focusTimeline = true;
+    }
+
+    // The popups (export, preferences...) closed, asked by the MCP server.
+    if (std::exchange(_requestClosePopups, false) && !ImGui::GetCurrentContext()->OpenPopupStack.empty()) {
+        ImGui::ClosePopupToLevel(0, true);
+    }
+
     updateMedia();
     updatePlayback();
     cmdCompose(commandBuffer);
@@ -584,6 +613,13 @@ void GUI::render(
 
     if (!_dockLayoutInitialized) {
         _dockLayoutInitialized = true;
+
+        // Asked again: the panels as they are now forgotten (the ID of the
+        // dockspace is the one inside the main window, as here).
+        if (std::exchange(_resetDockLayout, false)) {
+            ImGui::DockBuilderRemoveNode(dockSpaceId);
+        }
+
         dockLayout(dockSpaceId);
     }
 
@@ -708,7 +744,7 @@ void GUI::dockLayout(ImGuiID dockSpaceId)
     ImGui::DockBuilderSetNodeSize(dockSpaceId, ImGui::GetContentRegionAvail());
 
     ImGuiID topNode = dockSpaceId;
-    const ImGuiID timelineNode = ImGui::DockBuilderSplitNode(topNode, ImGuiDir_Down, 0.5f, nullptr, &topNode);
+    const ImGuiID timelineNode = ImGui::DockBuilderSplitNode(topNode, ImGuiDir_Down, 0.38f, nullptr, &topNode);
 
     ImGuiID viewerNode = topNode;
     const ImGuiID mediaNode = ImGui::DockBuilderSplitNode(viewerNode, ImGuiDir_Left, 0.25f, nullptr, &viewerNode);
@@ -955,7 +991,7 @@ void GUI::menuBar()
             ImGui::Separator();
             if (ImGui::MenuItem(tr(ICON_MD_TIMELINE " Keyframes"))) { ImGui::SetWindowFocus("###Keyframes"); }
             ImGui::Separator();
-            if (ImGui::MenuItem(tr("Reset Layout"))) { _dockLayoutInitialized = false; ImGui::DockBuilderRemoveNode(ImGui::GetID("MainDockSpace")); }
+            if (ImGui::MenuItem(tr("Reset Layout"))) { _requestResetLayout = true; }
             ImGui::EndMenu();
         }
 
@@ -2857,6 +2893,7 @@ const char* const ResampleExample =
     "//   uv: position in the picture (0 to 1, from the top left)\n"
     "//   source(ivec2 pixel): a pixel of the picture (clamped to it)\n"
     "//   iSourceSize: size of the picture, iResolution: size of the result (pixels)\n"
+    "//   iTime: seconds since the start of the clip\n"
     "// Chosen in Sampling. Saved with Ctrl + S, and used at once.\n"
     "\n"
     "vec4 resample(vec2 uv)\n"
@@ -3112,6 +3149,7 @@ void GUI::shaderEditorWindow()
     const std::string title = std::string(ICON_MD_CODE " ") + name + (modified ? " *" : "") + "###shaderEditor";
 
     ImGui::SetNextWindowSize(ImVec2(44.f * ImGui::GetFontSize(), 32.f * ImGui::GetFontSize()), ImGuiCond_FirstUseEver);
+    applyWindowPlacement("shaderEditor");
 
     bool open = true;
 
@@ -3357,6 +3395,8 @@ void GUI::subtitleGeneratorWindow()
 
     ImGui::SetNextWindowSize(ImVec2(30.f * ImGui::GetFontSize(), 0.f), ImGuiCond_Appearing);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    applyWindowPlacement("subtitleGenerator");
 
     if (!ImGui::Begin(tr(ICON_MD_RECORD_VOICE_OVER " Generate Subtitles###subtitleGenerator"), &_showSubtitleGenerator, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
@@ -3846,6 +3886,8 @@ void GUI::recorderWindow()
     ImGui::SetNextWindowSize(ImVec2(28.f * ImGui::GetFontSize(), 0.f), ImGuiCond_Appearing);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
+    applyWindowPlacement("recorder");
+
     if (!ImGui::Begin(tr(ICON_MD_MIC " Record Voice-Over###recorder"), &_showRecorder, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
         return;
@@ -4248,6 +4290,8 @@ void GUI::screenRecorderWindow()
     ImGui::SetNextWindowSize(ImVec2(30.f * ImGui::GetFontSize(), 0.f), ImGuiCond_Appearing);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
+    applyWindowPlacement("screenRecorder");
+
     if (!ImGui::Begin(tr(ICON_MD_SCREEN_SHARE " Record Screen###screenRecorder"), &_showScreenRecorder, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
         return;
@@ -4547,7 +4591,18 @@ void GUI::sourcePreview()
         }
     }
 
-    const float width = ImGui::GetContentRegionAvail().x;
+    // As wide as the window, but leaving the height of the settings below it
+    // (about eight rows) when the window is shorter: the Record button stays
+    // in view.
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    float width = avail.x;
+    const float room = avail.y - 8.f * ImGui::GetFrameHeightWithSpacing();
+
+    if (room > 4.f * ImGui::GetFontSize() && width * (float)Height / (float)Width > room) {
+        width = room * (float)Width / (float)Height;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 0.5f * (avail.x - width));
+    }
+
     const ImVec2 size(width, width * (float)Height / (float)Width);
     const ImVec2 min = ImGui::GetCursorScreenPos();
 
@@ -5155,6 +5210,11 @@ void GUI::deleteTrackPopup()
 
 void GUI::timelinePanel()
 {
+    // In front of the keyframes when the layout is reset.
+    if (std::exchange(_focusTimeline, false)) {
+        ImGui::SetNextWindowFocus();
+    }
+
     // The timeline handles the wheel itself.
     const bool open = ImGui::Begin(tr("Timeline###Timeline"), nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 

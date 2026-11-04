@@ -42,6 +42,7 @@ private:
 
     core::Id _clip = core::InvalidId;
     std::string _property;          // group + name of the chosen one
+    bool _propertyPicked = false;   // By the user, for this clip
 
     // Time shown, in the clip; 0, 0 for the whole clip.
     core::Time _viewStart = 0;

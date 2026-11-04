@@ -41,8 +41,12 @@ void main()
     const float outline = glyph.params.x;
 
     if (glyph.params.w > 0.5) {
-        // Shadow: the glyph and its outline, blurred.
-        const float softness = max(glyph.params.y, 0.5);
+        // Shadow: the glyph and its outline, blurred. The field (and the
+        // quad of the glyph) reach 12 pixels of the atlas around it: a
+        // softer shadow would be cut there, in boxes around the letters, so
+        // it fades out within that reach.
+        const float reach = 12.0 * glyph.params.z;
+        const float softness = clamp(glyph.params.y, 0.5, max(0.5, 0.5 * (reach - outline)));
         const float coverage = smoothstep(-softness, softness, distance + outline);
         outColor = vec4(glyph.color.rgb, glyph.color.a * coverage);
         return;

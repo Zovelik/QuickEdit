@@ -171,10 +171,10 @@ private:
         const GPU::Image* from, const GPU::Image* to, uint32_t width, uint32_t height);
 
     // A pass of a shader of the user reading two pictures (transitions,
-    // blend modes, resampling with the same picture twice), with two
-    // values for it, into a picture of width x height.
+    // blend modes, resampling with the same picture twice), with up to
+    // three values for it, into a picture of width x height.
     GPU::Image* cmdShaderPass(VkCommandBuffer commandBuffer, const core::ShaderDef& shader, float x, float y,
-        const GPU::Image* from, const GPU::Image* to, uint32_t width, uint32_t height);
+        const GPU::Image* from, const GPU::Image* to, uint32_t width, uint32_t height, float z = 0.f);
 
     // The pipeline of a shader of the user, compiled once (null when it
     // does not compile, see shaderError()).

@@ -90,6 +90,7 @@ KeyframeEditor::Result KeyframeEditor::draw(Project& project, const std::vector<
 
     if (clip->id != _clip) {
         _clip = clip->id;
+        _propertyPicked = false;
         _selectedKeys.clear();
         _draggedKey = -1;
         _viewStart = _viewEnd = 0;
@@ -97,11 +98,16 @@ KeyframeEditor::Result KeyframeEditor::draw(Project& project, const std::vector<
 
     std::vector<Property> properties = propertiesOf(project, *clip);
 
-    // The chosen property: the first animated one by default.
+    // The chosen property: the first animated one by default, also instead
+    // of one still or gone that the user did not pick for this clip.
     Property* chosen = nullptr;
 
     for (Property& property : properties) {
         if (property.group + "/" + property.name == _property) chosen = &property;
+    }
+
+    if (chosen && !_propertyPicked && !chosen->value->animated()) {
+        chosen = nullptr;
     }
 
     if (!chosen) {
@@ -143,6 +149,7 @@ KeyframeEditor::Result KeyframeEditor::draw(Project& project, const std::vector<
 
             if (ImGui::Selectable(label.c_str(), &property == chosen)) {
                 _property = property.group + "/" + property.name;
+                _propertyPicked = true;
                 _selectedKeys.clear();
             }
 

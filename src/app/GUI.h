@@ -429,6 +429,8 @@ private:
     virtual void eventSaveFile(SDL_Window* parent) override;
     virtual void eventSaveAsFile(SDL_Window* parent) override;
     virtual void eventBeforeFrame() override;
+    // The MCP server answers while QuickEdit is minimized.
+    virtual int minimizedWakeMs() const override { return _mcpEnabled ? 30 : -1; }
     virtual void eventSdl(const SDL_Event& event) override;
 
     static void SDLCALL onFileOpen(void* userdata, const char* const* filelist, int filter);
@@ -730,6 +732,16 @@ private:
     };
 
     FrameCapture _frameCapture;
+
+    // Windows placed by the MCP server (fractions of the main window: x, y,
+    // width, height), applied before their next Begin; the default docking
+    // layout asked again.
+    std::map<std::string, ImVec4> _windowPlacements;
+    void applyWindowPlacement(const char* id);
+    bool _requestResetLayout = false;
+    bool _resetDockLayout = false;
+    bool _requestClosePopups = false;
+    bool _focusTimeline = false;
     void cmdCaptureFrame(VkCommandBuffer commandBuffer);
 
     // The export presets (for the tools too).

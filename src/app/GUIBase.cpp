@@ -48,7 +48,14 @@ void GUIBase::run()
         // Nothing to draw while minimized: sleep until the next event instead
         // of spinning on a swapchain that cannot be acquired.
         if (SDL_GetWindowFlags(_window) & SDL_WINDOW_MINIMIZED) {
-            SDL_WaitEvent(nullptr);
+            const int wake = minimizedWakeMs();
+
+            if (wake < 0) {
+                SDL_WaitEvent(nullptr);
+            }
+            else {
+                SDL_WaitEventTimeout(nullptr, wake);
+            }
         }
 
         if (_requestResize) {

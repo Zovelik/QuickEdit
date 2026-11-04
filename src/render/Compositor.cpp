@@ -994,7 +994,8 @@ void Compositor::cmdRenderLevel(VkCommandBuffer commandBuffer, GPU::Image* targe
         const uint32_t w = (uint32_t)std::clamp(std::lround((float)layer.width * scale), 1L, 8192L);
         const uint32_t h = (uint32_t)std::clamp(std::lround((float)layer.height * scale), 1L, 8192L);
 
-        if (const GPU::Image* resampled = cmdShaderPass(commandBuffer, *layer.filterShader, (float)w, (float)h, pictures[i], pictures[i], w, h)) {
+        if (const GPU::Image* resampled = cmdShaderPass(commandBuffer, *layer.filterShader, (float)w, (float)h, pictures[i], pictures[i], w, h,
+                (float)timeToSeconds(layer.localTime))) {
             pictures[i] = resampled;
         }
     }
@@ -1313,10 +1314,11 @@ std::string wrapShader(const ShaderDef& shader)
     else if (shader.kind == ShaderKind::Resample) {
         code +=
             "layout(set = 0, binding = 0) uniform sampler2D qeSource;\n"
-            "layout(push_constant) uniform QuickEditParameters { vec2 resolution; vec2 unused; vec4 sound; } qe;\n"
+            "layout(push_constant) uniform QuickEditParameters { vec2 resolution; float time; float unused; vec4 sound; } qe;\n"
             "layout(location = 0) in vec2 qeUV;\n"
             "layout(location = 0) out vec4 qeColor;\n"
             "#define iResolution qe.resolution\n"
+            "#define iTime qe.time\n"
             "#define iSourceSize vec2(textureSize(qeSource, 0))\n"
             "#define iSound qe.sound\n"
             "#define iLevel qe.sound.x\n"
@@ -1447,7 +1449,7 @@ GPU::Image* Compositor::cmdTransition(VkCommandBuffer commandBuffer, const Shade
 
 
 GPU::Image* Compositor::cmdShaderPass(VkCommandBuffer commandBuffer, const ShaderDef& shader, float x, float y,
-    const GPU::Image* from, const GPU::Image* to, uint32_t width, uint32_t height)
+    const GPU::Image* from, const GPU::Image* to, uint32_t width, uint32_t height, float z)
 {
     const VkPipeline pipeline = userPipeline(shader);
     const VkDescriptorSet set = pipeline ? allocateSet(_transitionSetLayout) : VK_NULL_HANDLE;
@@ -1474,7 +1476,7 @@ GPU::Image* Compositor::cmdShaderPass(VkCommandBuffer commandBuffer, const Shade
 
     vkUpdateDescriptorSets(_device.device(), 2, writes, 0, nullptr);
 
-    const float parameters[8] = { x, y, 0.f, 0.f, _sound[0], _sound[1], _sound[2], _sound[3] };
+    const float parameters[8] = { x, y, z, 0.f, _sound[0], _sound[1], _sound[2], _sound[3] };
 
     GPU::Image* target = passTarget(width, height);
     cmdBeginPass(commandBuffer, target, false);

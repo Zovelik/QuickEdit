@@ -55,6 +55,10 @@ public:
     // being recorded.
     virtual void eventBeforeFrame() {}
 
+    // While minimized, how long to sleep at most between two frames (ms):
+    // -1 sleeps until the next event, a time keeps work going (a server).
+    virtual int minimizedWakeMs() const { return -1; }
+
     // Every SDL event, before ImGui gets it (windows of the application
     // other than the main one: plugin editors).
     virtual void eventSdl(const SDL_Event& event) {}

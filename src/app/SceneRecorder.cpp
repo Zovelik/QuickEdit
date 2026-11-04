@@ -165,6 +165,8 @@ void GUI::sceneRecorderWindow()
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSizeConstraints(ImVec2(30.f * fontSize, 24.f * fontSize), ImVec2(FLT_MAX, FLT_MAX));
 
+    applyWindowPlacement("sceneRecorder2");
+
     if (!ImGui::Begin(tr(ICON_MD_DASHBOARD " Record a Scene###sceneRecorder2"), &_showSceneRecorder, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
         syncScenePreviews(false);
         ImGui::End();

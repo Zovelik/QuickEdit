@@ -309,7 +309,7 @@ Json GUI::mcpTools()
         "Creates or replaces a shader of the user (GLSL, Documents/QuickEdit/Shaders/<name>.glsl) and compiles it: its id, or the errors (with "
         "their lines) to fix. Its kind comes from the function it defines: vec4 generate(vec2 uv, float time) (iResolution, iTime, iDuration, "
         "param(i)); vec4 transition(vec2 uv) (getFromColor(uv), getToColor(uv), progress, ratio); vec3 blend(vec3 base, vec3 layer); "
-        "vec4 resample(vec2 uv) (source(ivec2), iSourceSize, iResolution). All get the sound: iLevel, iBass, iMid, iTreble (0 to 1). "
+        "vec4 resample(vec2 uv) (source(ivec2), iSourceSize, iResolution, iTime). All get the sound: iLevel, iBass, iMid, iTreble (0 to 1). "
         "Parameters (generators, up to 8): comment lines '// @param Name min max default'.",
         R"({"name": {"type": "string"}, "source": {"type": "string"}})", R"(["name", "source"])"));
 
@@ -326,17 +326,38 @@ Json GUI::mcpTools()
     tools.push_back(tool("show_window",
         "Shows a window or a panel of QuickEdit, for the user (or a demo): record_voice, record_screen, record_scene, generate_subtitles, "
         "shader_editor (with shader_id of a shader of the user), export, preferences, project_properties, keyframes, effects; or close: "
-        "true to close the floating ones.",
+        "true to close the floating ones and the popups.",
         R"({"window": {"type": "string"}, "shader_id": {"type": "string"}, "close": {"type": "boolean"}})"));
+    tools.push_back(tool("reset_layout", "Puts the panels of QuickEdit back in their default places and sizes (same framing for screen captures)."));
+    tools.push_back(tool("place_window",
+        "Places a floating window: shader_editor, record_scene, record_screen, record_voice, generate_subtitles; x, y, width, height in "
+        "fractions of the main window (0 to 1). Show it with show_window.",
+        R"({"window": {"type": "string"}, "x": {"type": "number"}, "y": {"type": "number"}, "width": {"type": "number"}, "height": {"type": "number"}})",
+        R"(["window", "x", "y", "width", "height"])"));
+    tools.push_back(tool("list_capture_sources", "The screens, windows and cameras that can be recorded, with their index."));
+    tools.push_back(tool("set_scene",
+        "Replaces the sources of the current recording scene: each {source: index from list_capture_sources, x, y, width (fractions of the "
+        "frame; the height follows the shape of the picture), crop_left, crop_top, crop_right, crop_bottom (fractions)}, the first at the "
+        "bottom. Also computer_sound, microphone, hide_quickedit (keep QuickEdit out of the recording).",
+        R"({"sources": {"type": "array", "items": {"type": "object"}}, "computer_sound": {"type": "boolean"}, "microphone": {"type": "boolean"},
+            "hide_quickedit": {"type": "boolean"}})",
+        R"(["sources"])"));
+    tools.push_back(tool("start_recording",
+        "Starts a recording at the playhead: scene (the current scene, its window shown), screen (source: index from list_capture_sources) "
+        "or voice (the microphone). It lands on the timeline once stopped.",
+        R"({"kind": {"type": "string", "enum": ["scene", "screen", "voice"]}, "source": {"type": "integer"}, "hide_quickedit": {"type": "boolean"}})",
+        R"(["kind"])"));
+    tools.push_back(tool("stop_recording", "Stops the recording running; waits until its clips are on the timeline."));
     tools.push_back(tool("undo", "Undoes the last edit (the user's or yours)."));
     tools.push_back(tool("redo", "Redoes the last edit undone."));
     tools.push_back(tool("save_project", "Saves the project (to path when given, a .qep file).",
         R"({"path": {"type": "string"}})"));
     tools.push_back(tool("export_video",
         "Exports the current sequence to a video file and waits for the end. preset: YouTube, Shorts / Reels / TikTok, Vimeo, X (Twitter), Facebook, "
-        "Archive (best quality), Quick preview. codec: h264, h265, av1. height: of the picture (0: the sequence's).",
+        "Archive (best quality), Quick preview. codec: h264, h265, av1. height: of the picture (0: the sequence's). subtitles: picture (in the "
+        "picture and a .srt beside, the default), file (only the .srt beside) or none.",
         R"({"path": {"type": "string"}, "preset": {"type": "string"}, "codec": {"type": "string"}, "height": {"type": "integer"},
-            "bitrate_mbps": {"type": "number"}})",
+            "bitrate_mbps": {"type": "number"}, "subtitles": {"type": "string", "enum": ["picture", "file", "none"]}})",
         R"(["path"])"));
 
     return tools;
@@ -608,6 +629,12 @@ std::optional<Json> GUI::mcpCall(const std::string& name, const Json& args, int 
 
     // ------------------------------------------------------------------------
     if (name == "render_frame") {
+        // Frames are drawn with the window (none while minimized).
+        if (SDL_GetWindowFlags(window()) & SDL_WINDOW_MINIMIZED) {
+            _frameCapture = FrameCapture();
+            return error("QuickEdit is minimized: no frame is drawn until its window is restored.");
+        }
+
         if (attempt == 0) {
             stopPlayback();
             seek(std::max<Time>(0, snapToFrame(ticks(args["time"]), sequence.frameRate)));
@@ -1039,6 +1066,27 @@ std::optional<Json> GUI::mcpCall(const std::string& name, const Json& args, int 
         };
 
         merge(clip, args["changes"]);
+
+        // Shaders of the user named by the clip (sampling, blend, generator,
+        // transition): copied into the project, as the inspector does, else
+        // they would be ignored when drawing.
+        const Json& named = clip;           // Read only: no members added
+
+        for (const std::string& shaderId : { named["filterShader"].toString(), named["blendShader"].toString(), named["shader"].toString(),
+                                             named["transitionIn"]["shader"].toString() }) {
+            if (shaderId.empty() || _project.findShader(shaderId)) {
+                continue;
+            }
+
+            const auto user = std::find_if(_userShaders.begin(), _userShaders.end(), [&](const ShaderDef& s) { return s.id == shaderId; });
+
+            if (user == _userShaders.end()) {
+                return error("No shader " + shaderId + " (see list_shaders).");
+            }
+
+            _project.storeShader(*user);
+        }
+
         std::string failure;
 
         if (!_project.setClipJson(id, clip, args["overwrite"].toBool(false), failure)) {
@@ -1316,6 +1364,7 @@ std::optional<Json> GUI::mcpCall(const std::string& name, const Json& args, int 
     if (name == "show_window") {
         if (args["close"].toBool(false)) {
             _showRecorder = _showScreenRecorder = _showSceneRecorder = _showSubtitleGenerator = _showShaderEditor = false;
+            _requestClosePopups = true;
             return McpServer::textResult("Closed.");
         }
 
@@ -1344,6 +1393,173 @@ std::optional<Json> GUI::mcpCall(const std::string& name, const Json& args, int 
         }
 
         return McpServer::textResult("Shown.");
+    }
+
+    if (name == "reset_layout") {
+        _requestResetLayout = true;
+        return McpServer::textResult("Layout reset.");
+    }
+
+    if (name == "place_window") {
+        static const std::map<std::string, std::string> ids = {
+            { "shader_editor", "shaderEditor" }, { "record_scene", "sceneRecorder2" }, { "record_screen", "screenRecorder" },
+            { "record_voice", "recorder" }, { "generate_subtitles", "subtitleGenerator" } };
+        const auto it = ids.find(args["window"].toString());
+
+        if (it == ids.end()) {
+            return error("Unknown window " + args["window"].toString());
+        }
+
+        auto unit = [&](const char* key, double fallback) { return (float)std::clamp(args[key].toDouble(fallback), 0.0, 1.0); };
+        _windowPlacements[it->second] = ImVec4(unit("x", 0.1), unit("y", 0.1), std::max(0.05f, unit("width", 0.5)), std::max(0.05f, unit("height", 0.5)));
+        return McpServer::textResult("Placed (applied when the window shows).");
+    }
+
+    // The sources once listed, the scenes once loaded (as their windows do).
+    auto ensureSources = [this]() {
+        if (!_captureSourcesListed) {
+            _captureSources = capture::listSources();
+            _captureSourcesListed = true;
+        }
+
+        if (!_scenesLoaded) {
+            _scenes = loadScenes(_captureSources);
+            _scenesLoaded = true;
+
+            if (_scenes.empty()) _scenes.push_back({ tr("Scene 1"), {} });
+
+            _currentScene = 0;
+        }
+    };
+
+    if (name == "list_capture_sources") {
+        ensureSources();
+        Json list = Json::array();
+
+        for (size_t i = 0; i < _captureSources.size(); i++) {
+            const capture::CaptureSource& source = _captureSources[i];
+            Json s = Json::object();
+            s["index"] = (int64_t)i;
+            s["kind"] = source.kind == capture::CaptureSource::Kind::Monitor ? "screen" : source.kind == capture::CaptureSource::Kind::Camera ? "camera" : "window";
+            s["name"] = source.name;
+            list.push_back(s);
+        }
+
+        return done(list);
+    }
+
+    if (name == "set_scene") {
+        ensureSources();
+        RecordingScene* scene = currentScene();
+
+        if (!scene || _sceneRecording) {
+            return error("No scene, or one is recording.");
+        }
+
+        std::vector<SceneSource> sources;
+
+        for (const Json& item : args["sources"].items()) {
+            const int64_t index = item["source"].toInt(-1);
+
+            if (index < 0 || index >= (int64_t)_captureSources.size()) {
+                return error("No capture source " + std::to_string(index) + " (see list_capture_sources).");
+            }
+
+            SceneSource source;
+            source.source = _captureSources[(size_t)index];
+            source.x = (float)item["x"].toDouble(0.0);
+            source.y = (float)item["y"].toDouble(0.0);
+            source.width = (float)std::max(0.03, item["width"].toDouble(1.0));
+            source.height = source.width * 9.f / 16.f * (float)_project.sequence().width / (float)std::max(1u, _project.sequence().height);
+            source.cropLeft = (float)std::clamp(item["crop_left"].toDouble(0.0), 0.0, 0.9);
+            source.cropTop = (float)std::clamp(item["crop_top"].toDouble(0.0), 0.0, 0.9);
+            source.cropRight = (float)std::clamp(item["crop_right"].toDouble(0.0), 0.0, 0.9 - source.cropLeft);
+            source.cropBottom = (float)std::clamp(item["crop_bottom"].toDouble(0.0), 0.0, 0.9 - source.cropTop);
+            sources.push_back(source);
+        }
+
+        scene->sources = sources;
+        _scenePreviews.clear();
+        _sceneSelected = -1;
+
+        if (args.contains("computer_sound")) _captureSound = args["computer_sound"].toBool(true);
+        if (args.contains("microphone")) _captureMicrophone = args["microphone"].toBool(false);
+        if (args.contains("hide_quickedit")) _hideFromCapture = args["hide_quickedit"].toBool(true);
+
+        saveScenes(_scenes);
+        return McpServer::textResult(std::to_string(sources.size()) + " source(s) in the scene.");
+    }
+
+    if (name == "start_recording") {
+        ensureSources();
+        const std::string kind = args["kind"].toString();
+
+        if (args.contains("hide_quickedit")) _hideFromCapture = args["hide_quickedit"].toBool(true);
+
+        if (kind == "scene") {
+            // Its window shows its sources; the recording follows it.
+            if (attempt == 0) {
+                _showSceneRecorder = true;
+                return std::nullopt;
+            }
+
+            if (attempt < 30) {
+                return std::nullopt;        // Previews opened
+            }
+
+            if (attempt == 30) {
+                startSceneRecording();
+                return std::nullopt;
+            }
+
+            if (_sceneStarting) return std::nullopt;
+            return _sceneRecording ? McpServer::textResult("Recording the scene.") : error("The scene did not start: " + _sceneError);
+        }
+
+        if (kind == "screen") {
+            const int64_t index = args["source"].toInt(-1);
+
+            if (attempt == 0) {
+                if (index < 0 || index >= (int64_t)_captureSources.size()) return error("Give a source index (list_capture_sources).");
+                _captureSource = _captureSources[(size_t)index];
+                _showScreenRecorder = true;
+                return std::nullopt;
+            }
+
+            if (attempt < 30) return std::nullopt;
+
+            if (attempt == 30) {
+                startScreenRecording();
+                return std::nullopt;
+            }
+
+            if (_screenStarting) return std::nullopt;
+            return _screenRecording ? McpServer::textResult("Recording the screen.") : error("The recording did not start: " + _screenError);
+        }
+
+        if (kind == "voice") {
+            _showRecorder = true;
+            startRecording();
+            return _recorder.recording() ? McpServer::textResult("Recording the voice.") : error("The voice recording did not start: " + _recorderError);
+        }
+
+        return error("Unknown kind " + kind);
+    }
+
+    if (name == "stop_recording") {
+        if (attempt == 0) {
+            if (_sceneRecording) stopSceneRecording();
+            else if (_screenRecording) stopScreenRecording();
+            else if (_recorder.recording()) stopRecording();
+            else return error("Nothing is recording.");
+            return std::nullopt;
+        }
+
+        if (_sceneFinishing || _screenFinishing) {
+            return std::nullopt;
+        }
+
+        return McpServer::textResult("Stopped; the clips are on the timeline (see get_project).");
     }
 
     if (name == "undo") {
@@ -1390,6 +1606,15 @@ std::optional<Json> GUI::mcpCall(const std::string& name, const Json& args, int 
 
             const std::string path = args["path"].toString();
             _exportSettings.path = std::filesystem::path(std::u8string(path.begin(), path.end()));
+
+            // Subtitles: in the picture (with their file), or only their file, or none.
+            const std::string subtitles = args["subtitles"].toString("picture");
+            _exportSubtitles = subtitles == "picture";
+
+            if (subtitles == "file" && !subtitleCues(_project.sequence()).empty()) {
+                std::filesystem::path srt = _exportSettings.path;
+                exportSubtitles(srt.replace_extension(".srt"));
+            }
 
             if (mediaInAnalysis() > 0) {
                 return std::nullopt;
