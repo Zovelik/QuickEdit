@@ -7,6 +7,11 @@ over it.
 
 Windows and Linux. C++20, SDL3, Dear ImGui, Vulkan, FFmpeg.
 
+[![QuickEdit trailer on YouTube](https://img.youtube.com/vi/0W9y1w-8a5k/maxresdefault.jpg)](https://www.youtube.com/watch?v=0W9y1w-8a5k)
+
+The trailer was edited in QuickEdit by an AI assistant driving it through its
+MCP server: every cut, title and shader.
+
 ## Features
 
 - **Timeline**: video tracks with their sound, audio tracks, subtitle tracks;
