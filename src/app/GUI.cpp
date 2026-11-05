@@ -7474,6 +7474,15 @@ void SDLCALL GUI::onFileImport(void* userdata, const char* const* filelist, int 
 void GUI::eventBeforeFrame()
 {
     updateAutosave();
+
+    // No frame is drawn while minimized, so updateMedia() is not called by
+    // it: the files probed meanwhile must still reach the project, or the
+    // MCP calls waiting for them (import_media) give up and leave the
+    // placeholder length of 10 s, and add_clip then cuts clips to it.
+    if (SDL_GetWindowFlags(window()) & SDL_WINDOW_MINIMIZED) {
+        updateMedia();
+    }
+
     updateMcp();
 
     if (_shaderReloadPending) {
