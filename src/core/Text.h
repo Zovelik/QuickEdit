@@ -39,7 +39,14 @@ namespace core
         float shadowSoftness = 0.f;     // Pixels of blur
         Color shadowColor = { 0.f, 0.f, 0.f, 0.6f };
 
+        // Letters drawn thicker: the bold of a font that has no bold
+        // variant (the default one).
+        bool bold = false;
+
         bool operator==(const TextStyle& other) const = default;
+
+        // Pixels added around the letters by bold.
+        float boldWidth() const { return bold ? 0.025f * size : 0.f; }
     };
 
 

@@ -36,7 +36,7 @@ void main()
 
     // Distance to the outline in pixels of the output, positive inside.
     const float field = texture(atlas, inUV).r * 255.0;
-    const float distance = (field - OnEdgeValue) / PixelDistScale * glyph.params.z;
+    const float distance = (field - OnEdgeValue) / PixelDistScale * glyph.params.z + glyph.extra.x;
 
     const float outline = glyph.params.x;
 

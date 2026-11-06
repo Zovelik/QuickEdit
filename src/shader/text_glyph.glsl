@@ -10,6 +10,7 @@ struct Glyph
     vec4 outlineColor;
     vec4 params;        // x: outline width (px), y: shadow softness (px),
                         // z: output pixels per field pixel, w: 1 for a shadow
+    vec4 extra;         // x: pixels added around the letter (bold)
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer Glyphs

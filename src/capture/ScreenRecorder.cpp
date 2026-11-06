@@ -15,6 +15,8 @@
 #include <mmreg.h>
 #include <dshow.h>
 #include <dvdmedia.h>
+#include <d3d11.h>
+#include <dxgi.h>
 
 #endif
 
@@ -27,6 +29,9 @@ extern "C" {
 #include <libavutil/audio_fifo.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/hwcontext.h>
+#ifdef _WIN32
+#include <libavutil/hwcontext_d3d11va.h>
+#endif
 #include <libavutil/opt.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
@@ -361,7 +366,97 @@ std::string averror(int code)
 }
 
 
+// A call into FFmpeg that reaches a driver (hardware encoder) and may fault
+// there: an error then, instead of the end of QuickEdit.
+int faultGuarded(int (*call)(void*), void* data)
+{
+#ifdef _MSC_VER
+    __try {
+        return call(data);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return AVERROR_EXTERNAL;
+    }
+#else
+    return call(data);
+#endif
+}
+
+
+struct OpenEncoder
+{
+    AVCodecContext* encoder;
+    const AVCodec* codec;
+    AVDictionary** options;
+};
+
+int openEncoder(void* data)
+{
+    OpenEncoder* open = static_cast<OpenEncoder*>(data);
+    return avcodec_open2(open->encoder, open->codec, open->options);
+}
+
+
+struct SendFrame
+{
+    AVCodecContext* encoder;
+    const AVFrame* frame;
+};
+
+int sendFrame(void* data)
+{
+    SendFrame* send = static_cast<SendFrame*>(data);
+    return avcodec_send_frame(send->encoder, send->frame);
+}
+
+
 #ifdef _WIN32
+
+// PCI vendor of the adapter that holds the GPU pictures of a capture, 0 when
+// unknown.
+UINT adapterVendor(AVBufferRef* framesRef)
+{
+    if (!framesRef) {
+        return 0;
+    }
+
+    const AVHWFramesContext* frames = reinterpret_cast<const AVHWFramesContext*>(framesRef->data);
+
+    if (!frames->device_ctx || frames->device_ctx->type != AV_HWDEVICE_TYPE_D3D11VA) {
+        return 0;
+    }
+
+    const AVD3D11VADeviceContext* d3d11 = static_cast<const AVD3D11VADeviceContext*>(frames->device_ctx->hwctx);
+
+    if (!d3d11 || !d3d11->device) {
+        return 0;
+    }
+
+    IDXGIDevice* dxgi = nullptr;
+    IDXGIAdapter* adapter = nullptr;
+    DXGI_ADAPTER_DESC description = {};
+    UINT vendor = 0;
+
+    if (SUCCEEDED(d3d11->device->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void**>(&dxgi))) &&
+        SUCCEEDED(dxgi->GetAdapter(&adapter)) && SUCCEEDED(adapter->GetDesc(&description))) {
+        vendor = description.VendorId;
+    }
+
+    if (adapter) adapter->Release();
+    if (dxgi) dxgi->Release();
+
+    return vendor;
+}
+
+
+// PCI vendor of the GPU a hardware encoder takes its pictures on, 0 for any.
+UINT encoderVendor(const std::string& encoder)
+{
+    if (encoder == "h264_nvenc") return 0x10DE;     // NVIDIA
+    if (encoder == "h264_amf") return 0x1002;       // AMD
+    return 0;
+}
+
 
 std::string utf8(const std::wstring& text)
 {
@@ -1059,6 +1154,30 @@ bool ScreenRecorder::start(const std::filesystem::path& path, const ScreenRecord
 
     const int maxFrameRate = (_frameRateNum + _frameRateDen - 1) / _frameRateDen;
 
+#ifdef _WIN32
+    // A window that cannot give pictures: said, rather than a file that
+    // cannot be written.
+    if (settings.source.kind == CaptureSource::Kind::Window) {
+        const HWND window = reinterpret_cast<HWND>((uintptr_t)settings.source.handle);
+        RECT rect = {};
+
+        if (!IsWindow(window)) {
+            error = "The window is closed (list the sources again).";
+            return false;
+        }
+
+        if (IsIconic(window)) {
+            error = "The window is minimized: it has no picture to record.";
+            return false;
+        }
+
+        if (!GetClientRect(window, &rect) || rect.right - rect.left < 16 || rect.bottom - rect.top < 16) {
+            error = "The window has no picture yet (no size): try again once it is shown.";
+            return false;
+        }
+    }
+#endif
+
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
 
@@ -1180,6 +1299,40 @@ bool ScreenRecorder::start(const std::filesystem::path& path, const ScreenRecord
 
             width = av_buffersink_get_w(video->sink);
             height = av_buffersink_get_h(video->sink);
+
+            // A window not drawn yet gives no picture size.
+            if (width < 16 || height < 16) {
+                lastError = "The source gives no picture yet (" + std::to_string(width) + " x " + std::to_string(height) +
+                    "): try again once it is shown.";
+                break;
+            }
+
+            // The screen on another GPU than the encoder (two GPUs, the screens
+            // on the integrated one; virtual displays): an encoder cannot read
+            // the textures of another adapter, the pictures go through memory.
+            const UINT needed = encoderVendor(candidate.encoder);
+
+            if (!video->download && needed != 0) {
+                const UINT holder = adapterVendor(av_buffersink_get_hw_frames_ctx(video->sink));
+
+                if (holder != needed) {
+                    SDL_Log("Screen recording: the pictures are on the adapter %04X, %s needs %04X: copied through memory",
+                        holder, candidate.encoder, needed);
+
+                    avfilter_graph_free(&video->graph);
+                    video->sink = nullptr;
+                    video->graph = openGraph(capture + ",hwdownload,format=bgra", video->sink, result);
+
+                    if (!video->graph) {
+                        lastError = "Could not capture this source: " + averror(result);
+                        continue;
+                    }
+
+                    video->download = true;
+                    width = av_buffersink_get_w(video->sink);
+                    height = av_buffersink_get_h(video->sink);
+                }
+            }
         }
 #endif
 
@@ -1226,7 +1379,8 @@ bool ScreenRecorder::start(const std::filesystem::path& path, const ScreenRecord
             av_dict_set(&options, "hw_encoding", "1", 0);
         }
 
-        result = avcodec_open2(encoder, codec, &options);
+        OpenEncoder open = { encoder, codec, &options };
+        result = faultGuarded(openEncoder, &open);
         av_dict_free(&options);
 
         if (result < 0) {
@@ -1333,6 +1487,7 @@ void ScreenRecorder::videoLoop()
         : video.sink ? av_buffersink_get_time_base(video.sink) : video.encoder->time_base;
     int64_t firstPts = AV_NOPTS_VALUE;
     int64_t lastPts = -1;
+    bool faulted = false;
 
     auto drain = [&]() {
         while (avcodec_receive_packet(video.encoder, packet) >= 0) {
@@ -1372,7 +1527,17 @@ void ScreenRecorder::videoLoop()
         lastPts = pts;
         in->pts = pts;
 
-        if (avcodec_send_frame(video.encoder, in) >= 0) {
+        SendFrame send = { video.encoder, in };
+        const int sent = faultGuarded(sendFrame, &send);
+
+        if (sent == AVERROR_EXTERNAL) {
+            fail("The encoder " + _encoderName + " failed on a picture.");
+            faulted = true;
+            _stop = true;
+            return;
+        }
+
+        if (sent >= 0) {
             drain();
         }
 
@@ -1475,8 +1640,14 @@ void ScreenRecorder::videoLoop()
         av_frame_unref(frame);
     }
 
-    avcodec_send_frame(video.encoder, nullptr);
-    drain();
+    // A faulted encoder is not called again.
+    if (!faulted) {
+        SendFrame flush = { video.encoder, nullptr };
+
+        if (faultGuarded(sendFrame, &flush) != AVERROR_EXTERNAL) {
+            drain();
+        }
+    }
 
     av_packet_free(&input);
     av_packet_free(&packet);

@@ -214,6 +214,7 @@ void applyStyleChange(TextContent& text, size_t from, size_t to, const TextStyle
         APPLY_FIELD(shadowOffsetY)
         APPLY_FIELD(shadowSoftness)
         APPLY_FIELD(shadowColor)
+        APPLY_FIELD(bold)
 #undef APPLY_FIELD
 
         return result;

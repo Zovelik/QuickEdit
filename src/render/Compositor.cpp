@@ -36,6 +36,7 @@ struct Compositor::GlyphInstance
     float color[4];
     float outlineColor[4];
     float params[4];
+    float extra[4];
 };
 
 
@@ -896,6 +897,7 @@ uint32_t Compositor::buildText(const Layer& layer, uint32_t width, uint32_t heig
             instance.params[1] = style.shadowSoftness * outputScale;
             instance.params[2] = glyph.pixelsPerBase * outputScale;
             instance.params[3] = shadowPass ? 1.f : 0.f;
+            instance.extra[0] = style.boldWidth() * outputScale;
 
             instances.push_back(instance);
         }

@@ -621,6 +621,7 @@ std::optional<Json> GUI::mcpCall(const std::string& name, const Json& args, int 
         static const Json legend = Json::parse(R"json({
             "text.animation.in / out": "0 none, 1 typewriter, 2 fade, 3 rise, 4 pop (letter by letter)",
             "text.align": "0 left, 1 center, 2 right",
+            "text.spans[].style.bold": "true: letters drawn thicker (the bold of a font without a bold variant); style.font: the font file, empty for the default (Inter)",
             "text.motion": "absent: still, roll (end credits), crawl (ticker)",
             "colors": "[r, g, b, a], 0 to 1",
             "keyframes": "transform.x (and others): a number, or {value, keys: [[time in ticks from the clip start, value, easing]]}; easing 0 linear, 1 ease in, 2 ease out, 3 ease in out, 4 hold",
@@ -668,14 +669,20 @@ std::optional<Json> GUI::mcpCall(const std::string& name, const Json& args, int 
         const std::vector<uint8_t> png = encodePng((const uint8_t*)_frameCapture.buffer->mappedMemory(),
             (int)_frameCapture.width, (int)_frameCapture.height, width);
         const Time time = _frameCapture.time;
+
+        // The size of the picture said (as encodePng() makes it): positions in
+        // it are those of the sequence times its width / the sequence's.
+        const int pictureWidth = std::clamp(width, 16, (int)_frameCapture.width);
+        const int pictureHeight = std::max(2, (int)std::lround((double)_frameCapture.height * pictureWidth / std::max(1u, _frameCapture.width)));
         _frameCapture = FrameCapture();
 
         if (png.empty()) {
             return error("Could not make the picture.");
         }
 
-        char caption[96];
-        std::snprintf(caption, sizeof(caption), "Sequence \"%s\" at %.3f s", sequence.name.c_str(), timeToSeconds(time));
+        char caption[192];
+        std::snprintf(caption, sizeof(caption), "Sequence \"%s\" (%ux%u) at %.3f s, picture %dx%d", sequence.name.c_str(),
+            sequence.width, sequence.height, timeToSeconds(time), pictureWidth, pictureHeight);
         return McpServer::imageResult(png, caption);
     }
 
@@ -968,8 +975,13 @@ std::optional<Json> GUI::mcpCall(const std::string& name, const Json& args, int 
                 span.style.color = color;
             }
 
+            // The bold variant of the font, else thicker letters (the
+            // default font has none).
             if (args["bold"].toBool(false)) {
-                span.style.font = _fonts->variant(span.style.font, "Bold");
+                const std::string bold = _fonts->variant(span.style.font, "Bold");
+
+                if (!bold.empty()) span.style.font = bold;
+                else span.style.bold = true;
             }
         }
 

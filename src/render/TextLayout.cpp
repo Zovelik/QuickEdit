@@ -56,7 +56,7 @@ TextLayout layoutText(FontLibrary& fonts, const TextContent& text)
                 Item item = { codepoint, s, font, scale, 0.f, -1 };
 
                 if (codepoint != '\n') {
-                    item.advance = fonts.glyph(font, codepoint).advance * scale + span.style.letterSpacing;
+                    item.advance = fonts.glyph(font, codepoint).advance * scale + span.style.letterSpacing + 2.f * span.style.boldWidth();
                     item.letter = letter++;
 
                     // Kerning with the previous character of the same font.
@@ -195,7 +195,7 @@ TextLayout layoutText(FontLibrary& fonts, const TextContent& text)
 
                 if (!glyph.empty) {
                     LaidOutGlyph out;
-                    out.x0 = x + glyph.offsetX * item.scale - 0.5f * blockWidth;
+                    out.x0 = x + glyph.offsetX * item.scale + text.spans[item.span].style.boldWidth() - 0.5f * blockWidth;
                     out.y0 = baselines[l] + glyph.offsetY * item.scale - 0.5f * layout.height;
                     out.x1 = out.x0 + glyph.width * item.scale;
                     out.y1 = out.y0 + glyph.height * item.scale;

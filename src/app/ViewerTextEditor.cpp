@@ -422,6 +422,13 @@ bool ViewerTextEditor::update(Project& project, FontLibrary& fonts, const Mappin
                 applyStyleChange(text, selectionStart(), selectionEnd(), before, after);
                 edited = true;
             }
+            else if (bold && fonts.styleOf(before.font).find("Bold") == std::string::npos) {
+                // No bold variant (the default font): thicker letters.
+                TextStyle after = before;
+                after.bold = !before.bold;
+                applyStyleChange(text, selectionStart(), selectionEnd(), before, after);
+                edited = true;
+            }
         }
     }
 

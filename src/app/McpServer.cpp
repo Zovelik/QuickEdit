@@ -252,6 +252,34 @@ Json McpServer::handle(const Json& message)
             arguments = Json::object();
         }
 
+        // Some clients send numbers and booleans as strings ("1920"): read
+        // as the type of the schema, instead of falling back to the default.
+        for (const Json& definition : _tools.items()) {
+            if (definition["name"].toString() != tool) {
+                continue;
+            }
+
+            const Json& properties = definition["inputSchema"]["properties"];
+
+            for (const auto& [key, value] : Json(arguments).members()) {
+                const std::string type = properties[key]["type"].toString();
+
+                if (!value.isString() || (type != "number" && type != "integer" && type != "boolean")) {
+                    continue;
+                }
+
+                try {
+                    const Json parsed = Json::parse(value.toString());
+
+                    if ((type == "boolean") ? parsed.isBool() : parsed.isNumber()) {
+                        arguments[key] = parsed;
+                    }
+                }
+                catch (const std::exception&) {
+                }
+            }
+        }
+
         return rpcResult(id, callTool(tool, arguments));
     }
 

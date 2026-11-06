@@ -192,6 +192,7 @@ Json styleToJson(const TextStyle& style)
     json["shadowOffsetY"] = (double)style.shadowOffsetY;
     json["shadowSoftness"] = (double)style.shadowSoftness;
     json["shadowColor"] = colorToJson(style.shadowColor);
+    json["bold"] = style.bold;
     return json;
 }
 
@@ -210,6 +211,7 @@ TextStyle styleFromJson(const Json& json)
     style.shadowOffsetY = (float)json["shadowOffsetY"].toDouble(0.0);
     style.shadowSoftness = (float)json["shadowSoftness"].toDouble(0.0);
     style.shadowColor = colorFromJson(json["shadowColor"], defaults.shadowColor);
+    style.bold = json["bold"].toBool(false);
     return style;
 }
 

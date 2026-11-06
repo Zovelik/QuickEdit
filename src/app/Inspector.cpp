@@ -1212,8 +1212,18 @@ bool Inspector::styleEditor(TextStyle& style, FontLibrary& fonts, std::string& e
         changed = true;
     }
 
-    // Bold / italic: the variants of the family, when installed.
+    // Bold / italic: the variants of the family, when installed. A font
+    // without a bold variant (the default one) gets its letters thickened.
     propertyLabel("");
+
+    if (fonts.variant(style.font, "Bold").empty() && fonts.styleOf(style.font).find("Bold") == std::string::npos) {
+        if (ImGui::Checkbox(tr("Bold"), &style.bold)) {
+            edit = "Change font style";
+            changed = true;
+        }
+
+        ImGui::SameLine();
+    }
 
     for (const char* variant : { tr("Regular"), tr("Bold"), tr("Italic"), tr("Bold Italic") }) {
         const std::string path = fonts.variant(style.font, variant);

@@ -35,6 +35,45 @@ using namespace core;
 
 namespace {
 
+// Whether a sequence plays any sound: a clip with sound on one of its sound or
+// audio tracks that are not muted, nested sequences included.
+bool sequenceHasSound(const Project& project, const Sequence& sequence, int depth = 0)
+{
+    if (depth > 8) {
+        return false;
+    }
+
+    for (const std::vector<Track>* tracks : { &sequence.soundTracks, &sequence.audioTracks }) {
+        for (const Track& track : *tracks) {
+            if (track.muted) {
+                continue;
+            }
+
+            for (const Clip& clip : track.clips) {
+                if (clip.kind == ClipKind::Media) {
+                    const MediaItem* media = project.findMedia(clip.mediaId);
+
+                    if (media && media->hasAudio) {
+                        return true;
+                    }
+                }
+                else if (clip.kind == ClipKind::Sequence) {
+                    const Sequence* nested = project.findSequence(clip.sequence);
+
+                    if (nested && sequenceHasSound(project, *nested, depth + 1)) {
+                        return true;
+                    }
+                }
+                else {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
 // Settings of the application (language...), in the settings folder.
 std::filesystem::path settingsPath()
 {
@@ -5302,8 +5341,15 @@ bool GUI::startExport()
         }
     }
 
+    // A sequence without any sound gets no (silent) audio track.
+    ExportSettings settings = _exportSettings;
+
+    if (!sequenceHasSound(_project, _project.sequence())) {
+        settings.audio = false;
+    }
+
     _exporter = std::make_unique<Exporter>(std::move(context), std::move(exported), std::move(audio),
-        EffectRack::createForExport(_project), _exportSettings);
+        EffectRack::createForExport(_project), settings);
 
     return true;
 }
